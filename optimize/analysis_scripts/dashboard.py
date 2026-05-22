@@ -497,8 +497,10 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
             name = os.path.splitext(os.path.basename(fp))[0]
             cache = d['dedx_cache']
             true_cache = d.get('true_dedx_cache', {})
+            loc = float(d.get('dedx_student_loc', 1.864))
 
             residuals = []
+            init_residuals = []
             for batch_idx in sorted(cache.keys()):
                 entry = cache[batch_idx]
                 log_dedx = entry.get('log_dedx')
@@ -513,23 +515,49 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
                     n = min(len(true_vals), len(fitted_vals))
                     res_batch = fitted_vals[:n] - true_vals[:n]
                     residuals.extend(res_batch.tolist())
+                    
+                    init_res_batch = loc - true_vals[:n]
+                    init_residuals.extend(init_res_batch.tolist())
 
             fig = go.Figure()
             if residuals:
                 arr = np.array(residuals)
                 mean_res = np.mean(arr)
                 std_res = np.std(arr)
+                
+                init_arr = np.array(init_residuals)
+                mean_init = np.mean(init_arr)
+                std_init = np.std(init_arr)
+                
+                # Add Initial (Pre-fit) Trace
+                fig.add_trace(go.Histogram(
+                    x=init_arr,
+                    histnorm='probability density',
+                    name=f'Initial (Pre-fit), σ={std_init:.3f}',
+                    marker_color='lightblue',
+                    opacity=0.5,
+                    xbins=dict(start=-2, end=2, size=0.05)
+                ))
+                
+                # Add Fitted (Post-fit) Trace
                 fig.add_trace(go.Histogram(
                     x=arr,
                     histnorm='probability density',
-                    name='Residuals',
+                    name=f'Fitted (Post-fit), σ={std_res:.3f}',
                     marker_color='orange',
                     opacity=0.7,
                     xbins=dict(start=-2, end=2, size=0.05)
                 ))
+                
                 fig.add_vline(x=0, line_dash="dash", line_color="white", opacity=0.5)
+                
+                # Vertical line for fitted mean
                 fig.add_vline(x=mean_res, line_color="red", line_width=2, 
-                              annotation_text=f"Mean: {mean_res:.3f}", annotation_position="top left")
+                              annotation_text=f"Fitted Mean: {mean_res:.3f}", annotation_position="top left")
+                
+                # Vertical line for initial mean
+                fig.add_vline(x=mean_init, line_color="blue", line_width=2, line_dash="dot",
+                              annotation_text=f"Initial Mean: {mean_init:.3f}", annotation_position="top right")
                 
                 msg = None
             else:
@@ -539,9 +567,10 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
             fig.update_layout(**COMMON_LAYOUT)
             fig.update_layout(
                 title=f"Residuals: {short_name}",
-                xaxis_title="Fitted - True dEdx (MeV/cm)",
+                xaxis_title="Residual dEdx (MeV/cm)",
                 yaxis_title="Density",
                 hovermode="x unified",
+                barmode="overlay",
             )
             fig.update_xaxes(**AXIS_STYLE, range=[-1.5, 1.5])
             fig.update_yaxes(**AXIS_STYLE)
