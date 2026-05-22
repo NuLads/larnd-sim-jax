@@ -24,24 +24,22 @@ fi
 
 TARGET_SEED=$SLURM_ARRAY_TASK_ID
 PARAMS=optimize/scripts/param_list.yaml
-BATCH_SIZE=500
-MAX_NBATCH=500
-ITERATIONS=10000
-MAX_CLIP_NORM_VAL=1
+BATCH_SIZE=1000
+ITERATIONS=5000
+MAX_CLIP_NORM_VAL=100
 DATA_SEED=1
-LOSS=mse_adc
-SEED_STRATEGY=different #random #different_epoch
-SAMPLING_STEP=0.01 # cm
+LOSS=llhd
+SEED_STRATEGY=random
+SAMPLING_STEP=0.1 # cm
 N_NEIGH=4
-MODE="lut"  #"parametrized"
+MODE="lut"
 LR_SCHEDULER=warmup_exponential_decay_schedule
+MAX_NBATCH=100
 SIGNAL_LENGTH=150
 
-### true proton
-##INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/diffsim_input/true_proton_edep_2cm.h5
-INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/diffsim_input/true_proton_edep_2cm_range_0.1-cm.h5
-INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/diffsim_input/true_proton_edep_2cm_range_0.1-cm.h5
-#INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/diffsim_input/true_proton_edep_2cm_range_0.1-cm_dEdx.h5
+
+INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/diffsim_input/true_through_muon_edep_10cm_vol1cm.h5
+INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/diffsim_input/true_through_muon_edep_10cm_vol1cm.h5
 
 ### true stopping muon
 #INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/diffsim_input/true_ending_muon_edep_5cm_vol2cm_range_0.1-cm_mod0.h5
@@ -76,7 +74,8 @@ INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/diffsim_input/true_proton_edep_2cm_rang
 #INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/diffsim_input/true_through_muon_edep_10cm_vol1cm.h5
 
 SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax.sif
-UUID=$(uuidgen)
+LABEL=true_throughmuons_6par_dedxfit_priw${DEDX_PRIOR_WEIGHT}_dlr${DEDX_LR}_dsi${DEDX_START_ITER}_noise_tgtsim_n_neigh${N_NEIGH}_mode_${MODE}_e_sampling_${SAMPLING_STEP}cm_seed_stgy_${SEED_STRATEGY}_grad_clip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_tgtsd${TARGET_SEED}_dtsd${DATA_SEED}_adam_${LOSS}
+
 #LABEL=stopping_mu_range_dEdx_6par_n_neigh${N_NEIGH}_mode_${MODE}_noise_e_sampling_${SAMPLING_STEP}cm_seed_strategy_${SEED_STRATEGY}_grad_clip${MAX_CLIP_NORM_VAL}_bt${BATCH_SIZE}_tgtsd${TARGET_SEED}_dtsd${DATA_SEED}_adam_${LOSS}_${UUID}
 #LABEL=stopping_mu_range_0.5-5cm_dEdx_force_agree_1MeVcm_6par_no_noise_n_neigh${N_NEIGH}_mode_${MODE}_e_sampling_${SAMPLING_STEP}cm_seed_stgy_${SEED_STRATEGY}_grad_clip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_tgtsd${TARGET_SEED}_dtsd${DATA_SEED}_adam_${LOSS}_${UUID}
 #LABEL=stopping_mu_range_0.5-5cm_dEdx_force_agree_1MeVcm_6par_no_noise_n_neigh${N_NEIGH}_mode_${MODE}_e_sampling_${SAMPLING_STEP}cm_seed_stgy_${SEED_STRATEGY}_grad_clip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_tgtsd${TARGET_SEED}_dtsd${DATA_SEED}_adam_${LOSS}
@@ -88,8 +87,7 @@ UUID=$(uuidgen)
 #LABEL=true_stopp_closure_rg0.1-cm_6par_lr8e-3_noise_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_mode_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_tgtsd${TARGET_SEED}_dtsd${DATA_SEED}_adam_${LOSS}
 #LABEL=true_stopp_closure_rg0.1-cm_6par_lr8e-3_lossnoq_noise_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_mode_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_tgtsd${TARGET_SEED}_dtsd${DATA_SEED}_adam_${LOSS}
 #LABEL=true_stopp_closure_rg0.1-cm_6par_lr8e-3_oldloss_noise_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_mode_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_tgtsd${TARGET_SEED}_dtsd${DATA_SEED}_adam_${LOSS}
-LABEL=true_stopp_closure_rg0.1-cm_6par_lr8e-3_losswgtnoq_noise_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_mode_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_tgtsd${TARGET_SEED}_dtsd${DATA_SEED}_adam_${LOSS}
-
+ONAME=fit_noise_${SLURM_ARRAY_JOB_ID}
 nvidia-smi
 
 
@@ -98,7 +96,8 @@ nvidia-smi
 
 # apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${SIF_FILE} nsys profile --capture-range=cudaProfilerApi --cuda-graph-trace=node --capture-range-end=stop python3 -m optimize.example_run \
 apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${SIF_FILE} /bin/bash -c "
-pip3 install .; \
+export PYTHONPATH=\$PWD/src:\$PWD:\$PYTHONPATH;
+pip install . ;
 python3 -m optimize.example_run \
     --data_sz -1 \
     --max_nbatch ${MAX_NBATCH} \
@@ -112,23 +111,24 @@ python3 -m optimize.example_run \
     --min_abs_segz_sel 15. \
     --data_seed ${DATA_SEED} \
     --out_label ${LABEL} \
-    --test_name fit_noise \
+    --test_name $ONAME \
     --seed ${TARGET_SEED} \
     --optimizer_fn Adam \
     --iterations ${ITERATIONS} \
     --max_batch_len ${BATCH_SIZE} \
     --track_z_bound 28 \
-    --max_clip_norm_val ${MAX_CLIP_NORM_VAL} \
     --electron_sampling_resolution ${SAMPLING_STEP} \
     --number_pix_neighbors ${N_NEIGH} \
     --signal_length ${SIGNAL_LENGTH} \
     --mode ${MODE} \
-    --lut_file ../Data_selection/response_44_v2a_full_tick.npz \
+    --lut_file src/larndsim/detector_properties/response_44_v2a_full_tick.npz \
     --loss_fn ${LOSS} \
     --sim_seed_strategy ${SEED_STRATEGY} \
-    --clip_from_range \
+    --max_clip_norm_val ${MAX_CLIP_NORM_VAL} \
     --lr_scheduler ${LR_SCHEDULER} \
-    --lr_kw '{\"decay_rate\" : 0.98, \"init_value\" : 0, \"warmup_steps\": 200}' \
+    --lr_kw '{\"decay_rate\" : 0.99, \"init_value\" : 0, \"warmup_steps\": 500}' \
+    --probabilistic-sim \
+    --probabilistic-sampling-target
     #--random_ntrack \
     #--no-noise-guess \
     #--no-noise \

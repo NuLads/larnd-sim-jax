@@ -549,82 +549,157 @@ class ProbabilisticLossStrategy(LossStrategy):
         
         Nticks = ticks_prob.shape[-1]
         
-        if self.apply_deadtime:
-            prev_target_ticks = jnp.roll(target_ticks, shift=1)
-            tick_indices = jnp.arange(Nticks)
-            
-            # Mask out the impossible region for the second hit onwards
-            is_valid_mask = jnp.where(
-                trigger_nb[:, None] == 0,
-                True,
-                tick_indices[None, :] > (prev_target_ticks[:, None] + self.deadtime_ticks)
-            )
-            
-            # Renormalize probability mass in the valid zone
-            ticks_prob_slice = ticks_prob[pixel_indices_safe, trigger_nb, :]
-            log_Z_all = jax.nn.logsumexp(ticks_prob_slice, axis=-1)
-            masked_ticks_prob = jnp.where(is_valid_mask, ticks_prob_slice, self.min_log_prob)
-            log_Z_valid = jax.nn.logsumexp(masked_ticks_prob, axis=-1)
-            log_renorm_boost = log_Z_all - log_Z_valid
-            
-            # Identify if the target hit itself violates the deadtime rule
-            is_valid_target_hit = jnp.where(
-                trigger_nb == 0,
-                True,
-                target_ticks > (prev_target_ticks + self.deadtime_ticks)
-            )
-        else:
-            log_renorm_boost = 0.0
-            is_valid_target_hit = jnp.ones_like(target_ticks, dtype=bool)
+        if self.apply_deadtime or self.first_hit_only:
+            if self.apply_deadtime:
+                prev_target_ticks = jnp.roll(target_ticks, shift=1)
+                tick_indices = jnp.arange(Nticks)
+                
+                # Mask out the impossible region for the second hit onwards
+                is_valid_mask = jnp.where(
+                    trigger_nb[:, None] == 0,
+                    True,
+                    tick_indices[None, :] > (prev_target_ticks[:, None] + self.deadtime_ticks)
+                )
+                
+                # Renormalize probability mass in the valid zone
+                ticks_prob_slice = ticks_prob[pixel_indices_safe, trigger_nb, :]
+                log_Z_all = jax.nn.logsumexp(ticks_prob_slice, axis=-1)
+                masked_ticks_prob = jnp.where(is_valid_mask, ticks_prob_slice, self.min_log_prob)
+                log_Z_valid = jax.nn.logsumexp(masked_ticks_prob, axis=-1)
+                log_renorm_boost = log_Z_all - log_Z_valid
+                
+                # Identify if the target hit itself violates the deadtime rule
+                is_valid_target_hit = jnp.where(
+                    trigger_nb == 0,
+                    True,
+                    target_ticks > (prev_target_ticks + self.deadtime_ticks)
+                )
+            else:
+                log_renorm_boost = 0.0
+                is_valid_target_hit = jnp.ones_like(target_ticks, dtype=bool)
 
-        if self.time_window > 0:
-            # Create a window of ticks around each target hit
-            # shape: (Nhits, 2*W + 1)
-            delta = jnp.arange(-self.time_window, self.time_window + 1)
-            window_ticks = target_ticks[:, None] + delta[None, :]
-            window_ticks = jnp.clip(window_ticks, 0, Nticks - 1)
+            if self.time_window > 0:
+                # Create a window of ticks around each target hit
+                # shape: (Nhits, 2*W + 1)
+                delta = jnp.arange(-self.time_window, self.time_window + 1)
+                window_ticks = target_ticks[:, None] + delta[None, :]
+                window_ticks = jnp.clip(window_ticks, 0, Nticks - 1)
+                
+                # Extract log-probs for the window
+                # shape: (Nhits, 2*W + 1)
+                window_log_probs = ticks_prob[pixel_indices_safe[:, None], trigger_nb[:, None], window_ticks]
+                
+                # Expected charge at each tick in the window
+                window_expected_charges = adc2charge(adcs_distrib[pixel_indices_safe[:, None], trigger_nb[:, None], window_ticks], params)
+                
+                # Compute Gaussian log-likelihood of charge FOR EACH TICK in the window
+                charge_diffs = target_charge[:, None] - window_expected_charges
+                window_log_charge_intensity = (
+                    -0.5 * (charge_diffs / (self.sigma_charge/1000)) ** 2 
+                    - 0.5 * jnp.log(2 * jnp.pi * (self.sigma_charge/1000)**2)
+                )
+                
+                # Total joint log probability for each tick in the window
+                # log P(t | pixel) + log K(t_obs - t) + log P(q_obs | q_pred(t))
+                joint_window_log_probs = window_log_probs + self.log_time_weights[None, :] + window_log_charge_intensity
+                
+                # Marginalize over the time window using logsumexp
+                joint_hit_log_probs = jax.nn.logsumexp(joint_window_log_probs, axis=1)
+                
+            else:
+                # Exact point-wise extraction
+                hit_tick_probs = ticks_prob[pixel_indices_safe, trigger_nb, target_ticks]
+                hit_expected_charges = adc2charge(adcs_distrib[pixel_indices_safe, trigger_nb, target_ticks], params)
+                
+                charge_diff = target_charge - hit_expected_charges
+                log_charge_intensity = (
+                    -0.5 * (charge_diff / (self.sigma_charge/1000)) ** 2 
+                    - 0.5 * jnp.log(2 * jnp.pi * (self.sigma_charge/1000)**2)
+                )
+                joint_hit_log_probs = hit_tick_probs + log_charge_intensity
             
-            # Extract log-probs for the window
-            # shape: (Nhits, 2*W + 1)
-            window_log_probs = ticks_prob[pixel_indices_safe[:, None], trigger_nb[:, None], window_ticks]
-            
-            # Expected charge at each tick in the window
-            window_expected_charges = adc2charge(adcs_distrib[pixel_indices_safe[:, None], trigger_nb[:, None], window_ticks], params)
-            
-            # Compute Gaussian log-likelihood of charge FOR EACH TICK in the window
-            charge_diffs = target_charge[:, None] - window_expected_charges
-            window_log_charge_intensity = (
-                -0.5 * (charge_diffs / (self.sigma_charge/1000)) ** 2 
-                - 0.5 * jnp.log(2 * jnp.pi * (self.sigma_charge/1000)**2)
-            )
-            
-            # Total joint log probability for each tick in the window
-            # log P(t | pixel) + log K(t_obs - t) + log P(q_obs | q_pred(t))
-            joint_window_log_probs = window_log_probs + self.log_time_weights[None, :] + window_log_charge_intensity
-            
-            # Marginalize over the time window using logsumexp
-            joint_hit_log_probs = jax.nn.logsumexp(joint_window_log_probs, axis=1)
-            
+            if self.apply_deadtime:
+                # If the target hit is inside the blacklist zone, give it a massive penalty.
+                # Otherwise, give it the standard log-likelihood + the renormalization boost.
+                joint_hit_log_probs = jnp.where(
+                    is_valid_target_hit, 
+                    joint_hit_log_probs + log_renorm_boost, 
+                    self.min_log_prob
+                )
+
         else:
-            # Exact point-wise extraction
-            hit_tick_probs = ticks_prob[pixel_indices_safe, trigger_nb, target_ticks]
-            hit_expected_charges = adc2charge(adcs_distrib[pixel_indices_safe, trigger_nb, target_ticks], params)
+            # Match-free / marginalized slot sum logic
+            Nhits_sim = ticks_prob.shape[1]
             
-            charge_diff = target_charge - hit_expected_charges
-            log_charge_intensity = (
-                -0.5 * (charge_diff / (self.sigma_charge/1000)) ** 2 
-                - 0.5 * jnp.log(2 * jnp.pi * (self.sigma_charge/1000)**2)
-            )
-            joint_hit_log_probs = hit_tick_probs + log_charge_intensity
-        
-        if self.apply_deadtime:
-            # If the target hit is inside the blacklist zone, give it a massive penalty.
-            # Otherwise, give it the standard log-likelihood + the renormalization boost.
-            joint_hit_log_probs = jnp.where(
-                is_valid_target_hit, 
-                joint_hit_log_probs + log_renorm_boost, 
-                self.min_log_prob
-            )
+            if self.time_window > 0:
+                # Create a window of ticks around each target hit
+                # shape: (Nhits_target, 2*W + 1)
+                delta = jnp.arange(-self.time_window, self.time_window + 1)
+                window_ticks = target_ticks[:, None] + delta[None, :]
+                window_ticks = jnp.clip(window_ticks, 0, Nticks - 1)
+                
+                # Extract log-probs for the window for all predicted slots
+                # shape: (Nhits_target, Nhits_sim, 2*W + 1)
+                window_log_probs = ticks_prob[
+                    pixel_indices_safe[:, None, None],
+                    jnp.arange(Nhits_sim)[None, :, None],
+                    window_ticks[:, None, :]
+                ]
+                
+                # Expected charge at each tick in the window for all slots
+                window_expected_charges = adc2charge(
+                    adcs_distrib[
+                        pixel_indices_safe[:, None, None],
+                        jnp.arange(Nhits_sim)[None, :, None],
+                        window_ticks[:, None, :]
+                    ],
+                    params
+                )
+                
+                # Compute Gaussian log-likelihood of charge FOR EACH TICK and slot in the window
+                charge_diffs = target_charge[:, None, None] - window_expected_charges
+                window_log_charge_intensity = (
+                    -0.5 * (charge_diffs / (self.sigma_charge/1000)) ** 2 
+                    - 0.5 * jnp.log(2 * jnp.pi * (self.sigma_charge/1000)**2)
+                )
+                
+                # Total joint log probability for each tick and slot in the window
+                joint_window_log_probs = (
+                    window_log_probs
+                    + self.log_time_weights[None, None, :]
+                    + window_log_charge_intensity
+                )
+                
+                # Marginalize over both the slots and the time window using logsumexp
+                joint_hit_log_probs = jax.nn.logsumexp(joint_window_log_probs, axis=(1, 2))
+                
+            else:
+                # Exact point-wise extraction for all slots
+                # shape: (Nhits_target, Nhits_sim)
+                hit_tick_probs = ticks_prob[
+                    pixel_indices_safe[:, None],
+                    jnp.arange(Nhits_sim)[None, :],
+                    target_ticks[:, None]
+                ]
+                hit_expected_charges = adc2charge(
+                    adcs_distrib[
+                        pixel_indices_safe[:, None],
+                        jnp.arange(Nhits_sim)[None, :],
+                        target_ticks[:, None]
+                    ],
+                    params
+                )
+                
+                charge_diff = target_charge[:, None] - hit_expected_charges
+                log_charge_intensity = (
+                    -0.5 * (charge_diff / (self.sigma_charge/1000)) ** 2 
+                    - 0.5 * jnp.log(2 * jnp.pi * (self.sigma_charge/1000)**2)
+                )
+                
+                joint_slot_log_probs = hit_tick_probs + log_charge_intensity
+                
+                # Sum over all slots
+                joint_hit_log_probs = jax.nn.logsumexp(joint_slot_log_probs, axis=1)
 
         # Step 5: Compute Poisson Point Process Negative Log-Likelihood (PPP NLL)
         

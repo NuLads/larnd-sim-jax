@@ -372,6 +372,7 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
     if has_dedx_history:
         st.subheader("Per-segment dEdx Fit Diagnostics")
         dedx_diag_cols = st.columns(2)
+        sorted_runs_with_dedx = [fp for fp in sorted_filepaths if 'dedx_cache' in all_data[fp]]
 
         with dedx_diag_cols[0]:
             fig = go.Figure()
@@ -412,7 +413,6 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
         # One hexbin per run that has dedx_cache
         if has_dedx:
             st.markdown("**Fitted vs True dEdx — per run**")
-            sorted_runs_with_dedx = [fp for fp in sorted_filepaths if 'dedx_cache' in all_data[fp]]
             ncols = min(3, len(sorted_runs_with_dedx))
             hex_cols = st.columns(ncols) if ncols > 0 else []
 
@@ -484,9 +484,13 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
                 export_list.append((f"dEdx hexbin - {name}", fig))
 
         # Residuals distribution (Fitted - True)
-        st.markdown("**dEdx Residuals (Fitted - True) — per run**")
-        res_ncols = min(3, len(sorted_runs_with_dedx))
-        res_cols = st.columns(res_ncols) if res_ncols > 0 else []
+        if has_dedx:
+            st.markdown("**dEdx Residuals (Fitted - True) — per run**")
+            res_ncols = min(3, len(sorted_runs_with_dedx))
+            res_cols = st.columns(res_ncols) if res_ncols > 0 else []
+        else:
+            res_ncols = 0
+            res_cols = []
 
         for col_idx, fp in enumerate(sorted_runs_with_dedx):
             d = all_data[fp]
@@ -550,10 +554,15 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
             export_list.append((f"dEdx residuals - {name}", fig))
 
         # 1-D fitted dEdx distribution vs Student-t prior — one panel per run
-        st.markdown("**Fitted dEdx distribution vs Student-t prior — per run**")
-        sorted_dist_runs = [fp for fp in sorted_filepaths if 'dedx_cache' in all_data[fp]]
-        dist_ncols = min(3, len(sorted_dist_runs))
-        dist_cols = st.columns(dist_ncols) if dist_ncols > 0 else []
+        if has_dedx:
+            st.markdown("**Fitted dEdx distribution vs Student-t prior — per run**")
+            sorted_dist_runs = [fp for fp in sorted_filepaths if 'dedx_cache' in all_data[fp]]
+            dist_ncols = min(3, len(sorted_dist_runs))
+            dist_cols = st.columns(dist_ncols) if dist_ncols > 0 else []
+        else:
+            sorted_dist_runs = []
+            dist_ncols = 0
+            dist_cols = []
 
         for col_idx, fp in enumerate(sorted_dist_runs):
             d = all_data[fp]
