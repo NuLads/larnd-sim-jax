@@ -249,7 +249,7 @@ class ParamFitter:
         self.electron_sampling_resolution = config.electron_sampling_resolution
         self.number_pix_neighbors = config.number_pix_neighbors
         self.signal_length = config.signal_length
-        self.use_dedx_density = bool(getattr(config, "use_dedx_density", True))
+        self.use_dedx_density = bool(getattr(config, "use_dedx_density", False))
         self.dedx_density_mode = getattr(config, "dedx_density_mode", "histogram")
         self.probabilistic_sim = probabilistic_sim
         self.sz_mini_bt = sz_mini_bt

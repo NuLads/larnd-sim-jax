@@ -3,9 +3,9 @@
 #SBATCH --partition=ampere
 
 ##SBATCH --account=mli:nu-ml-dev
-#SBATCH --account=mli:cider-ml
+##SBATCH --account=mli:cider-ml
 ##SBATCH --account=neutrino:dune-ml
-##SBATCH --account=neutrino:cider-nu
+#SBATCH --account=neutrino:cider-nu
 ##SBATCH --account=neutrino:ml-dev
 
 #SBATCH --job-name=diffsim
@@ -20,7 +20,7 @@
 # --- CONFIGURATION SELECTION ---
 # Example format: A1-B1-C1-D1
 # Change this variable or pass it as an argument
-CONFIG="A5-B2-C2-D2"
+CONFIG="A6-B2-C2-D2"
 
 if [ -z "$SLURM_ARRAY_TASK_ID" ]; then
     SLURM_ARRAY_TASK_ID=1
@@ -39,7 +39,7 @@ N_NEIGH=4
 MODE="lut"
 LR_SCHEDULER=warmup_exponential_decay_schedule
 SIGNAL_LENGTH=200
-DEDX_DENSITY_MODE=histogram #flow #histogram
+DEDX_DENSITY_MODE=flow #flow #histogram
 
 # --- LOGIC FOR COMBINATIONS ---
 
@@ -64,7 +64,7 @@ elif [ "$CONF_A" == "A5" ]; then
     CHOP_FLAG="--no_chop" # No --no_chop for A3
     DX_LABEL="thrumu_dx0.01"
 elif [ "$CONF_A" == "A6" ]; then
-    INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3543042/job_23756464_0000/output_23756464_0000-edepsim_lbl_range_0.05cm.h5
+    INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3407823/job_27035649_0001/output_27035649_0001-edepsim_lbl_trklen2cm_containment2cm_costheta0.966.h5
     CHOP_FLAG="--no_chop" # No --no_chop for A3
     DX_LABEL="stopmu_dx0.01"
 fi
@@ -85,7 +85,7 @@ elif [ "$CONF_A" == "A2" ]; then
     elif [ "$CONF_B" == "B2" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_reco_dE_range_0.05cm.h5
         USE_DENSITY_FLAG="--use_dedx_density"
-        B_LABEL="dE_density_real"
+        B_LABEL="dE_density"
         # B_LABEL="reco_dE"
     elif [ "$CONF_B" == "B3" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_true_traj_start_end_reco_seg_step_0.01cm_range_0.05cm.h5
@@ -113,10 +113,10 @@ elif [ "$CONF_A" == "A5" ]; then
     fi
 elif [ "$CONF_A" == "A6" ]; then
     if [ "$CONF_B" == "B1" ]; then
-        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3543042/job_23756464_0000/output_23756464_0000-edepsim_lbl_range_0.05cm.h5
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3407823/job_27035649_0001/output_27035649_0001-edepsim_lbl_trklen2cm_containment2cm_costheta0.966.h5
         B_LABEL="closure"
     elif [ "$CONF_B" == "B2" ]; then
-        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3543042/job_23756464_0000/output_23756464_0000-edepsim_lbl_range_0.05cm.h5
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3407823/job_27035649_0001/output_27035649_0001-edepsim_lbl_trklen2cm_containment2cm_costheta0.966.h5
         USE_DENSITY_FLAG="--use_dedx_density"
         B_LABEL="dE_density"
     fi
