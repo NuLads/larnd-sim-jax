@@ -2,6 +2,7 @@
 Module containing constants needed by the simulation
 """
 
+import pickle
 import numpy as np
 import yaml
 from flax import struct
@@ -12,10 +13,251 @@ import dataclasses
 from types import MappingProxyType
 from collections import defaultdict
 from enum import Enum
+from pathlib import Path
 
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+# Shared dE/dx density caches.
+_dedx_density_hist_cache = {}
+_dedx_flow_cache = {}
+eqx = None
+RationalQuadraticSpline = None
+StandardNormal = None
+masked_autoregressive_flow = None
+_FLOW_DEPS_AVAILABLE = None
+
+
+def get_dedx_density_data(particle_type, force_reload=False):
+    """Load and cache histogram-based dE/dx density artifacts.
+
+    Args:
+        particle_type (str):
+            - 'throughgoing_muon': 1D histogram
+            - 'stopping_muon': 2D histogram
+            - 'stopping_proton': 2D histogram
+        force_reload (bool): Force reload from disk.
+
+    Returns:
+        dict: {
+            "counts": numpy array,
+            "r_edges": numpy array or None,
+            "dedx_edges": numpy array,
+            "marginal_pdf": numpy array, shape (n_dedx_bins,),
+            "path": str,
+        }
+    """
+    global _dedx_density_hist_cache
+
+    cache_key = particle_type
+    if cache_key in _dedx_density_hist_cache and not force_reload:
+        logger.info(
+            f"dE/dx density [histogram] cache hit: particle_type={particle_type}, "
+            f"path={_dedx_density_hist_cache[cache_key]['path']}"
+        )
+        return _dedx_density_hist_cache[cache_key]
+
+    detprop_dir = Path(__file__).parent / "detector_properties"
+    file_map = {
+        "throughgoing_muon": "dedx_hist1d_throughgoing_muon_dx0.1mm.npz",
+        "stopping_muon": "dedx_hist2d_stopping_muon_dx0.1mm.npz",
+        "stopping_proton": "dedx_hist2d_stopping_proton_dx0.1mm.npz",
+    }
+    if particle_type not in file_map:
+        raise ValueError(
+            f"Unknown particle type '{particle_type}'. Expected one of: {list(file_map.keys())}"
+        )
+    hist_path = detprop_dir / file_map[particle_type]
+    dedx_key = "dedx_edges"
+
+    if not hist_path.exists():
+        raise FileNotFoundError(f"dE/dx density artifact not found at {hist_path}")
+
+    logger.info(
+        f"dE/dx density [histogram] loading: particle_type={particle_type}, path={hist_path}"
+    )
+
+    data = np.load(hist_path)
+    counts = np.asarray(data["counts"], dtype=np.float32)
+    dedx_edges = np.asarray(data[dedx_key], dtype=np.float32)
+    r_edges = None
+
+    if counts.ndim == 2:
+        r_edges = np.asarray(data["r_edges"], dtype=np.float32)
+        if r_edges.ndim != 1 or dedx_edges.ndim != 1:
+            raise ValueError(f"Invalid histogram dimensions in {hist_path}")
+        if counts.shape[0] != r_edges.shape[0] - 1 or counts.shape[1] != dedx_edges.shape[0] - 1:
+            raise ValueError(f"Histogram counts shape does not match bin edges in {hist_path}")
+        marginal = counts.sum(axis=0)
+    elif counts.ndim == 1:
+        if dedx_edges.ndim != 1 or counts.shape[0] != dedx_edges.shape[0] - 1:
+            raise ValueError(f"Histogram counts shape does not match bin edges in {hist_path}")
+        marginal = counts
+    else:
+        raise ValueError(f"Unsupported histogram counts rank {counts.ndim} in {hist_path}")
+
+    marginal_sum = float(marginal.sum())
+    if marginal_sum <= 0.0:
+        marginal = np.ones_like(marginal, dtype=np.float32)
+        marginal_sum = float(marginal.sum())
+    marginal_pdf = marginal / marginal_sum
+
+    # Keep cache payloads as NumPy arrays so cache writes are safe even if this
+    # loader is first invoked while quench() is being traced under jax.jit.
+    artifact = {
+        "counts": counts,
+        "r_edges": r_edges,
+        "dedx_edges": dedx_edges,
+        "marginal_pdf": marginal_pdf,
+        "path": str(hist_path),
+    }
+    _dedx_density_hist_cache[cache_key] = artifact
+    return artifact
+
+
+def _build_dedx_flow_template():
+    global eqx, RationalQuadraticSpline, StandardNormal, masked_autoregressive_flow, _FLOW_DEPS_AVAILABLE
+
+    if _FLOW_DEPS_AVAILABLE is None:
+        try:
+            import equinox as _eqx
+            from flowjax.bijections import RationalQuadraticSpline as _RationalQuadraticSpline
+            from flowjax.distributions import StandardNormal as _StandardNormal
+            from flowjax.flows import masked_autoregressive_flow as _masked_autoregressive_flow
+
+            eqx = _eqx
+            RationalQuadraticSpline = _RationalQuadraticSpline
+            StandardNormal = _StandardNormal
+            masked_autoregressive_flow = _masked_autoregressive_flow
+            _FLOW_DEPS_AVAILABLE = True
+        except Exception:
+            _FLOW_DEPS_AVAILABLE = False
+
+    if not _FLOW_DEPS_AVAILABLE:
+        raise ImportError(
+            "Flow mode requested but flow dependencies are unavailable. Install equinox and flowjax."
+        )
+
+    key = jax.random.key(0) if hasattr(jax.random, "key") else jax.random.PRNGKey(0)
+    return masked_autoregressive_flow(
+        key=key,
+        base_dist=StandardNormal((1,)),
+        transformer=RationalQuadraticSpline(knots=8, interval=5.0),
+        cond_dim=1,
+        flow_layers=6,
+        nn_width=64,
+        nn_depth=3,
+    )
+
+
+def get_dedx_flow_model(particle_type, force_reload=False):
+    """Load and cache a particle-specific dE/dx flow model + normalization metadata."""
+    global _dedx_flow_cache
+
+    supported_particles = ("stopping_muon", "stopping_proton")
+    if particle_type not in supported_particles:
+        raise ValueError(
+            f"Unknown flow particle type '{particle_type}'. Expected one of: {list(supported_particles)}"
+        )
+
+    cache_key = particle_type
+    if cache_key in _dedx_flow_cache and not force_reload:
+        cached = _dedx_flow_cache[cache_key]
+        logger.info(
+            "dE/dx density [flow] cache hit: "
+            f"particle_type={particle_type}, "
+            f"meta={cached['meta_path']}, state={cached['state_path']}"
+        )
+        return _dedx_flow_cache[cache_key]
+
+    detprop_dir = Path(__file__).parent / "detector_properties"
+    meta_map = {
+        "stopping_muon": "dedx_flow_model_meta_stopping_muon_dx0.1mm.pkl",
+        "stopping_proton": "dedx_flow_model_meta_stopping_proton_dx0.1mm.pkl",
+    }
+    default_state_map = {
+        "stopping_muon": "dedx_flow_model_stopping_muon_dx0.1mm.eqx",
+        "stopping_proton": "dedx_flow_model_stopping_proton_dx0.1mm.eqx",
+    }
+
+    meta_path = detprop_dir / meta_map[particle_type]
+    if not meta_path.exists():
+        raise FileNotFoundError(f"Flow metadata not found at {meta_path}")
+
+    logger.info(
+        f"dE/dx density [flow] loading metadata: particle_type={particle_type}, path={meta_path}"
+    )
+
+    with open(meta_path, "rb") as f:
+        meta = pickle.load(f)
+
+    state_name = meta.get("model_state_file", default_state_map[particle_type])
+    state_path = detprop_dir / state_name
+    if not state_path.exists():
+        raise FileNotFoundError(f"Flow state file not found at {state_path}")
+
+    logger.info(
+        f"dE/dx density [flow] loading state: particle_type={particle_type}, path={state_path}"
+    )
+
+    template_flow = _build_dedx_flow_template()
+    flow = eqx.tree_deserialise_leaves(state_path, template_flow)
+
+    norm_params = meta.get("norm_params", {})
+    required_keys = ["R_mean", "R_std", "dEdx_log_mean", "dEdx_log_std"]
+    missing = [k for k in required_keys if k not in norm_params]
+    if missing:
+        raise ValueError(f"Missing norm params in flow metadata: {missing}")
+
+    artifact = {
+        "flow": flow,
+        "norm_params": norm_params,
+        "particle_type": particle_type,
+        "meta_path": str(meta_path),
+        "state_path": str(state_path),
+    }
+    _dedx_flow_cache[cache_key] = artifact
+    return artifact
+
+
+def preload_dedx_density_resources(particle_types=None, density_mode="histogram", force_reload=False):
+    """Warm the dE/dx density resources needed for a given particle mix.
+
+    Args:
+        particle_types (iterable[str] | None): subset of {'throughgoing_muon', 'stopping_muon',
+            'stopping_proton'}.
+        density_mode (str): 'histogram' or 'flow'.
+        force_reload (bool): force reload of cached resources.
+    """
+    particle_types = tuple(sorted(set(particle_types or ())))
+    logger.info(
+        "preload_dedx_density_resources: "
+        f"density_mode={density_mode}, particle_types={particle_types}, force_reload={force_reload}"
+    )
+
+    if density_mode not in ("histogram", "flow"):
+        raise ValueError(f"Unknown dedx density mode '{density_mode}'. Use 'histogram' or 'flow'.")
+
+    if density_mode == "flow":
+        if particle_types:
+            flow_particle_types = set()
+            if "throughgoing_muon" in particle_types or "stopping_muon" in particle_types:
+                flow_particle_types.add("stopping_muon")
+            if "stopping_proton" in particle_types:
+                flow_particle_types.add("stopping_proton")
+            for particle_type in sorted(flow_particle_types):
+                get_dedx_flow_model(particle_type=particle_type, force_reload=force_reload)
+        else:
+            get_dedx_flow_model(particle_type="stopping_muon", force_reload=force_reload)
+            get_dedx_flow_model(particle_type="stopping_proton", force_reload=force_reload)
+
+    if not particle_types:
+        return
+
+    for particle_type in particle_types:
+        get_dedx_density_data(particle_type=particle_type, force_reload=force_reload)
+
 
 class RecombinationMode(Enum):
     BOX = 1
@@ -147,6 +389,8 @@ class Params_template:
     shift_y: float = struct.field(pytree_node=False)
     shift_z: float = struct.field(pytree_node=False)
     size_margin: float = struct.field(pytree_node=False)
+    use_dedx_density: bool = struct.field(pytree_node=False, default=True)
+    dedx_density_mode: str = struct.field(pytree_node=False, default="histogram")  # histogram | flow
     diffusion_in_current_sim: bool = struct.field(pytree_node=False, default=True)
     mc_diff: bool = struct.field(pytree_node=False, default=False)
     nb_sampling_bins_per_pixel: int = struct.field(pytree_node=False, default=10)
@@ -274,6 +518,8 @@ def load_detector_properties(params_cls, detprop_file, pixel_file):
         "number_pix_neighbors": 1,
         "electron_sampling_resolution": 0.001,
         "signal_length": 150,
+        "use_dedx_density": True,
+        "dedx_density_mode": "histogram",
         "MAX_ADC_VALUES": 10,
         "DISCRIMINATION_THRESHOLD": 7e3,
         "ADC_HOLD_DELAY": 15,

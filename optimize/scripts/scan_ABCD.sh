@@ -3,8 +3,8 @@
 #SBATCH --partition=ampere
 
 ##SBATCH --account=mli:nu-ml-dev
-##SBATCH --account=mli:cider-ml
-#SBATCH --account=neutrino:dune-ml
+#SBATCH --account=mli:cider-ml
+##SBATCH --account=neutrino:dune-ml
 ##SBATCH --account=neutrino:cider-nu
 ##SBATCH --account=neutrino:ml-dev
 
@@ -14,13 +14,13 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=32g
 #SBATCH --gpus-per-node=a100:1
-#SBATCH --time=4:00:00
-#SBATCH --array=0,1,2,3,4,5
+#SBATCH --time=2:00:00
+#SBATCH --array=0,1,2,3,4,5,6,7,8
 
 # --- CONFIGURATION SELECTION ---
 # Example format: A1-B1-C1-D1
 # Change this variable or pass it as an argument
-CONFIG="A3-B2-C2-D2"
+CONFIG="A5-B2-C2-D2"
 
 if [ -z "$SLURM_ARRAY_TASK_ID" ]; then
     SLURM_ARRAY_TASK_ID=1
@@ -33,12 +33,13 @@ ITERATIONS=50
 MAX_CLIP_NORM_VAL=1
 DATA_SEED=1
 #LOSS=mse_adc 
-SEED_STRATEGY=same #different 
+SEED_STRATEGY=different #same #different 
 SAMPLING_STEP=0.01 
 N_NEIGH=4
 MODE="lut"
 LR_SCHEDULER=warmup_exponential_decay_schedule
 SIGNAL_LENGTH=200
+DEDX_DENSITY_MODE=histogram #flow #histogram
 
 # --- LOGIC FOR COMBINATIONS ---
 
@@ -49,15 +50,23 @@ IFS='-' read -r CONF_A CONF_B CONF_C CONF_D <<< "$CONFIG"
 if [ "$CONF_A" == "A1" ]; then
     INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/diffsim_input/true_proton_edep_2cm_range_0.1-cm.h5
     CHOP_FLAG="" # No --no_chop for A1
-    DX_LABEL="dxvaried"
+    DX_LABEL="stopp_dxvaried"
 elif [ "$CONF_A" == "A2" ]; then
     INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_range_0.05cm.h5
     CHOP_FLAG="--no_chop" # Add --no_chop for A2
-    DX_LABEL="dx0.01"
+    DX_LABEL="stopp_dx0.01"
 elif [ "$CONF_A" == "A3" ]; then
     INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_1250070/job_25210996_0000/output_25210996_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_range_0.2cm.h5
-    CHOP_FLAG="--no_chop" # Add --no_chop for A2
-    DX_LABEL="dx0.1"
+    # CHOP_FLAG="--no_chop" # Add --no_chop for A2
+    DX_LABEL="stopp_dx0.1_chopped"
+elif [ "$CONF_A" == "A5" ]; then
+    INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3576201/job_23729838_0000/output_23729838_0000-edepsim_lbl_range_0.05cm.h5
+    CHOP_FLAG="--no_chop" # No --no_chop for A3
+    DX_LABEL="thrumu_dx0.01"
+elif [ "$CONF_A" == "A6" ]; then
+    INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3543042/job_23756464_0000/output_23756464_0000-edepsim_lbl_range_0.05cm.h5
+    CHOP_FLAG="--no_chop" # No --no_chop for A3
+    DX_LABEL="stopmu_dx0.01"
 fi
 
 # B: SIM Input File
@@ -75,7 +84,9 @@ elif [ "$CONF_A" == "A2" ]; then
         B_LABEL="closure"
     elif [ "$CONF_B" == "B2" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_reco_dE_range_0.05cm.h5
-        B_LABEL="reco_dE"
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="dE_density_real"
+        # B_LABEL="reco_dE"
     elif [ "$CONF_B" == "B3" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_true_traj_start_end_reco_seg_step_0.01cm_range_0.05cm.h5
         B_LABEL="reco_traj_st_ed_pos_dE"
@@ -90,6 +101,24 @@ elif [ "$CONF_A" == "A3" ]; then
     elif [ "$CONF_B" == "B2" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_1250070/job_25210996_0000/output_25210996_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_reco_dE_range_0.2cm.h5
         B_LABEL="reco_dE"
+    fi
+elif [ "$CONF_A" == "A5" ]; then
+    if [ "$CONF_B" == "B1" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3576201/job_23729838_0000/output_23729838_0000-edepsim_lbl_range_0.05cm.h5
+        B_LABEL="closure"
+    elif [ "$CONF_B" == "B2" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3576201/job_23729838_0000/output_23729838_0000-edepsim_lbl_range_0.05cm.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="dE_density"
+    fi
+elif [ "$CONF_A" == "A6" ]; then
+    if [ "$CONF_B" == "B1" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3543042/job_23756464_0000/output_23756464_0000-edepsim_lbl_range_0.05cm.h5
+        B_LABEL="closure"
+    elif [ "$CONF_B" == "B2" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3543042/job_23756464_0000/output_23756464_0000-edepsim_lbl_range_0.05cm.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="dE_density"
     fi
 fi
 
@@ -136,7 +165,7 @@ PARAMS=("Ab" "kb" "eField" "tran_diff" "long_diff" "lifetime" "shift_z" "shift_x
 PARAM=${PARAMS[$SLURM_ARRAY_TASK_ID]}
 
 # Generate Label
-LABEL="${PARAM}_${CONFIG}_stopp_${B_LABEL}_${DX_LABEL}_${D_LABEL}_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_${NORM}"
+LABEL="${PARAM}_${CONFIG}_${DX_LABEL}_${B_LABEL}_${D_LABEL}_${DEDX_DENSITY_MODE}_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_${NORM}"
 
 SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax.sif
 
@@ -145,6 +174,7 @@ echo "Label: $LABEL"
 
 apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${SIF_FILE} /bin/bash -c "
 pip3 install .; \
+export PYTHONPATH=$PWD:$PWD/src:${PYTHONPATH}; \
 python3 -m optimize.example_run \
     --data_sz -1 \
     --max_nbatch ${MAX_NBATCH} \
@@ -178,7 +208,9 @@ python3 -m optimize.example_run \
     --lr_kw '{\"decay_rate\" : 0.99, \"init_value\" : 0, \"warmup_steps\": 1000}' \
     --shuffle_bt \
     --normalization_scheme ${NORM} \
+    --dedx_density_mode ${DEDX_DENSITY_MODE} \
     ${PROB_FLAG} \
     ${CHOP_FLAG} \
+    ${USE_DENSITY_FLAG} \
     --print_input
 "

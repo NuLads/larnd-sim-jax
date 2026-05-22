@@ -64,7 +64,8 @@ def main(config):
             max_nbatch = iterations
 
     dataset_sim = TracksDataset(filename=config.input_file_sim, nevents=config.data_sz, max_nbatch=max_nbatch, random_nevents=config.random_nevents, data_seed=config.data_seed,
-                            track_len_sel=config.track_len_sel, max_abs_costheta_sel=config.max_abs_costheta_sel, min_abs_segz_sel=config.min_abs_segz_sel, track_z_bound=config.track_z_bound, max_batch_len=config.max_batch_len, print_input=config.print_input, chopped=(not config.no_chop), pad=(not config.no_pad), electron_sampling_resolution=config.electron_sampling_resolution, live_selection=config.live_selection)
+                            track_len_sel=config.track_len_sel, max_abs_costheta_sel=config.max_abs_costheta_sel, min_abs_segz_sel=config.min_abs_segz_sel, track_z_bound=config.track_z_bound, max_batch_len=config.max_batch_len, print_input=config.print_input, chopped=(not config.no_chop), pad=(not config.no_pad), electron_sampling_resolution=config.electron_sampling_resolution, live_selection=config.live_selection,
+                            use_dedx_density=config.use_dedx_density, dedx_density_mode=config.dedx_density_mode)
 
     if ".np" in config.input_file_tgt:
         if not config.read_target:
@@ -344,6 +345,11 @@ if __name__ == '__main__':
                         help='Sigmoid normalization slope scale (<1 makes mapping flatter)')
     parser.add_argument('--normalization_scale_exp_log', type=float, default=1.0,
                         help='exp_log normalization slope scale (<1 makes mapping flatter in norm space)')
+    parser.add_argument('--use_dedx_density', dest='use_dedx_density', action='store_true', default=False,
+                        help='Use dE/dx density propagation in quenching.')
+    parser.add_argument('--dedx_density_mode', type=str, default='histogram',
+                        choices=['histogram', 'flow'],
+                        help='dE/dx density model. histogram (default) or flow (trained CNF).')
     parser.add_argument('--profile', default=False, action='store_true', help='Should run some xprof execution profiling')
     parser.add_argument('--no_chop', default=False, action='store_true', help='Disable chopping in data loading')
     parser.add_argument('--no_pad', default=False, action='store_true', help='Disable padding in data loading')
