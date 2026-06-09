@@ -4,6 +4,7 @@ Module containing constants needed by the simulation
 
 import numpy as np
 import yaml
+import math
 from flax import struct
 import jax
 import jax.numpy as jnp
@@ -15,6 +16,73 @@ from collections import defaultdict
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+def compute_smear_gaussian_weights(radius_cm, sigma_cm, pixel_pitch, z_tick_size):
+    """Compute 3D Gaussian smear weights in voxel units.
+
+    Returns a tuple of (oy, ox, oz, weight) entries normalized to sum to 1.0.
+    """
+    dx = float(pixel_pitch)
+    dy = float(pixel_pitch)
+    dz = float(z_tick_size)
+    sigma2 = max(float(sigma_cm) ** 2, 1e-12)
+    r = max(float(radius_cm), 0.0)
+    r2 = r * r
+    rx = max(int(math.ceil(r / max(dx, 1e-12))), 0)
+    ry = max(int(math.ceil(r / max(dy, 1e-12))), 0)
+    rz = max(int(math.ceil(r / max(dz, 1e-12))), 0)
+
+    smear_gaussian_weights = []
+    for oy in range(-ry, ry + 1):
+        for ox in range(-rx, rx + 1):
+            for ot in range(-rz, rz + 1):
+                d2 = (oy * dy) ** 2 + (ox * dx) ** 2 + (ot * dz) ** 2
+                if d2 <= r2:
+                    smear_gaussian_weights.append((oy, ox, ot, math.exp(-0.5 * d2 / sigma2)))
+
+    if not smear_gaussian_weights:
+        smear_gaussian_weights = [(0, 0, 0, 1.0)]
+    total_w = max(sum(w for _, _, _, w in smear_gaussian_weights), 1e-12)
+    smear_gaussian_weights = [(oy, ox, ot, w / total_w) for oy, ox, ot, w in smear_gaussian_weights]
+    return tuple(smear_gaussian_weights)
+
+
+def _build_tpc_z_metadata(tpc_borders, z_bin_size_cm):
+    """Build concatenated z-axis metadata from TPC borders.
+
+    TPC slabs are ordered by increasing z-min and concatenated into one global z axis.
+    """
+    tpc_borders_np = np.asarray(tpc_borders, dtype=np.float64)
+    ntpc = int(tpc_borders_np.shape[0])
+
+    z_planes = []
+    for tpc_idx in range(ntpc):
+        z0 = float(tpc_borders_np[tpc_idx, 2, 0])
+        z1 = float(tpc_borders_np[tpc_idx, 2, 1])
+        z_planes.append((tpc_idx, min(z0, z1), max(z0, z1)))
+    z_planes.sort(key=lambda plane: plane[1])
+
+    z_step = max(float(z_bin_size_cm), 1e-12)
+    nz_per_tpc = np.ones(ntpc, dtype=np.int32)
+    z_min_per_tpc = np.zeros(ntpc, dtype=np.float32)
+    offset_by_tpc = np.zeros(ntpc, dtype=np.int32)
+
+    running = 0
+    for tpc_idx, z_lo, z_hi in z_planes:
+        nz_tpc = max(int(round((z_hi - z_lo) / z_step)), 1)
+        nz_per_tpc[tpc_idx] = nz_tpc
+        z_min_per_tpc[tpc_idx] = np.float32(z_lo)
+        offset_by_tpc[tpc_idx] = running
+        running += nz_tpc
+
+    return {
+        'ntpc': ntpc,
+        'nz': int(running),
+        'nz_per_tpc': nz_per_tpc,
+        'z_min_per_tpc': z_min_per_tpc,
+        'offset_by_tpc': offset_by_tpc,
+    }
 
 @dataclasses.dataclass
 class Params_template:
@@ -90,6 +158,11 @@ class Params_template:
     # n_pixels: tuple = struct.field(pytree_node=False)
     n_pixels_x: tuple = struct.field(pytree_node=False)
     n_pixels_y: tuple = struct.field(pytree_node=False)
+    ntpc: int = struct.field(pytree_node=False)
+    nz: int = struct.field(pytree_node=False)
+    nz_per_tpc: jax.Array = struct.field(pytree_node=False)
+    z_min_per_tpc: jax.Array = struct.field(pytree_node=False)
+    offset_by_tpc: jax.Array = struct.field(pytree_node=False)
     max_radius: int = struct.field(pytree_node=False)
     max_active_pixels: int = struct.field(pytree_node=False)
     drift_length: float = struct.field(pytree_node=False)
@@ -273,6 +346,11 @@ def load_detector_properties(params_cls, detprop_file, pixel_file, soft_xy_sigma
         "temperature": 87.17,
         "max_active_pixels": 0,
         "max_radius": 0,
+        "ntpc": 0,
+        "nz": 0,
+        "nz_per_tpc": jnp.zeros((0,), dtype=jnp.int32),
+        "z_min_per_tpc": jnp.zeros((0,), dtype=jnp.float32),
+        "offset_by_tpc": jnp.zeros((0,), dtype=jnp.int32),
         "min_step_size": 0.001, #cm
         "time_max": 0,
         "time_window": 189.1, #us,
@@ -393,6 +471,14 @@ def load_detector_properties(params_cls, detprop_file, pixel_file, soft_xy_sigma
     # params_dict['n_pixels'] = len(np.unique(params_dict['xs']))*2, len(np.unique(params_dict['ys']))*4
     params_dict['n_pixels_x'] = len(np.unique(params_dict['xs']))*2
     params_dict['n_pixels_y'] = len(np.unique(params_dict['ys']))*4
+
+    z_tick_size = float(params_dict['t_sampling']) * float(params_dict['vdrift_static'])
+    z_meta = _build_tpc_z_metadata(params_dict['tpc_borders'], z_tick_size)
+    params_dict['ntpc'] = int(z_meta['ntpc'])
+    params_dict['nz'] = int(z_meta['nz'])
+    params_dict['nz_per_tpc'] = jnp.asarray(z_meta['nz_per_tpc'], dtype=jnp.int32)
+    params_dict['z_min_per_tpc'] = jnp.asarray(z_meta['z_min_per_tpc'], dtype=jnp.float32)
+    params_dict['offset_by_tpc'] = jnp.asarray(z_meta['offset_by_tpc'], dtype=jnp.int32)
 
     params_dict['n_pixels_per_tile'] = len(np.unique(params_dict['xs'])), len(np.unique(params_dict['ys']))
 

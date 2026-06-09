@@ -1,4 +1,5 @@
 import os, sys
+import math
 
 from requests import options
 larndsim_dir=os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..'))
@@ -10,6 +11,37 @@ from .ranges import ranges
 from larndsim.sim_jax import get_size_history, compute_smooth_safe_displacements
 from larndsim.losses_jax import mmd_adc, mmd_time, mmd_time_adc, sobolev_adc, chamfer_3d, sdtw_adc, sdtw_time, sdtw_time_adc, adc2charge, nll_loss, llhd_loss, compute_tv_penalty, wasserstein_1d_loss #, sinkhorn_loss
 from larndsim.consts_jax import build_params_class, load_detector_properties, load_lut
+try:
+    from larndsim.consts_jax import compute_smear_gaussian_weights
+except ImportError:
+    def compute_smear_gaussian_weights(radius_cm, sigma_cm, pixel_pitch, z_tick_size):
+        """Compatibility fallback for older larndsim installs.
+
+        This mirrors src/larndsim/consts_jax.py and keeps behavior stable when
+        site-packages has an older module version.
+        """
+        dx = float(pixel_pitch)
+        dy = float(pixel_pitch)
+        dz = float(z_tick_size)
+        sigma2 = max(float(sigma_cm) ** 2, 1e-12)
+        r = max(float(radius_cm), 0.0)
+        r2 = r * r
+        rx = max(int(math.ceil(r / max(dx, 1e-12))), 0)
+        ry = max(int(math.ceil(r / max(dy, 1e-12))), 0)
+        rz = max(int(math.ceil(r / max(dz, 1e-12))), 0)
+
+        weights = []
+        for oy in range(-ry, ry + 1):
+            for ox in range(-rx, rx + 1):
+                for oz in range(-rz, rz + 1):
+                    d2 = (oy * dy) ** 2 + (ox * dx) ** 2 + (oz * dz) ** 2
+                    if d2 <= r2:
+                        weights.append((oy, ox, oz, math.exp(-0.5 * d2 / sigma2)))
+
+        if not weights:
+            weights = [(0, 0, 0, 1.0)]
+        total = max(sum(w for _, _, _, w in weights), 1e-12)
+        return tuple((oy, ox, oz, w / total) for oy, ox, oz, w in weights)
 from larndsim.detsim_jax import validate_event_ids_for_packing, validate_local_event_ids
 from larndsim.softdtw_jax import SoftDTW
 from jax.flatten_util import ravel_pytree
@@ -461,6 +493,29 @@ class ParamFitter:
         # Set up loss strategy based on loss function and simulation type
         if loss_fn == 'llhd':
             from .strategies import ProbabilisticLossStrategy
+            loss_fn_kw_local = dict(self.loss_fn_kw)
+            radius_cm_eff = 0.0
+            if loss_fn_kw_local.get('target_gaussian_3d_radius_cm', None) is not None:
+                radius_cm_eff = max(float(loss_fn_kw_local['target_gaussian_3d_radius_cm']), 0.0)
+
+            if radius_cm_eff > 0.0 and 'smear_gaussian_weights' not in loss_fn_kw_local:
+                pixel_pitch = float(getattr(self.ref_params, 'pixel_pitch', 1.0))
+                z_tick_size = float(getattr(self.ref_params, 't_sampling', 1.0)) * float(
+                    getattr(self.ref_params, 'vdrift_static', 1.0)
+                )
+                if loss_fn_kw_local.get('target_gaussian_3d_sigma_cm', None) is not None:
+                    sigma_cm_eff = float(loss_fn_kw_local['target_gaussian_3d_sigma_cm'])
+                else:
+                    sigma_cm_eff = max(radius_cm_eff / 2.0, pixel_pitch)
+                sigma_cm_eff = max(sigma_cm_eff, 1e-6)
+                loss_fn_kw_local['smear_gaussian_weights'] = compute_smear_gaussian_weights(
+                    radius_cm_eff,
+                    sigma_cm_eff,
+                    pixel_pitch,
+                    z_tick_size,
+                )
+
+            self.loss_fn_kw = loss_fn_kw_local
             self.loss_strategy = ProbabilisticLossStrategy(**self.loss_fn_kw)
         elif self.probabilistic_sim:
             # Use CollapsedProbabilisticLossStrategy for probabilistic simulation with deterministic losses
@@ -1875,27 +1930,6 @@ class GradientDescentFitter(ParamFitter):
 
                     # loss
                     loss_val, grads, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True, batch_row_indices=batch_row_indices)
-
-                    if aux is not None and hasattr(self.loss_strategy, 'auto_reweight'):
-                        aux = dict(aux)
-                        reweight_info = self.loss_strategy.auto_reweight(aux, total_iter)
-                        aux['auto_reweight_applied'] = 1.0 if reweight_info else 0.0
-                        aux['auto_reweight_iteration'] = float(total_iter)
-                        if hasattr(self.loss_strategy, 'auto_reweight_every'):
-                            aux['auto_reweight_every'] = float(getattr(self.loss_strategy, 'auto_reweight_every'))
-                        for w_name in (
-                            'w_log_likelihood_tick',
-                            'w_log_likelihood_charge',
-                            'w_no_match_penalty',
-                            'w_unmatched_distance',
-                            'w_pixel_count',
-                            'w_time_distance',
-                        ):
-                            if hasattr(self.loss_strategy, w_name):
-                                aux[f'auto_reweight_{w_name}'] = float(getattr(self.loss_strategy, w_name))
-                        if reweight_info:
-                            for key, value in reweight_info.items():
-                                aux[f'auto_reweight_{key}'] = value
 
                     if self.fit_segment_shift_xyz:
                         if grads is None:

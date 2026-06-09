@@ -48,32 +48,26 @@ def main(config):
             config.loss_fn_kw['max_events_per_batch'] = config.max_events_per_batch
         if getattr(config, 'eps', None) is not None:
             config.loss_fn_kw['eps'] = config.eps
-        if getattr(config, 'w_sobolev_3d_grad', None) is not None:
-            config.loss_fn_kw['w_sobolev_3d_grad'] = config.w_sobolev_3d_grad
         if getattr(config, 'w_sobolev_3d_grad_local', None) is not None:
             config.loss_fn_kw['w_sobolev_3d_grad_local'] = config.w_sobolev_3d_grad_local
         if getattr(config, 'w_sobolev_3d_grad_medium', None) is not None:
             config.loss_fn_kw['w_sobolev_3d_grad_medium'] = config.w_sobolev_3d_grad_medium
         if getattr(config, 'w_sobolev_3d_grad_global', None) is not None:
             config.loss_fn_kw['w_sobolev_3d_grad_global'] = config.w_sobolev_3d_grad_global
-        if getattr(config, 'sobolev_pool_nbin_x_medium', None) is not None:
-            config.loss_fn_kw['sobolev_pool_nbin_x_medium'] = config.sobolev_pool_nbin_x_medium
-        if getattr(config, 'sobolev_pool_nbin_z_medium', None) is not None:
-            config.loss_fn_kw['sobolev_pool_nbin_z_medium'] = config.sobolev_pool_nbin_z_medium
-        if getattr(config, 'sobolev_pool_nbin_x_global', None) is not None:
-            config.loss_fn_kw['sobolev_pool_nbin_x_global'] = config.sobolev_pool_nbin_x_global
-        if getattr(config, 'sobolev_pool_nbin_z_global', None) is not None:
-            config.loss_fn_kw['sobolev_pool_nbin_z_global'] = config.sobolev_pool_nbin_z_global
+        if getattr(config, 'sobolev_pool_nbin_medium', None) is not None:
+            config.loss_fn_kw['sobolev_pool_nbin_medium'] = config.sobolev_pool_nbin_medium
+        if getattr(config, 'sobolev_pool_nbin_global', None) is not None:
+            config.loss_fn_kw['sobolev_pool_nbin_global'] = config.sobolev_pool_nbin_global
         if getattr(config, 'sobolev_pool_layer_balance', None) is not None:
             config.loss_fn_kw['sobolev_pool_layer_balance'] = config.sobolev_pool_layer_balance
         if getattr(config, 'sobolev_pool_running_decay', None) is not None:
             config.loss_fn_kw['sobolev_pool_running_decay'] = config.sobolev_pool_running_decay
         if getattr(config, 'sobolev_pool_weight_local', None) is not None:
-            config.loss_fn_kw['sobolev_pool_weight_local'] = config.sobolev_pool_weight_local
+            config.loss_fn_kw['w_sobolev_pool_local'] = config.sobolev_pool_weight_local
         if getattr(config, 'sobolev_pool_weight_medium', None) is not None:
-            config.loss_fn_kw['sobolev_pool_weight_medium'] = config.sobolev_pool_weight_medium
+            config.loss_fn_kw['w_sobolev_pool_medium'] = config.sobolev_pool_weight_medium
         if getattr(config, 'sobolev_pool_weight_global', None) is not None:
-            config.loss_fn_kw['sobolev_pool_weight_global'] = config.sobolev_pool_weight_global
+            config.loss_fn_kw['w_sobolev_pool_global'] = config.sobolev_pool_weight_global
         if getattr(config, 'emit_sobolev_pool_report', None) is not None:
             config.loss_fn_kw['emit_sobolev_pool_report'] = (
                 str(config.emit_sobolev_pool_report).lower() in ('1', 'true', 'yes', 'y', 'on')
@@ -491,9 +485,6 @@ if __name__ == '__main__':
     parser.add_argument("--eps", dest="eps",
                         default=None, type=float,
                         help="Epsilon threshold used by ProbabilisticLossStrategy masks.")
-    parser.add_argument("--w_sobolev_3d_grad", dest="w_sobolev_3d_grad",
-                        default=None, type=float,
-                        help="Gradient-term weight in ProbabilisticLossStrategy (fallback for all layers).")
     parser.add_argument("--w_sobolev_3d_grad_local", dest="w_sobolev_3d_grad_local",
                         default=None, type=float,
                         help="Gradient-term weight for local Sobolev pooling layer.")
@@ -503,24 +494,15 @@ if __name__ == '__main__':
     parser.add_argument("--w_sobolev_3d_grad_global", dest="w_sobolev_3d_grad_global",
                         default=None, type=float,
                         help="Gradient-term weight for global Sobolev pooling layer.")
-    parser.add_argument("--sobolev_pool_nbin_x_medium", dest="sobolev_pool_nbin_x_medium",
+    parser.add_argument("--sobolev_pool_nbin_medium", dest="sobolev_pool_nbin_medium",
                         default=None, type=int,
-                        help="Medium Sobolev pooling bins along x.")
-    parser.add_argument("--sobolev_pool_nbin_z_medium", dest="sobolev_pool_nbin_z_medium",
+                        help="Medium Sobolev pooling bins along x and z, half of y.")
+    parser.add_argument("--sobolev_pool_nbin_global", dest="sobolev_pool_nbin_global",
                         default=None, type=int,
-                        help="Medium Sobolev pooling bins along z.")
-    parser.add_argument("--sobolev_pool_nbin_x_global", dest="sobolev_pool_nbin_x_global",
-                        default=None, type=int,
-                        help="Global Sobolev pooling bins along x.")
-    parser.add_argument("--sobolev_pool_nbin_z_global", dest="sobolev_pool_nbin_z_global",
-                        default=None, type=int,
-                        help="Global Sobolev pooling bins along z.")
+                        help="Global Sobolev pooling bins along x and z, half of y.")
     parser.add_argument("--sobolev_pool_layer_balance", dest="sobolev_pool_layer_balance",
-                        default=None, choices=['running', 'weights', 'none'],
+                        default=None, choices=['weights', 'none'],
                         help="Layer balancing mode for 3-layer Sobolev pooling.")
-    parser.add_argument("--sobolev_pool_running_decay", dest="sobolev_pool_running_decay",
-                        default=None, type=float,
-                        help="EMA decay used by running layer normalization in Sobolev pooling.")
     parser.add_argument("--sobolev_pool_weight_local", dest="sobolev_pool_weight_local",
                         default=None, type=float,
                         help="Manual local-layer weight when using sobolev_pool_layer_balance=weights.")
@@ -534,7 +516,7 @@ if __name__ == '__main__':
                         default=None, type=str,
                         help="Whether to emit Sobolev pool report (true/false).")
     parser.add_argument("--sobolev_norm_target_source", dest="sobolev_norm_target_source",
-                        default=None, choices=['smeared', 'non_smeared', 'unsmeared'],
+                        default=None, choices=['smeared', 'unsmeared'],
                         help="Normalization source for Sobolev term.")
     parser.add_argument("--mmd_sigma", dest="mmd_sigma", default=1.0, type=float,
                         help="RBF kernel bandwidth sigma for mmd (mmd_adc) loss.")

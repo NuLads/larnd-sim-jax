@@ -1,9 +1,12 @@
 import jax
 import jax.numpy as jnp
+import math
 from larndsim.sim_jax import simulate_wfs, simulate_stochastic, simulate_parametrized, simulate_probabilistic
 from larndsim.losses_jax import adc2charge
 from larndsim.detsim_jax import id2pixel, get_hit_z
 from larndsim.fee_jax import get_average_hit_values
+from larndsim.consts_jax import compute_smear_gaussian_weights, _build_tpc_z_metadata
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -309,30 +312,25 @@ class CollapsedProbabilisticLossStrategy(LossStrategy):
 
 class ProbabilisticLossStrategy(LossStrategy):
     #eps=1e-10
-    def __init__(self, eps=1e-6,
-                 w_sobolev_3d_grad=0.01,
-                 w_sobolev_3d_grad_local=0.05,
-                 w_sobolev_3d_grad_medium=0.01,
-                 w_sobolev_3d_grad_global=0.01,
+    def __init__(self, eps=1e-6, 
                  target_gaussian_3d_radius_cm=0.3,
                  target_gaussian_3d_sigma_cm=0.1,
-                 sobolev_pool_nbin_x_medium=15,
-                 sobolev_pool_nbin_z_medium=15,
-                 sobolev_pool_nbin_x_global=5,
-                 sobolev_pool_nbin_z_global=5,
-                 sobolev_pool_layer_balance='running',
-                 sobolev_pool_running_decay=0.9,
-                 sobolev_pool_weight_local=1.0,
-                 sobolev_pool_weight_medium=1.0,
-                 sobolev_pool_weight_global=1.0,
+                 sobolev_pool_nbin_medium=70,
+                 sobolev_pool_nbin_global=10,
+                 sobolev_pool_layer_balance='weights',
+                 w_sobolev_3d_grad_local=0.15,
+                 w_sobolev_3d_grad_medium=0.02,
+                 w_sobolev_3d_grad_global=0.015,
+                 w_sobolev_pool_local=1.0,
+                 w_sobolev_pool_medium=30.0,
+                 w_sobolev_pool_global=600.0,
                  emit_sobolev_pool_report=True,
                  sobolev_norm_target_source='smeared',
-                 nz_local=1999,
-                 max_events_per_batch=64,
+                 smear_gaussian_weights=None,
+                 max_events_per_batch=1,
                  **kwargs):
         super().__init__(**kwargs)
         self.eps = eps
-        self.w_sobolev_3d_grad = float(w_sobolev_3d_grad)
         self.w_sobolev_3d_grad_local = float(w_sobolev_3d_grad_local)
         self.w_sobolev_3d_grad_medium = float(w_sobolev_3d_grad_medium)
         self.w_sobolev_3d_grad_global = float(w_sobolev_3d_grad_global)
@@ -345,18 +343,23 @@ class ProbabilisticLossStrategy(LossStrategy):
             None if target_gaussian_3d_sigma_cm is None else max(float(target_gaussian_3d_sigma_cm), 1e-6)
         )
 
-        self.sobolev_pool_nbin_x_medium = max(int(sobolev_pool_nbin_x_medium), 1)
-        self.sobolev_pool_nbin_z_medium = max(int(sobolev_pool_nbin_z_medium), 1)
+        if sobolev_pool_nbin_medium %2 != 0 or sobolev_pool_nbin_global %2 != 0:
+            raise ValueError("sobolev_pool_nbin_medium and sobolev_pool_nbin_global must be even integers to make a break in z at the TPC cathode.")
+        
+        self.sobolev_pool_nbin_x_medium = max(int(sobolev_pool_nbin_medium), 1)
         self.sobolev_pool_nbin_y_medium = 2 * self.sobolev_pool_nbin_x_medium
+        self.sobolev_pool_nbin_z_medium = max(int(sobolev_pool_nbin_medium), 1)
+
         self.sobolev_pool_medium_bins_xyz = (
             self.sobolev_pool_nbin_x_medium,
             self.sobolev_pool_nbin_y_medium,
             self.sobolev_pool_nbin_z_medium,
         )
 
-        self.sobolev_pool_nbin_x_global = max(int(sobolev_pool_nbin_x_global), 1)
-        self.sobolev_pool_nbin_z_global = max(int(sobolev_pool_nbin_z_global), 1)
+        self.sobolev_pool_nbin_x_global = max(int(sobolev_pool_nbin_global), 1)
         self.sobolev_pool_nbin_y_global = 2 * self.sobolev_pool_nbin_x_global
+        self.sobolev_pool_nbin_z_global = max(int(sobolev_pool_nbin_global), 1)
+
         self.sobolev_pool_global_bins_xyz = (
             self.sobolev_pool_nbin_x_global,
             self.sobolev_pool_nbin_y_global,
@@ -364,22 +367,15 @@ class ProbabilisticLossStrategy(LossStrategy):
         )
 
         self.sobolev_pool_layer_balance = str(sobolev_pool_layer_balance).lower()
-        if self.sobolev_pool_layer_balance not in ('running', 'weights', 'none'):
+        if self.sobolev_pool_layer_balance not in ('weights', 'none'):
             raise ValueError(
-                "sobolev_pool_layer_balance must be one of 'running', 'weights', or 'none'"
+                "sobolev_pool_layer_balance must be one of 'weights', or 'none'"
             )
-        self.sobolev_pool_running_decay = min(max(float(sobolev_pool_running_decay), 0.0), 0.999999)
         self.sobolev_pool_manual_weights = {
-            'local': max(float(sobolev_pool_weight_local), 0.0),
-            'medium': max(float(sobolev_pool_weight_medium), 0.0),
-            'global': max(float(sobolev_pool_weight_global), 0.0),
+            'local': max(float(w_sobolev_pool_local), 0.0),
+            'medium': max(float(w_sobolev_pool_medium), 0.0),
+            'global': max(float(w_sobolev_pool_global), 0.0),
         }
-        self.sobolev_pool_running_scales = {
-            'local': 1.0,
-            'medium': 1.0,
-            'global': 1.0,
-        }
-        self.auto_reweight_every = 1
 
         self.emit_sobolev_pool_report = bool(emit_sobolev_pool_report)
         self.sobolev_norm_target_source = str(sobolev_norm_target_source).lower()
@@ -390,111 +386,148 @@ class ProbabilisticLossStrategy(LossStrategy):
                 "sobolev_norm_target_source must be either 'smeared' or 'non_smeared'"
             )
 
-        # Static z-window size for dense Sobolev grids.
-        self.nz_local = max(int(nz_local), 1)
+        # Full z extent is derived from geometry (tpc_borders) in compute().
         # Fixed event-axis budget for per-event vectorized loss in one batch.
         self.max_events_per_batch = max(int(max_events_per_batch), 1)
 
-    def _gaussian_smear_target(self, target_xyz, radius_cm, sigma_cm,
-                               pixel_pitch, z_tick_size):
-        """Apply 3D Gaussian smearing on (ny, nx, nz) target field in physical units."""
-        import math
-        ny, nx, nz = target_xyz.shape
-        dx = float(pixel_pitch)
-        dy = float(pixel_pitch)
-        dz = float(z_tick_size)
-        sigma2 = max(float(sigma_cm) ** 2, 1e-12)
-        r = max(float(radius_cm), 0.0)
-        r2 = r * r
-        rx = max(int(math.ceil(r / max(dx, 1e-12))), 0)
-        ry = max(int(math.ceil(r / max(dy, 1e-12))), 0)
-        rz = max(int(math.ceil(r / max(dz, 1e-12))), 0)
+        # Optional precomputed Gaussian smear weights from detector constants.
+        self.smear_gaussian_weights = smear_gaussian_weights
 
-        offsets_weights = []
-        for oy in range(-ry, ry + 1):
-            for ox in range(-rx, rx + 1):
-                for ot in range(-rz, rz + 1):
-                    d2 = (oy * dy) ** 2 + (ox * dx) ** 2 + (ot * dz) ** 2
-                    if d2 <= r2:
-                        offsets_weights.append((oy, ox, ot, math.exp(-0.5 * d2 / sigma2)))
+    def _compute_smear_gaussian_weights(self, radius_cm, sigma_cm, pixel_pitch, z_tick_size):
+        return compute_smear_gaussian_weights(radius_cm, sigma_cm, pixel_pitch, z_tick_size)
 
-        if not offsets_weights:
-            offsets_weights = [(0, 0, 0, 1.0)]
-        total_w = max(sum(w for _, _, _, w in offsets_weights), 1e-12)
-        offsets_weights = [(oy, ox, ot, w / total_w) for oy, ox, ot, w in offsets_weights]
+    def _gaussian_smear_sparse(self, target_xyz_unsmeared, smear_gaussian_weights,
+                               max_hits_per_batch=256):
+        """Sparse Gaussian smearing: apply kernel only around active hit locations.
+        
+        Args:
+            target_xyz_unsmeared: (nx, ny, nz) dense unsmeared grid
+            smear_gaussian_weights: iterable of (oy, ox, oz, weight)
+            max_hits_per_batch: maximum number of hits to pad to (for JAX static shape)
+        
+        Returns:
+            smeared: (nx, ny, nz) smeared grid
+        """
+        nx, ny, nz = target_xyz_unsmeared.shape
 
-        padded_ones = jnp.pad(jnp.ones((ny, nx, nz), dtype=jnp.float32),
-                              ((ry, ry), (rx, rx), (rz, rz)))
-        denom = jnp.zeros((ny, nx, nz), dtype=jnp.float32)
-        for oy, ox, ot, w in offsets_weights:
-            denom = denom + w * padded_ones[
-                ry + oy: ry + oy + ny,
-                rx + ox: rx + ox + nx,
-                rz + ot: rz + ot + nz,
-            ]
+        # Start with the original (unsmeared) grid
+        smeared = target_xyz_unsmeared.astype(jnp.float32)
 
-        source_scaled = target_xyz / jnp.maximum(denom, 1e-12)
-        padded_scaled = jnp.pad(source_scaled, ((ry, ry), (rx, rx), (rz, rz)))
-        smeared = jnp.zeros((ny, nx, nz), dtype=jnp.float32)
-        for oy, ox, ot, w in offsets_weights:
-            smeared = smeared + w * padded_scaled[
-                ry + oy: ry + oy + ny,
-                rx + ox: rx + ox + nx,
-                rz + ot: rz + ot + nz,
-            ]
-        return smeared
+        # Build a fixed-capacity list of active hits so array shapes stay static under JIT.
+        active_mask = target_xyz_unsmeared > self.eps
+        hit_x, hit_y, hit_z = jnp.nonzero(
+            active_mask,
+            size=max_hits_per_batch,
+            fill_value=0,
+        )
+        n_hits = jnp.minimum(jnp.sum(active_mask.astype(jnp.int32)), max_hits_per_batch)
+        hit_mask = jnp.arange(max_hits_per_batch, dtype=jnp.int32) < n_hits
+        hit_vals = target_xyz_unsmeared[hit_x, hit_y, hit_z].astype(jnp.float32)
+        
+        # Apply each offset in the kernel
+        def apply_offset(smeared_acc, smear_weight):
+            oy, ox, oz, w = smear_weight
+
+            oy = oy.astype(jnp.int32)
+            ox = ox.astype(jnp.int32)
+            oz = oz.astype(jnp.int32)
+
+            # Compute new positions for all (padded) hits.
+            # Kernel offsets are in (oy, ox, oz), while field layout is (x, y, z).
+            x_new = hit_x + ox
+            y_new = hit_y + oy
+            z_new = hit_z + oz
+
+            # Bounds check
+            in_bounds = (x_new >= 0) & (x_new < nx) & \
+                        (y_new >= 0) & (y_new < ny) & \
+                        (z_new >= 0) & (z_new < nz)
+
+            # Mask: only apply if in bounds AND hit is not padding
+            valid_mask = in_bounds & hit_mask
+
+            # Clip indices for gather/scatter (set invalid ones to 0)
+            x_safe = jnp.where(valid_mask, x_new, 0)
+            y_safe = jnp.where(valid_mask, y_new, 0)
+            z_safe = jnp.where(valid_mask, z_new, 0)
+
+            # Contribution: hit value × kernel weight, masked out for invalid entries
+            contrib = jnp.where(valid_mask, hit_vals * w, 0.0)
+
+            # Scatter-add all contributions in one vectorized operation
+            smeared_new = smeared_acc.at[x_safe, y_safe, z_safe].add(contrib)
+
+            return smeared_new, None
+
+        # Scan over offsets (static loop, unrolled at compile time)
+        smear_gaussian_weights = jnp.asarray(smear_gaussian_weights, dtype=jnp.float32)
+        smeared_final, _ = jax.lax.scan(apply_offset, smeared, smear_gaussian_weights)
+
+        return smeared_final
+
+    def _gaussian_smear_target(self, target_xyz, smear_gaussian_weights):
+        """Apply 3D Gaussian smearing on (nx, ny, nz) target field in physical units.
+        
+        Uses sparse smearing: only processes voxels within the smearing radius of active hits.
+        """
+        return self._gaussian_smear_sparse(
+            target_xyz, smear_gaussian_weights
+        )
 
     def _pool_xyz_bins(self, field_xyz, bins_xyz):
-        """Pool a dense [ny, nx, nz] field into coarse xyz bins."""
+        """Pool a dense [nx, ny, nz] field into coarse xyz bins."""
         field_xyz = jnp.asarray(field_xyz, dtype=jnp.float32)
         bin_x = max(int(bins_xyz[0]), 1)
         bin_y = max(int(bins_xyz[1]), 1)
         bin_z = max(int(bins_xyz[2]), 1)
-        ny, nx, nz = field_xyz.shape
+        nx, ny, nz = field_xyz.shape
 
         x_bin = jnp.minimum((jnp.arange(nx, dtype=jnp.int32) * bin_x) // max(nx, 1), bin_x - 1)
         y_bin = jnp.minimum((jnp.arange(ny, dtype=jnp.int32) * bin_y) // max(ny, 1), bin_y - 1)
         z_bin = jnp.minimum((jnp.arange(nz, dtype=jnp.int32) * bin_z) // max(nz, 1), bin_z - 1)
 
-        flat_y = jnp.repeat(y_bin, nx * nz)
-        flat_x = jnp.tile(jnp.repeat(x_bin, nz), ny)
-        flat_z = jnp.tile(z_bin, ny * nx)
-        flat_idx = ((flat_y * bin_x) + flat_x) * bin_z + flat_z
+        flat_x = jnp.repeat(x_bin, ny * nz)
+        flat_y = jnp.tile(jnp.repeat(y_bin, nz), nx)
+        flat_z = jnp.tile(z_bin, nx * ny)
+        flat_idx = ((flat_x * bin_y) + flat_y) * bin_z + flat_z
         flat_vals = field_xyz.reshape(-1)
 
-        pooled_sum = jnp.zeros(bin_y * bin_x * bin_z, dtype=jnp.float32).at[flat_idx].add(flat_vals)
-        pooled_count = jnp.zeros(bin_y * bin_x * bin_z, dtype=jnp.float32).at[flat_idx].add(
+        pooled_sum = jnp.zeros(bin_x * bin_y * bin_z, dtype=jnp.float32).at[flat_idx].add(flat_vals)
+        pooled_count = jnp.zeros(bin_x * bin_y * bin_z, dtype=jnp.float32).at[flat_idx].add(
             jnp.ones_like(flat_vals, dtype=jnp.float32)
         )
         pooled = pooled_sum / jnp.maximum(pooled_count, 1.0)
-        return pooled.reshape(bin_y, bin_x, bin_z)
+        return pooled.reshape(bin_x, bin_y, bin_z)
 
     def _sobolev_layer_metrics(self, pooled_pred, pooled_target, pooled_norm_source,
-                               pixel_pitch_cm, z_bin_cm, w_sobolev_3d_grad=None):
-        """Notebook-equivalent Sobolev metrics for one pooled layer."""
+                               pixel_pitch_cm, z_bin_cm, w_sobolev_3d_grad=None,
+                               axis_pool_factors_xyz=(1.0, 1.0, 1.0)):
         eps = self.eps
         residual = pooled_pred - pooled_target
         active_mask = (jnp.abs(pooled_pred) > eps) | (jnp.abs(pooled_target) > eps)
         norm_mask = jnp.abs(pooled_norm_source) > eps
         norm_voxels = jnp.sum(norm_mask.astype(jnp.float32))
         pooled_norm = jnp.maximum(norm_voxels, 1.0)
+        pool_fx = max(float(axis_pool_factors_xyz[0]), 1.0)
+        pool_fy = max(float(axis_pool_factors_xyz[1]), 1.0)
+        pool_fz = max(float(axis_pool_factors_xyz[2]), 1.0)
 
         value = jnp.sum((residual ** 2) * active_mask.astype(jnp.float32)) / pooled_norm
 
         grad_x_e = jnp.array(0.0, dtype=jnp.float32)
-        if residual.shape[1] > 1:
-            dx = residual[:, 1:, :] - residual[:, :-1, :]
-            mx = active_mask[:, 1:, :] & active_mask[:, :-1, :]
+        if residual.shape[0] > 1:
+            dx = residual[1:, :, :] - residual[:-1, :, :]
+            mx = active_mask[1:, :, :] & active_mask[:-1, :, :]
             grad_x_e = jnp.sum((dx ** 2) * mx.astype(jnp.float32)) / (
-                pooled_norm * max(float(pixel_pitch_cm) ** 2, 1e-12)
+                pool_fx * max(float(pixel_pitch_cm) ** 2, 1e-12)
             )
 
         grad_y_e = jnp.array(0.0, dtype=jnp.float32)
-        if residual.shape[0] > 1:
-            dy = residual[1:, :, :] - residual[:-1, :, :]
-            my = active_mask[1:, :, :] & active_mask[:-1, :, :]
+        if residual.shape[1] > 1:
+            dy = residual[:, 1:, :] - residual[:, :-1, :]
+            my = active_mask[:, 1:, :] & active_mask[:, :-1, :]
             grad_y_e = jnp.sum((dy ** 2) * my.astype(jnp.float32)) / (
-                pooled_norm * max(float(pixel_pitch_cm) ** 2, 1e-12)
+                pool_fy * max(float(pixel_pitch_cm) ** 2, 1e-12)
             )
 
         grad_z_e = jnp.array(0.0, dtype=jnp.float32)
@@ -503,9 +536,10 @@ class ProbabilisticLossStrategy(LossStrategy):
             mz = active_mask[:, :, 1:] & active_mask[:, :, :-1]
             # Adjust z-gradient contribution by voxel anisotropy (xy pitch over z bin size).
             z_grad_scale = max(float(z_bin_cm) / max(float(pixel_pitch_cm), 1e-12), 1e-12)
+            # z_grad_scale = 1.0
             grad_z_e = jnp.sum((dz ** 2) * mz.astype(jnp.float32)) / (
-                pooled_norm * max(float(z_bin_cm) ** 2, 1e-12)
-            ) * z_grad_scale
+                pool_fz * max(float(z_bin_cm) ** 2, 1e-12)
+            ) / z_grad_scale
 
         sobolev_3d_grad = (grad_x_e + grad_y_e + grad_z_e) / 3.0
         _w_grad = float(self.w_sobolev_3d_grad) if w_sobolev_3d_grad is None else float(w_sobolev_3d_grad)
@@ -524,13 +558,7 @@ class ProbabilisticLossStrategy(LossStrategy):
         }
 
     def _sobolev_pool_layer_weights(self):
-        if self.sobolev_pool_layer_balance == 'running':
-            raw_weights = jnp.asarray([
-                1.0 / max(float(self.sobolev_pool_running_scales['local']), 1e-12),
-                1.0 / max(float(self.sobolev_pool_running_scales['medium']), 1e-12),
-                1.0 / max(float(self.sobolev_pool_running_scales['global']), 1e-12),
-            ], dtype=jnp.float32)
-        elif self.sobolev_pool_layer_balance == 'weights':
+        if self.sobolev_pool_layer_balance == 'weights':
             raw_weights = jnp.asarray([
                 float(self.sobolev_pool_manual_weights['local']),
                 float(self.sobolev_pool_manual_weights['medium']),
@@ -542,32 +570,7 @@ class ProbabilisticLossStrategy(LossStrategy):
         raw_mean = jnp.maximum(jnp.mean(raw_weights), 1e-12)
         return raw_weights / raw_mean
 
-    def auto_reweight(self, aux, total_iter):
-        if self.sobolev_pool_layer_balance != 'running':
-            return None
-
-        updated = {}
-        decay = float(self.sobolev_pool_running_decay)
-        for layer_name in ('local', 'medium', 'global'):
-            key = f'sobolev_pool_{layer_name}_total'
-            if key not in aux:
-                continue
-            observed = max(abs(float(aux[key])), 1e-12)
-            previous = max(float(self.sobolev_pool_running_scales[layer_name]), 1e-12)
-            if total_iter <= 0:
-                ema = observed
-            else:
-                ema = decay * previous + (1.0 - decay) * observed
-            self.sobolev_pool_running_scales[layer_name] = ema
-            updated[f'sobolev_pool_running_scale_{layer_name}'] = ema
-
-        weights = self._sobolev_pool_layer_weights()
-        updated['sobolev_pool_weight_local'] = float(weights[0])
-        updated['sobolev_pool_weight_medium'] = float(weights[1])
-        updated['sobolev_pool_weight_global'] = float(weights[2])
-        return updated
-
-    def _compute_three_layer_sobolev_pooling_jax(
+    def _compute_three_layer_sobolev_pooling(
         self,
         pred_xyz,
         target_xyz,
@@ -580,8 +583,8 @@ class ProbabilisticLossStrategy(LossStrategy):
 
         layer_specs = [
             ('local', 'local'),
-            ('medium', 'medium_binning'),
-            ('global', 'global_binning'),
+            ('medium', 'medium'),
+            ('global', 'global'),
         ]
 
         for layer_name, mode in layer_specs:
@@ -589,14 +592,25 @@ class ProbabilisticLossStrategy(LossStrategy):
                 pooled_pred = pred_xyz
                 pooled_target = target_xyz
                 pooled_norm_source = target_norm_xyz
-            elif mode == 'medium_binning':
+                axis_pool_factors_xyz = (1.0, 1.0, 1.0)
+            elif mode == 'medium':
                 pooled_pred = self._pool_xyz_bins(pred_xyz, self.sobolev_pool_medium_bins_xyz)
                 pooled_target = self._pool_xyz_bins(target_xyz, self.sobolev_pool_medium_bins_xyz)
                 pooled_norm_source = self._pool_xyz_bins(target_norm_xyz, self.sobolev_pool_medium_bins_xyz)
-            else:
+                axis_pool_factors_xyz = (
+                    max(float(pred_xyz.shape[0]) / max(float(pooled_pred.shape[0]), 1.0), 1.0),
+                    max(float(pred_xyz.shape[1]) / max(float(pooled_pred.shape[1]), 1.0), 1.0),
+                    max(float(pred_xyz.shape[2]) / max(float(pooled_pred.shape[2]), 1.0), 1.0),
+                )
+            elif mode == 'global':
                 pooled_pred = self._pool_xyz_bins(pred_xyz, self.sobolev_pool_global_bins_xyz)
                 pooled_target = self._pool_xyz_bins(target_xyz, self.sobolev_pool_global_bins_xyz)
                 pooled_norm_source = self._pool_xyz_bins(target_norm_xyz, self.sobolev_pool_global_bins_xyz)
+                axis_pool_factors_xyz = (
+                    max(float(pred_xyz.shape[0]) / max(float(pooled_pred.shape[0]), 1.0), 1.0),
+                    max(float(pred_xyz.shape[1]) / max(float(pooled_pred.shape[1]), 1.0), 1.0),
+                    max(float(pred_xyz.shape[2]) / max(float(pooled_pred.shape[2]), 1.0), 1.0),
+                )
 
             layer_w_grad = {
                 'local': self.w_sobolev_3d_grad_local,
@@ -610,6 +624,7 @@ class ProbabilisticLossStrategy(LossStrategy):
                 pixel_pitch_cm,
                 z_bin_cm,
                 w_sobolev_3d_grad=layer_w_grad,
+                axis_pool_factors_xyz=axis_pool_factors_xyz,
             )
 
         return results
@@ -634,94 +649,85 @@ class ProbabilisticLossStrategy(LossStrategy):
         }
 
     def compute(self, params, prediction, target):
-        """Compute loss on fixed-shape detector voxels (ny, nx, nz_local).
+        """Compute loss on fixed-shape detector voxels (nx, ny, nz).
 
         nx = number of detector pixels along x.
         ny = number of detector pixels along y.
-        nz_local = fixed tick-window size along z (drift/time direction).
+        nz = full detector z bins by concatenating TPC drift bins in increasing-z order.
         """
-        target_pixel_ids = target['pixel_id'].astype(jnp.int64)
-        target_ticks_raw = target['ticks'].astype(jnp.int32)
         target_adcs = target['adcs']
+        target_x = jnp.asarray(target['pixel_x'], dtype=jnp.int32) if 'pixel_x' in target else None
+        target_y = jnp.asarray(target['pixel_y'], dtype=jnp.int32) if 'pixel_y' in target else None
+        target_z = jnp.asarray(target['pixel_z'], dtype=jnp.float32) if 'pixel_z' in target else None
+        target_event = jnp.asarray(target['event'], dtype=jnp.int32) if 'event' in target else None
 
-        target_x, target_y, _, target_event = id2pixel(params, target_pixel_ids)
-        target_x = target_x.astype(jnp.int32)
-        target_y = target_y.astype(jnp.int32)
-        target_event = target_event.astype(jnp.int32)
+        pred_x = jnp.asarray(prediction['pixel_x'], dtype=jnp.int32) if 'pixel_x' in prediction else None
+        pred_y = jnp.asarray(prediction['pixel_y'], dtype=jnp.int32) if 'pixel_y' in prediction else None
+        pred_plane = jnp.asarray(prediction['pixel_plane'], dtype=jnp.int32) if 'pixel_plane' in prediction else None
+        pred_event = jnp.asarray(prediction['event'], dtype=jnp.int32) if 'event' in prediction else None
 
-        sim_unique_pixels = prediction['unique_pixels'].astype(jnp.int64)
         ticks_prob = prediction['ticks_prob']
         adcs_distrib = prediction['adcs_distrib']
 
-        n_pred_pix = ticks_prob.shape[0]
         n_ticks = ticks_prob.shape[2]
-        eps = self.eps
         nx = int(getattr(params, 'n_pixels_x', 0))
         ny = int(getattr(params, 'n_pixels_y', 0))
-        if nx <= 0 or ny <= 0:
+        nz = int(getattr(params, 'nz', 0))
+        ntpc = int(getattr(params, 'ntpc', getattr(params, 'tpc_borders').shape[0]))
+        if nx <= 0 or ny <= 0 or nz <= 0:
             raise ValueError(
                 "Invalid detector geometry in ProbabilisticLossStrategy: "
-                f"n_pixels_x={nx}, n_pixels_y={ny}."
+                f"n_pixels_x={nx}, n_pixels_y={ny}, nz={nz}."
             )
         if n_ticks <= 0:
             raise ValueError(f"Invalid probabilistic prediction shape: n_ticks={n_ticks}.")
 
         z_tick_size = float(getattr(params, 't_sampling', 1.0)) * float(getattr(params, 'vdrift_static', 1.0))
         pixel_pitch = float(getattr(params, 'pixel_pitch', 1.0))
-
-        pred_pixel_x, pred_pixel_y, _, pred_event = id2pixel(params, sim_unique_pixels)
-        pred_pixel_x = pred_pixel_x.astype(jnp.int32)
-        pred_pixel_y = pred_pixel_y.astype(jnp.int32)
-        pred_event = pred_event.astype(jnp.int32)
-        valid_pred_pix = (
-            (sim_unique_pixels >= 0)
-            & (pred_pixel_x >= 0) & (pred_pixel_x < nx)
-            & (pred_pixel_y >= 0) & (pred_pixel_y < ny)
-            & (pred_event >= 0)
-        )
-        pred_px_safe = jnp.where(valid_pred_pix, jnp.clip(pred_pixel_x, 0, nx - 1), 0)
-        pred_py_safe = jnp.where(valid_pred_pix, jnp.clip(pred_pixel_y, 0, ny - 1), 0)
-
-        pred_hit_prob = jnp.clip(ticks_prob, 0.0, 1.0)
-        pred_charge_raw = adc2charge(adcs_distrib, params)
-        pred_expected_local = jnp.sum(pred_hit_prob * pred_charge_raw, axis=1)
-        pred_occ_local = jnp.clip(1.0 - jnp.prod(1.0 - pred_hit_prob, axis=1), 0.0, 1.0)
-        valid_2d = valid_pred_pix[:, None]
-        pred_occ = jnp.where(valid_2d, pred_occ_local, 0.0)
-        pred_expected = jnp.where(valid_2d, pred_expected_local, 0.0)
-
-        nz_local = min(int(self.nz_local), n_ticks)
         z_bin_size_sparse = float(z_tick_size)
 
+        tpc_borders = jnp.asarray(getattr(params, 'tpc_borders'))
+        z_lo_per_tpc = jnp.minimum(tpc_borders[:, 2, 0], tpc_borders[:, 2, 1])
+        z_hi_per_tpc = jnp.maximum(tpc_borders[:, 2, 0], tpc_borders[:, 2, 1])
+
+        z_min_per_tpc = getattr(params, 'z_min_per_tpc', None)
+        nz_per_tpc = getattr(params, 'nz_per_tpc', None)
+        offset_by_tpc = getattr(params, 'offset_by_tpc', None)
+
+        z_min_per_tpc = jnp.asarray(z_min_per_tpc, dtype=jnp.float32)
+        nz_per_tpc = jnp.asarray(nz_per_tpc, dtype=jnp.int32)
+        offset_by_tpc = jnp.asarray(offset_by_tpc, dtype=jnp.int32)
+
+        target_x = jnp.asarray(target_x, dtype=jnp.int32)
+        target_y = jnp.asarray(target_y, dtype=jnp.int32)
+        target_z = jnp.asarray(target_z, dtype=jnp.float32)
+        target_event = jnp.asarray(target_event, dtype=jnp.int32) if target_event is not None else jnp.zeros_like(target_x, dtype=jnp.int32)
         target_charge = adc2charge(target_adcs, params)
-        _tgt_abs = jnp.where(
-            (target_ticks_raw >= 0) & (target_ticks_raw < n_ticks),
-            jnp.abs(target_charge),
-            0.0,
-        )
-        t_center = jnp.sum(target_ticks_raw.astype(jnp.float32) * _tgt_abs) / jnp.maximum(jnp.sum(_tgt_abs), 1.0)
-        t_start = jnp.clip(
-            jnp.round(t_center).astype(jnp.int32) - nz_local // 2,
-            0,
-            max(n_ticks - nz_local, 0),
-        )
-
-        pred_expected_win = jax.lax.dynamic_slice(pred_expected, (0, t_start), (n_pred_pix, nz_local))
-        pred_occ_win = jax.lax.dynamic_slice(pred_occ, (0, t_start), (n_pred_pix, nz_local))
-
         total_target_charge = jnp.maximum(jnp.sum(jnp.abs(target_charge)), 1.0)
-        target_pix_valid = (
-            (target_pixel_ids >= 0)
-            & (target_x >= 0) & (target_x < nx)
+
+        pred_x = jnp.asarray(pred_x, dtype=jnp.int32)
+        pred_y = jnp.asarray(pred_y, dtype=jnp.int32)
+        pred_plane = jnp.asarray(pred_plane, dtype=jnp.int32)
+        pred_event = jnp.asarray(pred_event, dtype=jnp.int32) if pred_event is not None else jnp.zeros_like(pred_x, dtype=jnp.int32)
+        pred_charge_raw = adc2charge(adcs_distrib, params)
+
+        valid_pred_pix = (
+            (pred_x >= 0) & (pred_x < nx)
+            & (pred_y >= 0) & (pred_y < ny)
+            & (pred_plane >= 0) & (pred_plane < ntpc)
+            & (pred_event >= 0)
+        )
+        pred_px_safe = jnp.where(valid_pred_pix, pred_x, 0)
+        pred_py_safe = jnp.where(valid_pred_pix, pred_y, 0)
+        pred_plane_safe = jnp.where(valid_pred_pix, pred_plane, 0)
+
+        target_xy_valid = (
+            (target_x >= 0) & (target_x < nx)
             & (target_y >= 0) & (target_y < ny)
             & (target_event >= 0)
         )
-        target_tick_valid = (target_ticks_raw >= 0) & (target_ticks_raw < n_ticks)
-        target_valid = target_pix_valid & target_tick_valid
-        target_x_safe = jnp.clip(target_x, 0, nx - 1)
-        target_y_safe = jnp.clip(target_y, 0, ny - 1)
         overflow_target_hits = jnp.sum(
-            ((target_event >= self.max_events_per_batch) & target_valid).astype(jnp.float32)
+            ((target_event >= self.max_events_per_batch) & target_xy_valid).astype(jnp.float32)
         )
         overflow_pred_pixels = jnp.sum(
             ((pred_event >= self.max_events_per_batch) & valid_pred_pix).astype(jnp.float32)
@@ -729,7 +735,53 @@ class ProbabilisticLossStrategy(LossStrategy):
 
         layer_weights = self._sobolev_pool_layer_weights()
         event_ids = jnp.arange(self.max_events_per_batch, dtype=jnp.int32)
-        ns_flat = ny * nx * nz_local
+
+        target_evt_valid = target_xy_valid & (target_event < self.max_events_per_batch)
+        pred_evt_valid = valid_pred_pix & (pred_event < self.max_events_per_batch)
+
+        target_chunk_size = max(1, (int(target_x.shape[0]) + self.max_events_per_batch - 1) // self.max_events_per_batch)
+        pred_chunk_size = max(1, (int(pred_x.shape[0]) + self.max_events_per_batch - 1) // self.max_events_per_batch)
+
+        def _build_event_chunks(event_arr, valid_arr, chunk_size):
+            def _one_event(evt_id):
+                evt_mask = valid_arr & (event_arr == evt_id)
+                idx = jnp.nonzero(evt_mask, size=chunk_size, fill_value=0)[0]
+                raw_count = jnp.sum(evt_mask.astype(jnp.int32))
+                count = jnp.minimum(raw_count, chunk_size)
+                return idx, count, raw_count
+
+            return jax.vmap(_one_event)(event_ids)
+
+        target_idx_chunks, target_chunk_counts, target_chunk_raw_counts = _build_event_chunks(
+            target_event,
+            target_evt_valid,
+            target_chunk_size,
+        )
+        pred_idx_chunks, pred_chunk_counts, pred_chunk_raw_counts = _build_event_chunks(
+            pred_event,
+            pred_evt_valid,
+            pred_chunk_size,
+        )
+
+        def _validate_event_chunk_counts(t_counts, p_counts):
+            bad_events = [
+                idx for idx, (tc, pc) in enumerate(zip(t_counts.tolist(), p_counts.tolist()))
+                if (tc == 0) or (pc == 0)
+            ]
+            if bad_events:
+                raise ValueError(
+                    "ProbabilisticLossStrategy requires both target and prediction entries per event; "
+                    f"found zero-sized chunks for events {bad_events}."
+                )
+
+        jax.debug.callback(_validate_event_chunk_counts, target_chunk_counts, pred_chunk_counts)
+
+        overflow_target_hits = overflow_target_hits + jnp.sum(
+            jnp.maximum(target_chunk_raw_counts - target_chunk_counts, 0).astype(jnp.float32)
+        )
+        overflow_pred_pixels = overflow_pred_pixels + jnp.sum(
+            jnp.maximum(pred_chunk_raw_counts - pred_chunk_counts, 0).astype(jnp.float32)
+        )
 
         zero_metrics = {
             'sobolev_3d_value': jnp.array(0.0, dtype=jnp.float32),
@@ -768,83 +820,75 @@ class ProbabilisticLossStrategy(LossStrategy):
             'event_weight': jnp.array(0.0, dtype=jnp.float32),
             'event_target_charge': jnp.array(0.0, dtype=jnp.float32),
             'active_event': jnp.array(0.0, dtype=jnp.float32),
+            'sobolev_pool_nbin_medium': jnp.array(0.0, dtype=jnp.float32),
+            'sobolev_pool_nbin_global': jnp.array(0.0, dtype=jnp.float32),
         }
 
         def _event_metrics(evt_id):
-            evt_tgt = target_valid & (target_event == evt_id)
-            evt_pred = valid_pred_pix & (pred_event == evt_id)
-            has_evt = jnp.any(evt_tgt) | jnp.any(evt_pred)
+            evt_tgt_idx = target_idx_chunks[evt_id]
+            evt_tgt_count = target_chunk_counts[evt_id]
+            evt_pred_idx = pred_idx_chunks[evt_id]
+            evt_pred_count = pred_chunk_counts[evt_id]
+
+            evt_tgt_valid = jnp.arange(target_chunk_size, dtype=jnp.int32) < evt_tgt_count
+            evt_pred_valid = jnp.arange(pred_chunk_size, dtype=jnp.int32) < evt_pred_count
+            has_evt = (evt_tgt_count > 0) | (evt_pred_count > 0)
 
             def _compute_for_event(_):
-                evt_abs_charge = jnp.where(evt_tgt, jnp.abs(target_charge), 0.0)
+                # Put target smeared hits on a dense grid
+                target_x_evt = target_x[evt_tgt_idx]
+                target_y_evt = target_y[evt_tgt_idx]
+                target_z_evt = target_z[evt_tgt_idx]
+                target_charge_evt = target_charge[evt_tgt_idx]
+
+                target_in_tpc_evt = (
+                    (target_z_evt[:, None] >= z_lo_per_tpc[None, :])
+                    & (target_z_evt[:, None] <= z_hi_per_tpc[None, :])
+                )
+                target_has_tpc_evt = jnp.any(target_in_tpc_evt, axis=1)
+                target_plane_evt = jnp.argmax(target_in_tpc_evt.astype(jnp.int32), axis=1)
+                target_plane_safe_evt = jnp.clip(target_plane_evt, 0, ntpc - 1)
+
+                target_z_local_bin_evt = jnp.round(
+                    (target_z_evt - z_min_per_tpc[target_plane_safe_evt]) / max(z_tick_size, 1e-12)
+                ).astype(jnp.int32)
+                target_z_valid_evt = (
+                    target_z_local_bin_evt >= 0
+                ) & (target_z_local_bin_evt < nz_per_tpc[target_plane_safe_evt])
+                target_z_global_evt = offset_by_tpc[target_plane_safe_evt] + jnp.clip(
+                    target_z_local_bin_evt,
+                    0,
+                    nz_per_tpc[target_plane_safe_evt] - 1,
+                )
+
+                evt_tgt = evt_tgt_valid & target_has_tpc_evt & target_z_valid_evt
+                evt_abs_charge = jnp.where(evt_tgt, jnp.abs(target_charge_evt), 0.0)
                 evt_target_charge = jnp.sum(evt_abs_charge)
                 evt_weight = jnp.maximum(evt_target_charge, 1.0)
 
-                t_center_evt = jnp.sum(target_ticks_raw.astype(jnp.float32) * evt_abs_charge) / jnp.maximum(evt_target_charge, 1.0)
-                t_start_evt = jnp.clip(
-                    jnp.round(t_center_evt).astype(jnp.int32) - nz_local // 2,
-                    0,
-                    max(n_ticks - nz_local, 0),
-                )
+                target_x_idx_evt = jnp.where(evt_tgt, target_x_evt, 0)
+                target_y_idx_evt = jnp.where(evt_tgt, target_y_evt, 0)
+                target_z_idx_evt = jnp.where(evt_tgt, target_z_global_evt, 0)
 
-                pred_expected_evt = jnp.where(evt_pred[:, None], pred_expected, 0.0)
-                pred_occ_evt = jnp.where(evt_pred[:, None], pred_occ, 0.0)
-                pred_expected_win_evt = jax.lax.dynamic_slice(pred_expected_evt, (0, t_start_evt), (n_pred_pix, nz_local))
-                pred_occ_win_evt = jax.lax.dynamic_slice(pred_occ_evt, (0, t_start_evt), (n_pred_pix, nz_local))
-
-                target_tick_win_evt = (target_ticks_raw - t_start_evt).astype(jnp.int32)
-                target_tick_win_safe_evt = jnp.clip(target_tick_win_evt, 0, nz_local - 1)
-                target_in_win_evt = evt_tgt & (target_tick_win_evt >= 0) & (target_tick_win_evt < nz_local)
-
-                _flat_tgt_evt = jnp.where(
-                    target_in_win_evt,
-                    target_y_safe * (nx * nz_local) + target_x_safe * nz_local + target_tick_win_safe_evt,
-                    ns_flat,
-                )
-                _ns_evt = ns_flat + 1
                 target_occ_xyz_evt = jnp.clip(
-                    (jnp.zeros(_ns_evt, dtype=jnp.float32)
-                     .at[_flat_tgt_evt].add(jnp.ones(target_pixel_ids.shape[0], dtype=jnp.float32))
-                     )[:ns_flat].reshape(ny, nx, nz_local),
+                    jnp.zeros((nx, ny, nz), dtype=jnp.float32).at[
+                        target_x_idx_evt,
+                        target_y_idx_evt,
+                        target_z_idx_evt,
+                    ].add(jnp.where(evt_tgt, 1.0, 0.0)),
                     0.0,
                     1.0,
                 )
-                target_expected_xyz_unsmeared_evt = (
-                    jnp.zeros(_ns_evt, dtype=jnp.float32)
-                    .at[_flat_tgt_evt].add(jnp.where(target_in_win_evt, target_charge, 0.0))
-                )[:ns_flat].reshape(ny, nx, nz_local)
+                target_expected_xyz_unsmeared_evt = jnp.zeros((nx, ny, nz), dtype=jnp.float32).at[
+                    target_x_idx_evt,
+                    target_y_idx_evt,
+                    target_z_idx_evt,
+                ].add(jnp.where(evt_tgt, target_charge_evt, 0.0))
 
-                _flat_pred_evt = (
-                    pred_py_safe[:, None] * (nx * nz_local)
-                    + pred_px_safe[:, None] * nz_local
-                    + jnp.arange(nz_local, dtype=jnp.int32)[None, :]
-                ).reshape(-1)
-                pred_expected_xyz_evt = (
-                    jnp.zeros(ns_flat, dtype=jnp.float32)
-                    .at[_flat_pred_evt].add(jnp.where(evt_pred[:, None], pred_expected_win_evt, 0.0).reshape(-1))
-                ).reshape(ny, nx, nz_local)
-                pred_occ_xyz_evt = jnp.clip(
-                    (jnp.zeros(ns_flat, dtype=jnp.float32)
-                     .at[_flat_pred_evt].add(jnp.where(evt_pred[:, None], pred_occ_win_evt, 0.0).reshape(-1))
-                     ).reshape(ny, nx, nz_local),
-                    0.0,
-                    1.0,
-                )
-
-                radius_cm_eff_evt = 0.0 if self.target_gaussian_3d_radius_cm is None else float(self.target_gaussian_3d_radius_cm)
-                if self.target_gaussian_3d_sigma_cm is not None:
-                    sigma_cm_eff_evt = float(self.target_gaussian_3d_sigma_cm)
-                else:
-                    sigma_cm_eff_evt = max(float(radius_cm_eff_evt) / 2.0, float(pixel_pitch))
-                sigma_cm_eff_evt = max(sigma_cm_eff_evt, 1e-6)
-
-                if radius_cm_eff_evt > 0.0:
+                if has_target_smearing:
                     target_expected_xyz_evt = self._gaussian_smear_target(
                         target_expected_xyz_unsmeared_evt,
-                        radius_cm_eff_evt,
-                        sigma_cm_eff_evt,
-                        pixel_pitch,
-                        z_bin_size_sparse,
+                        smear_gaussian_weights,
                     )
                 else:
                     target_expected_xyz_evt = target_expected_xyz_unsmeared_evt
@@ -854,7 +898,60 @@ class ProbabilisticLossStrategy(LossStrategy):
                     else target_expected_xyz_unsmeared_evt
                 )
 
-                sobolev_pool_layers_evt = self._compute_three_layer_sobolev_pooling_jax(
+                # Put predicted pixels on the same dense grid, weighted by expected charge and occupancy.
+                pred_px_evt = pred_px_safe[evt_pred_idx]
+                pred_py_evt = pred_py_safe[evt_pred_idx]
+                pred_plane_evt = pred_plane_safe[evt_pred_idx]
+                pred_hit_prob_evt = ticks_prob[evt_pred_idx]
+                pred_charge_raw_evt = pred_charge_raw[evt_pred_idx]
+
+                pred_expected_evt = jnp.sum(pred_hit_prob_evt * pred_charge_raw_evt, axis=1)
+                pred_occ_evt = jnp.clip(1.0 - jnp.prod(1.0 - pred_hit_prob_evt, axis=1), 0.0, 1.0)
+
+                tick_axis_evt = jnp.broadcast_to(
+                    jnp.arange(n_ticks, dtype=jnp.float32)[None, :],
+                    (pred_chunk_size, n_ticks),
+                )
+                pred_z_cm_evt = get_hit_z(
+                    params,
+                    tick_axis_evt,
+                    jnp.broadcast_to(pred_plane_evt[:, None], (pred_chunk_size, n_ticks)),
+                    fixed_v=False,
+                )
+                pred_z_local_bin_evt = jnp.round(
+                    (pred_z_cm_evt - z_min_per_tpc[pred_plane_evt][:, None]) / max(z_tick_size, 1e-12)
+                ).astype(jnp.int32)
+                pred_z_valid = (
+                    pred_z_local_bin_evt >= 0
+                ) & (pred_z_local_bin_evt < nz_per_tpc[pred_plane_evt][:, None])
+                pred_z_global = offset_by_tpc[pred_plane_evt][:, None] + jnp.clip(
+                    pred_z_local_bin_evt,
+                    0,
+                    nz_per_tpc[pred_plane_evt][:, None] - 1,
+                )
+
+                pred_in_evt = evt_pred_valid[:, None] & pred_z_valid
+                pred_x_idx_evt = jnp.where(pred_in_evt, pred_px_evt[:, None], 0)
+                pred_y_idx_evt = jnp.where(pred_in_evt, pred_py_evt[:, None], 0)
+                pred_z_idx_evt = jnp.where(pred_in_evt, pred_z_global, 0)
+
+                pred_expected_xyz_evt = jnp.zeros((nx, ny, nz), dtype=jnp.float32).at[
+                    pred_x_idx_evt,
+                    pred_y_idx_evt,
+                    pred_z_idx_evt,
+                ].add(jnp.where(pred_in_evt, pred_expected_evt, 0.0))
+                pred_occ_xyz_evt = jnp.clip(
+                    jnp.zeros((nx, ny, nz), dtype=jnp.float32).at[
+                        pred_x_idx_evt,
+                        pred_y_idx_evt,
+                        pred_z_idx_evt,
+                    ].add(jnp.where(pred_in_evt, pred_occ_evt, 0.0)),
+                    0.0,
+                    1.0,
+                )
+
+                # Sobolev loss
+                sobolev_pool_layers_evt = self._compute_three_layer_sobolev_pooling(
                     pred_expected_xyz_evt,
                     target_expected_xyz_evt,
                     target_norm_xyz_evt,
@@ -882,8 +979,8 @@ class ProbabilisticLossStrategy(LossStrategy):
                 ) / 3.0
 
                 residual_xyz_evt = pred_expected_xyz_evt - target_expected_xyz_evt
-                mean_pred_occupancy_evt = jnp.sum(pred_occ_xyz_evt) / float(ny * nx * nz_local)
-                mean_target_occupancy_evt = jnp.sum(target_occ_xyz_evt) / float(ny * nx * nz_local)
+                mean_pred_occupancy_evt = jnp.sum(pred_occ_xyz_evt) / float(ny * nx * nz)
+                mean_target_occupancy_evt = jnp.sum(target_occ_xyz_evt) / float(ny * nx * nz)
 
                 return {
                     'sobolev_3d_value': sobolev_3d_value_evt,
@@ -918,10 +1015,12 @@ class ProbabilisticLossStrategy(LossStrategy):
                     'residual_mean_abs': jnp.mean(jnp.abs(residual_xyz_evt)),
                     'pred_field_mean': jnp.mean(pred_expected_xyz_evt),
                     'target_field_mean': jnp.mean(target_expected_xyz_evt),
-                    'z_win_start_tick': t_start_evt.astype(jnp.float32),
+                    'z_win_start_tick': jnp.array(0.0, dtype=jnp.float32),
                     'event_weight': evt_weight,
                     'event_target_charge': evt_target_charge,
                     'active_event': jnp.array(1.0, dtype=jnp.float32),
+                    'sobolev_pool_nbin_medium': jnp.array(self.sobolev_pool_medium_bins_xyz, dtype=jnp.float32),
+                    'sobolev_pool_nbin_global': jnp.array(self.sobolev_pool_global_bins_xyz, dtype=jnp.float32),
                 }
 
             return jax.lax.cond(has_evt, _compute_for_event, lambda _: zero_metrics, operand=None)
@@ -968,27 +1067,16 @@ class ProbabilisticLossStrategy(LossStrategy):
             'global_grad_z_e': weighted_sums['global_grad_z_e'] / denom_weights,
             'global_sobolev_3d_grad': weighted_sums['global_sobolev_3d_grad'] / denom_weights,
             'global_total': weighted_sums['global_total'] / denom_weights,
+            'sobolev_pool_nbin_medium': jnp.array(self.sobolev_pool_medium_bins_xyz, dtype=jnp.float32),
+            'sobolev_pool_nbin_global': jnp.array(self.sobolev_pool_global_bins_xyz, dtype=jnp.float32),
         }
 
-        target_gaussian_radius_cm_eff = 0.0 if self.target_gaussian_3d_radius_cm is None else float(self.target_gaussian_3d_radius_cm)
-        if self.target_gaussian_3d_sigma_cm is not None:
-            target_gaussian_sigma_cm_eff = float(self.target_gaussian_3d_sigma_cm)
-        else:
-            target_gaussian_sigma_cm_eff = max(float(target_gaussian_radius_cm_eff) / 2.0, float(pixel_pitch))
-        target_gaussian_sigma_cm_eff = max(target_gaussian_sigma_cm_eff, 1e-6)
+        target_gaussian_radius_cm_eff = radius_cm_eff
+        target_gaussian_sigma_cm_eff = sigma_cm_eff
 
         sobolev_pool_reports['layer_weight_local'] = layer_weights[0]
         sobolev_pool_reports['layer_weight_medium'] = layer_weights[1]
         sobolev_pool_reports['layer_weight_global'] = layer_weights[2]
-        sobolev_pool_reports['running_scale_local'] = jnp.array(
-            float(self.sobolev_pool_running_scales['local']), dtype=jnp.float32
-        )
-        sobolev_pool_reports['running_scale_medium'] = jnp.array(
-            float(self.sobolev_pool_running_scales['medium']), dtype=jnp.float32
-        )
-        sobolev_pool_reports['running_scale_global'] = jnp.array(
-            float(self.sobolev_pool_running_scales['global']), dtype=jnp.float32
-        )
 
         if self.emit_sobolev_pool_report:
             print(self._format_three_layer_sobolev_pooling())
@@ -1068,18 +1156,13 @@ class ProbabilisticLossStrategy(LossStrategy):
             'sobolev_pool_layer_weight_local': sobolev_pool_reports['layer_weight_local'],
             'sobolev_pool_layer_weight_medium': sobolev_pool_reports['layer_weight_medium'],
             'sobolev_pool_layer_weight_global': sobolev_pool_reports['layer_weight_global'],
-            'sobolev_pool_running_scale_local': sobolev_pool_reports['running_scale_local'],
-            'sobolev_pool_running_scale_medium': sobolev_pool_reports['running_scale_medium'],
-            'sobolev_pool_running_scale_global': sobolev_pool_reports['running_scale_global'],
-            'sobolev_pool_running_decay': jnp.array(self.sobolev_pool_running_decay, dtype=jnp.float32),
             'target_gaussian_3d_radius_cm': jnp.array(target_gaussian_radius_cm_eff, dtype=jnp.float32),
             'target_gaussian_3d_sigma_cm': jnp.array(target_gaussian_sigma_cm_eff, dtype=jnp.float32),
             'z_tick_size': jnp.array(z_tick_size, dtype=jnp.float32),
-            'w_sobolev_3d_grad': self.w_sobolev_3d_grad,
             'mean_pred_occupancy': mean_pred_occupancy,
             'mean_target_occupancy': mean_target_occupancy,
             'z_win_start_tick': weighted_sums['z_win_start_tick'] / denom_weights,
-            'nz_local': jnp.array(nz_local, dtype=jnp.float32),
+            'nz': jnp.array(nz, dtype=jnp.float32),
             'z_bin_size_sparse': jnp.array(z_bin_size_sparse, dtype=jnp.float32),
             'residual_mean_abs': weighted_sums['residual_mean_abs'] / denom_weights,
             'event_weighted_mean_denom': denom_weights,
@@ -1088,6 +1171,8 @@ class ProbabilisticLossStrategy(LossStrategy):
             'max_events_per_batch': jnp.array(self.max_events_per_batch, dtype=jnp.float32),
             'event_overflow_target_hits': overflow_target_hits,
             'event_overflow_pred_pixels': overflow_pred_pixels,
+            'sobolev_pool_nbin_medium': jnp.array(self.sobolev_pool_medium_bins_xyz, dtype=jnp.float32),
+            'sobolev_pool_nbin_global': jnp.array(self.sobolev_pool_global_bins_xyz, dtype=jnp.float32),
         }
 
         return total_loss, aux
