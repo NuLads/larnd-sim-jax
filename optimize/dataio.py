@@ -114,7 +114,22 @@ class TracksDataset:
 
         # Build per-batch mappings so __getitem__ can construct a single batch on demand.
         with h5py.File(filename, 'r') as f:
-            tracks = f['segments'][:] # convert to array
+            if nevents is not None and nevents > 0 and not random_nevents:
+                ds = f['segments']
+                event_id_field = 'event_id' if 'event_id' in ds.dtype.names else 'eventID'
+                event_ids = ds[event_id_field]
+                chunk_size = min(50000, len(ds))
+                first_event_ids = event_ids[:chunk_size]
+                unique_evts = np.unique(first_event_ids)
+                is_sorted = np.all(np.diff(first_event_ids) >= 0)
+                if len(unique_evts) >= nevents and is_sorted:
+                    cutoff_evt = unique_evts[nevents - 1]
+                    cutoff_idx = int(np.searchsorted(first_event_ids, cutoff_evt, side='right'))
+                    tracks = ds[:cutoff_idx]
+                else:
+                    tracks = ds[:]
+            else:
+                tracks = f['segments'][:]
 
         if swap_xz:
             x_start = np.copy(tracks['x_start'] )

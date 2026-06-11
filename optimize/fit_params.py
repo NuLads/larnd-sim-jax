@@ -24,7 +24,7 @@ import iminuit
 from tqdm import tqdm
 
 from .strategies import LUTSimulation, LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation, ParametrizedSimulation, GenericLossStrategy
-from .dedx_utils import student_t_nll, DEDX_STUDENT_NU, DEDX_STUDENT_LOC, DEDX_STUDENT_SCALE
+from .dedx_utils import student_t_nll, DEDX_STUDENT_NU, DEDX_STUDENT_LOC, DEDX_STUDENT_SCALE, split_student_t_nll, DEDX_SPLIT_NU_L, DEDX_SPLIT_NU_R, DEDX_SPLIT_SCALE_L, DEDX_SPLIT_SCALE_R, DEDX_SPLIT_LOC
 
 from ctypes import cdll
 # libcudart = cdll.LoadLibrary('libcudart.so')
@@ -221,6 +221,15 @@ class ParamFitter:
                  fit_dedx=False, dedx_prior_weight=0.1, dedx_lr=None, dedx_start_iter=0,
                  dedx_freeze_iter=None,
                  dedx_student_nu=None, dedx_student_loc=None, dedx_student_scale=None,
+                 dedx_soft_barrier_threshold=8.5,
+                 dedx_soft_barrier_weight=1.0,
+                 dedx_use_split_t=True,
+                 dedx_student_nu_l=None,
+                 dedx_student_nu_r=None,
+                 dedx_student_scale_l=None,
+                 dedx_student_scale_r=None,
+                 dedx_mean_constraint_weight=0.0,
+                 dedx_mean_constraint_target=1.887,
                  config = {}):
 
         self.read_target = read_target
@@ -268,9 +277,22 @@ class ParamFitter:
         self.dedx_lr = dedx_lr
         self.dedx_start_iter = int(dedx_start_iter)
         self.dedx_freeze_iter = int(dedx_freeze_iter) if dedx_freeze_iter is not None else None
+        self.dedx_use_split_t = bool(dedx_use_split_t)
+        self.dedx_student_nu_l = jnp.array(dedx_student_nu_l, dtype=jnp.float32) if dedx_student_nu_l is not None else DEDX_SPLIT_NU_L
+        self.dedx_student_nu_r = jnp.array(dedx_student_nu_r, dtype=jnp.float32) if dedx_student_nu_r is not None else DEDX_SPLIT_NU_R
+        self.dedx_student_scale_l = jnp.array(dedx_student_scale_l, dtype=jnp.float32) if dedx_student_scale_l is not None else DEDX_SPLIT_SCALE_L
+        self.dedx_student_scale_r = jnp.array(dedx_student_scale_r, dtype=jnp.float32) if dedx_student_scale_r is not None else DEDX_SPLIT_SCALE_R
+
         self.dedx_student_nu    = jnp.array(dedx_student_nu,    dtype=jnp.float32) if dedx_student_nu    is not None else DEDX_STUDENT_NU
-        self.dedx_student_loc   = jnp.array(dedx_student_loc,   dtype=jnp.float32) if dedx_student_loc   is not None else DEDX_STUDENT_LOC
+        if dedx_student_loc is not None:
+            self.dedx_student_loc = jnp.array(dedx_student_loc, dtype=jnp.float32)
+        else:
+            self.dedx_student_loc = DEDX_SPLIT_LOC if self.dedx_use_split_t else DEDX_STUDENT_LOC
         self.dedx_student_scale = jnp.array(dedx_student_scale, dtype=jnp.float32) if dedx_student_scale is not None else DEDX_STUDENT_SCALE
+        self.dedx_soft_barrier_threshold = float(dedx_soft_barrier_threshold)
+        self.dedx_soft_barrier_weight = float(dedx_soft_barrier_weight)
+        self.dedx_mean_constraint_weight = float(dedx_mean_constraint_weight)
+        self.dedx_mean_constraint_target = float(dedx_mean_constraint_target)
         self.shuffle_seed = shuffle_seed
         self.sim_track_fields = sim_track_fields
         self.tgt_track_fields = tgt_track_fields
@@ -299,6 +321,13 @@ class ParamFitter:
         else:
             raise TypeError("relevant_params must be list of param names or list of dicts with learning rates")
 
+        target_dir_name = f"target_{self.test_name}_{self.out_label}_" + "_".join(self.relevant_params_list)
+        if len(target_dir_name) > 200:
+            import hashlib
+            hash_str = hashlib.sha256(target_dir_name.encode('utf-8')).hexdigest()[:16]
+            self.target_dir = f"target_{self.test_name}_{hash_str}"
+        else:
+            self.target_dir = target_dir_name
         self.target_val_dict = None
         if len(set_target_vals) > 0:
             if len(set_target_vals) % 2 != 0:
@@ -574,7 +603,7 @@ class ParamFitter:
                 ref_hit_prob = jnp.ones(ref_adcs.shape[0]) #Assuming all hits are valid
         else:
             #Simulating the reference during the first epoch
-            fname = 'target_' + self.out_label + '/batch' + str(i) + '_target.npz'
+            fname = os.path.join(self.target_dir, f'batch{i}_target.npz')
             if regen or not os.path.exists(fname):
                 
                 # Target generation should always produce "hits" (stochastic),
@@ -608,6 +637,7 @@ class ParamFitter:
                 #Saving the target for the batch
                 #TODO: See if we have to do this for each event
                 
+                os.makedirs(os.path.dirname(fname), exist_ok=True)
                 with open(fname, 'wb') as f:
                     jnp.savez(f, adcs=ref_adcs, pixel_x=ref_pixel_x, pixel_y=ref_pixel_y, pixel_z=ref_pixel_z, ticks=ref_ticks, hit_prob=ref_hit_prob, event=ref_event, pixel_id=ref_pixel_id)
                     if self.keep_in_memory:
@@ -777,6 +807,42 @@ class ParamFitter:
         assert(with_loss or with_grad)
         loss_val, grads, grads_dedx, aux, hess, aux_hess = None, None, None, None, None, None
 
+        # Precompute padded small and large ROI counts for JAX static shapes.
+        # This runs simulate_wfs ONCE per unique batch (cached), using the stable
+        # ref_params. The ROI structure depends primarily on track geometry, not
+        # the physics parameters being fitted, so computing with ref_params is safe.
+        # The 128-multiple rounding provides headroom for small waveform changes
+        # across iterations as physics parameters evolve.
+        from optimize.strategies import LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation
+        if isinstance(self.sim_strategy, (LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation)):
+            from larndsim.sim_jax import get_roi_counts, simulate_wfs, pad_to_closest_multiple
+            # Use (batch_index, track_count) as cache key. This is stable across
+            # epochs even with shuffling (track count is a good proxy for identity).
+            cache_key = (i, tracks.shape[0])
+            if not hasattr(self, '_roi_padded_cache'):
+                self._roi_padded_cache = {}
+            
+            if cache_key not in self._roi_padded_cache:
+                wfs_eval, _ = simulate_wfs(
+                    self.ref_params, self.sim_strategy.response, tracks, self.sim_track_fields
+                )
+                wfs_eval = pad_to_closest_multiple(
+                    wfs_eval, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True
+                )
+                nb_small, nb_large = get_roi_counts(self.ref_params, wfs_eval)
+                padded_small_nb = int(((int(nb_small) + 31) // 32) * 32)
+                padded_large_nb = int(((int(nb_large) + 31) // 32) * 32)
+                self._roi_padded_cache[cache_key] = (padded_small_nb, padded_large_nb)
+                logger.info(
+                    f"Batch {i}: computed ROI counts: {int(nb_small)} small "
+                    f"(padded→{padded_small_nb}), {int(nb_large)} large "
+                    f"(padded→{padded_large_nb})"
+                )
+            
+            padded_small_nb, padded_large_nb = self._roi_padded_cache[cache_key]
+            self.sim_strategy.padded_small_nb = padded_small_nb
+            self.sim_strategy.padded_large_nb = padded_large_nb
+
         target_data = {
             'adcs': ref_adcs,
             'pixel_x': ref_pixel_x,
@@ -839,17 +905,46 @@ class ParamFitter:
                 # Student-t prior on per-step dEdx values.
                 # Weighted by physical step length (dx) to ensure that the regularization
                 # strength is invariant to the sampling resolution.
-                dedx_prior = student_t_nll(
-                    dedx_sample,
-                    self.dedx_student_nu,
-                    self.dedx_student_loc,
-                    self.dedx_student_scale,
-                    weights=tracks[:, dx_idx]
-                ) * self.dedx_prior_weight
+                if self.dedx_use_split_t:
+                    dedx_prior = split_student_t_nll(
+                        dedx_sample,
+                        self.dedx_student_nu_l,
+                        self.dedx_student_nu_r,
+                        self.dedx_student_loc,
+                        self.dedx_student_scale_l,
+                        self.dedx_student_scale_r,
+                        weights=tracks[:, dx_idx]
+                    ) * self.dedx_prior_weight
+                else:
+                    dedx_prior = student_t_nll(
+                        dedx_sample,
+                        self.dedx_student_nu,
+                        self.dedx_student_loc,
+                        self.dedx_student_scale,
+                        weights=tracks[:, dx_idx]
+                    ) * self.dedx_prior_weight
 
-                total_loss = hit_loss + dedx_prior
+                # One-sided soft barrier penalty.
+                # Weighted by physical step length (dx) and mask out invalid segments (dx <= 0)
+                dx_weights = tracks[:, dx_idx]
+                valid_step_mask = (dx_weights > 0)
+                dedx_barrier = self.dedx_soft_barrier_weight * jnp.sum(
+                    dx_weights * valid_step_mask * jnp.square(jnp.maximum(0., dedx_sample - self.dedx_soft_barrier_threshold))
+                )
+
+                # Length-weighted mean dEdx constraint
+                segment_valid = valid_mask & valid_step_mask
+                total_dx = jnp.sum(dx_weights * segment_valid)
+                total_dedx_len = jnp.sum(dedx_sample * dx_weights * segment_valid)
+                mean_dedx = total_dedx_len / jnp.maximum(total_dx, 1e-6)
+                dedx_mean_penalty = self.dedx_mean_constraint_weight * jnp.square(mean_dedx - self.dedx_mean_constraint_target)
+
+                total_loss = hit_loss + dedx_prior + dedx_barrier + dedx_mean_penalty
                 aux_out = dict(hit_aux) if hit_aux is not None else {}
                 aux_out['dedx_prior'] = dedx_prior
+                aux_out['dedx_barrier'] = dedx_barrier
+                aux_out['dedx_mean_penalty'] = dedx_mean_penalty
+                aux_out['mean_dedx'] = mean_dedx
                 return total_loss, aux_out
 
             if with_loss and with_grad:
@@ -897,7 +992,7 @@ class ParamFitter:
     def prepare_fit(self):
         # make a folder for the pixel target
 
-        target_dir = 'target_' + self.out_label
+        target_dir = self.target_dir
         if os.path.exists(target_dir):
             shutil.rmtree(target_dir, ignore_errors=True)
         os.makedirs(target_dir, exist_ok=True)
@@ -917,6 +1012,9 @@ class ParamFitter:
         self.training_history['aux_iter'] = []
         if self.fit_dedx:
             self.training_history['dedx_prior_iter'] = []
+            self.training_history['dedx_barrier_iter'] = []
+            self.training_history['dedx_mean_penalty_iter'] = []
+            self.training_history['mean_dedx_iter'] = []
             self.training_history['dedx_mae_iter'] = []
 
         # Include initial value in training history (if haven't loaded a checkpoint)
@@ -1311,8 +1409,8 @@ class GradientDescentFitter(ParamFitter):
                                     self.save_checkpoint(total_iter)
                                     if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
                                         os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
-                                    if os.path.exists('target_' + self.out_label):
-                                        shutil.rmtree('target_' + self.out_label, ignore_errors=True)
+                                    if os.path.exists(self.target_dir):
+                                        shutil.rmtree(self.target_dir, ignore_errors=True)
                                     terminate_fit = True
                                     break
 
@@ -1357,8 +1455,8 @@ class GradientDescentFitter(ParamFitter):
                                 self.save_checkpoint(total_iter)
                                 if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
                                     os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
-                                if os.path.exists('target_' + self.out_label):
-                                    shutil.rmtree('target_' + self.out_label, ignore_errors=True)
+                                if os.path.exists(self.target_dir):
+                                    shutil.rmtree(self.target_dir, ignore_errors=True)
                                 terminate_fit = True
                                 break
                             
@@ -1367,6 +1465,12 @@ class GradientDescentFitter(ParamFitter):
                         _aux_s = {k: serialize_value(v) for k, v in aux.items()} if aux is not None else {}
                         _dedx_prior = float(_aux_s.get('dedx_prior', 0.0))
                         self.training_history['dedx_prior_iter'].append(_dedx_prior)
+                        _dedx_barrier = float(_aux_s.get('dedx_barrier', 0.0))
+                        self.training_history['dedx_barrier_iter'].append(_dedx_barrier)
+                        _dedx_mean_penalty = float(_aux_s.get('dedx_mean_penalty', 0.0))
+                        self.training_history['dedx_mean_penalty_iter'].append(_dedx_mean_penalty)
+                        _mean_dedx = float(_aux_s.get('mean_dedx', 0.0))
+                        self.training_history['mean_dedx_iter'].append(_mean_dedx)
                         if i in self._dedx_cache:
                             _cur_dedx = np.asarray(jnp.exp(self._dedx_cache[i]['log_dedx']))
                             _true = self._batch_true_dedx.get(i)
@@ -1386,8 +1490,8 @@ class GradientDescentFitter(ParamFitter):
             if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
                 os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
 
-            if os.path.exists('target_' + self.out_label):
-                shutil.rmtree('target_' + self.out_label, ignore_errors=True)
+            if os.path.exists(self.target_dir):
+                shutil.rmtree(self.target_dir, ignore_errors=True)
 
             # libcudart.cudaProfilerStop()
 
@@ -1479,8 +1583,8 @@ class LikelihoodProfiler(ParamFitter):
                 if os.path.exists(f'fit_result/{self.test_name}/history_{param}_batch{i-1}_{self.out_label}.pkl'):
                     os.remove(f'fit_result/{self.test_name}/history_{param}_batch{i-1}_{self.out_label}.pkl')
 
-        if os.path.exists('target_' + self.out_label):
-            shutil.rmtree('target_' + self.out_label, ignore_errors=True)
+        if os.path.exists(self.target_dir):
+            shutil.rmtree(self.target_dir, ignore_errors=True)
 
 class MinuitFitter(ParamFitter):
     def __init__(self, separate_fits=True, minimizer_strategy=1, minimizer_tol=1e-5, **kwargs):
@@ -1686,5 +1790,5 @@ class HessianCalculator(ParamFitter):
             if os.path.exists(f'fit_result/{self.test_name}/history_batch{i-1}_{self.out_label}.pkl'):
                 os.remove(f'fit_result/{self.test_name}/history_batch{i-1}_{self.out_label}.pkl')
 
-        if os.path.exists('target_' + self.out_label):
-            shutil.rmtree('target_' + self.out_label, ignore_errors=True)
+        if os.path.exists(self.target_dir):
+            shutil.rmtree(self.target_dir, ignore_errors=True)

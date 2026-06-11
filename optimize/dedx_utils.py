@@ -47,3 +47,55 @@ def student_t_nll(x, df, loc, scale, weights=None):
         return jnp.sum(nll * weights * valid_mask)
     else:
         return jnp.sum(nll)
+
+
+# ---------------------------------------------------------------------------
+# Default Split Student-t prior parameters for dEdx in LAr [MeV/cm]
+# Fitted from simulated MIP tracks (see analyze_dedx.ipynb / dedx_proto.ipynb)
+# ---------------------------------------------------------------------------
+DEDX_SPLIT_NU_L    = jnp.array(4.785,  dtype=jnp.float32)
+DEDX_SPLIT_SCALE_L = jnp.array(0.1204, dtype=jnp.float32)
+DEDX_SPLIT_NU_R    = jnp.array(2.073,  dtype=jnp.float32)
+DEDX_SPLIT_SCALE_R = jnp.array(0.1058, dtype=jnp.float32)
+DEDX_SPLIT_LOC     = jnp.array(1.874,  dtype=jnp.float32)
+
+
+def split_t_logpdf_jax(x, nu_L, nu_R, loc, scale_L, scale_R):
+    """JAX-native Split (bifurcated) Student-t log-pdf.
+
+    The two halves share the same peak height at `loc` and are
+    normalized so the total integral is 1.
+    """
+    import jax
+    import jax.scipy.stats as jstats
+
+    def log_c(nu):
+        return (jax.scipy.special.gammaln((nu + 1.0) / 2.0)
+                - jax.scipy.special.gammaln(nu / 2.0)
+                - 0.5 * jnp.log(nu * jnp.pi))
+
+    log_c_L = log_c(nu_L)
+    log_c_R = log_c(nu_R)
+
+    z_L = (x - loc) / scale_L
+    z_R = (x - loc) / scale_R
+
+    log_K_L = jstats.t.logpdf(z_L, df=nu_L, loc=0.0, scale=1.0) - log_c_L
+    log_K_R = jstats.t.logpdf(z_R, df=nu_R, loc=0.0, scale=1.0) - log_c_R
+
+    Z_L = 0.5 * scale_L * jnp.exp(-log_c_L)
+    Z_R = 0.5 * scale_R * jnp.exp(-log_c_R)
+    log_Z = jnp.log(Z_L + Z_R)
+
+    log_K = jnp.where(x < loc, log_K_L, log_K_R)
+    return log_K - log_Z
+
+
+def split_student_t_nll(x, nu_L, nu_R, loc, scale_L, scale_R, weights=None):
+    """Negative log-likelihood of the Split Student-t distribution."""
+    logpdf = split_t_logpdf_jax(x, nu_L, nu_R, loc, scale_L, scale_R)
+    if weights is not None:
+        valid_mask = (weights > 0)
+        return -jnp.sum(logpdf * weights * valid_mask)
+    else:
+        return -jnp.sum(logpdf)

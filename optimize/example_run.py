@@ -133,7 +133,17 @@ def main(config):
                                 sz_mini_bt=config.sz_mini_bt, shuffle_bt=config.shuffle_bt, shuffle_seed=config.shuffle_seed,
                                 resume_from=config.resume_from,
                                 fit_dedx=config.fit_dedx, dedx_prior_weight=config.dedx_prior_weight, dedx_lr=config.dedx_lr,
-                                dedx_start_iter=config.dedx_start_iter, dedx_freeze_iter=config.dedx_freeze_iter)
+                                dedx_start_iter=config.dedx_start_iter, dedx_freeze_iter=config.dedx_freeze_iter,
+                                dedx_student_loc=config.dedx_student_loc,
+                                dedx_soft_barrier_threshold=config.dedx_soft_barrier_threshold,
+                                dedx_soft_barrier_weight=config.dedx_soft_barrier_weight,
+                                dedx_use_split_t=config.dedx_use_split_t,
+                                dedx_student_nu_l=config.dedx_student_nu_l,
+                                dedx_student_nu_r=config.dedx_student_nu_r,
+                                dedx_student_scale_l=config.dedx_student_scale_l,
+                                dedx_student_scale_r=config.dedx_student_scale_r,
+                                dedx_mean_constraint_weight=config.dedx_mean_constraint_weight,
+                                dedx_mean_constraint_target=config.dedx_mean_constraint_target)
     elif config.fit_type == "scan":
         param_fit = LikelihoodProfiler(relevant_params=param_list,
                                 sim_track_fields=sim_track_fields, tgt_track_fields=tgt_track_fields,
@@ -383,6 +393,26 @@ if __name__ == '__main__':
                         help="Iteration at which to start dEdx fitting (0 = from the beginning). Use e.g. 200 to let calibration params warm up first.")
     parser.add_argument("--dedx_freeze_iter", dest="dedx_freeze_iter", default=None, type=int,
                         help="Iteration at which to freeze the per-segment dEdx values and only fine-tune the calibration parameter(s). Default: None (never freeze).")
+    parser.add_argument("--dedx_student_loc", dest="dedx_student_loc", default=None, type=float,
+                        help="dEdx Student-t prior location parameter (default: 1.864 MeV/cm)")
+    parser.add_argument("--dedx_soft_barrier_threshold", dest="dedx_soft_barrier_threshold", default=8.5, type=float,
+                        help="Threshold for dEdx soft barrier penalty (MeV/cm)")
+    parser.add_argument("--dedx_soft_barrier_weight", dest="dedx_soft_barrier_weight", default=1.0, type=float,
+                        help="Weight of one-sided soft barrier penalty on per-segment dEdx values")
+    parser.add_argument("--dedx_use_split_t", dest="dedx_use_split_t", default=True, type=lambda x: (str(x).lower() in ['true', '1', 'yes']),
+                        help="Use bifurcated Split Student-t prior instead of symmetric Student-t prior (default: True)")
+    parser.add_argument("--dedx_student_nu_l", dest="dedx_student_nu_l", default=4.785, type=float,
+                        help="Left-side degrees of freedom for Split Student-t prior (default: 4.785)")
+    parser.add_argument("--dedx_student_nu_r", dest="dedx_student_nu_r", default=2.073, type=float,
+                        help="Right-side degrees of freedom for Split Student-t prior (default: 2.073)")
+    parser.add_argument("--dedx_student_scale_l", dest="dedx_student_scale_l", default=0.1204, type=float,
+                        help="Left-side scale for Split Student-t prior (default: 0.1204)")
+    parser.add_argument("--dedx_student_scale_r", dest="dedx_student_scale_r", default=0.1058, type=float,
+                        help="Right-side scale for Split Student-t prior (default: 0.1058)")
+    parser.add_argument("--dedx_mean_constraint_weight", dest="dedx_mean_constraint_weight", default=0.0, type=float,
+                        help="Weight of the global length-weighted mean dEdx constraint (default: 0.0, disabled)")
+    parser.add_argument("--dedx_mean_constraint_target", dest="dedx_mean_constraint_target", default=1.887, type=float,
+                        help="Target value for the global mean dEdx constraint in MeV/cm (default: 1.887)")
 
     try:
         args = parser.parse_args()
