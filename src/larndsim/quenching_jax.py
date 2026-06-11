@@ -186,9 +186,23 @@ def quench(params, tracks, fields):
                 R_values,
                 "throughgoing_muon",
             )
-        else:
+        elif density_mode == "histogram":
             dEdx_samples, dEdx_weights = _dedx_density_histogram(
                 n_tracks,
+                R_values,
+                "stopping_muon",
+            )
+            stop_mu_samples, stop_mu_weights = dEdx_samples, dEdx_weights
+            stop_p_samples, stop_p_weights = _dedx_density_histogram(n_tracks, R_values, "stopping_proton")
+            tg_samples, tg_weights = _dedx_density_histogram(
+                n_tracks,
+                R_values,
+                "throughgoing_muon",
+            )  # Throughgoing-muon profile for muons with R > 50 cm or R < 0 cm.
+        else:
+            raise ValueError(
+                f"Unknown dedx_density_mode '{density_mode}'. Expected 'histogram' or 'flow'."
+            )
                 R_values,
                 "stopping_muon",
             )
