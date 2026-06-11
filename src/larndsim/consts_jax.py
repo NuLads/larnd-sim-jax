@@ -147,6 +147,8 @@ class Params_template:
     shift_y: float = struct.field(pytree_node=False)
     shift_z: float = struct.field(pytree_node=False)
     size_margin: float = struct.field(pytree_node=False)
+    excess_offset: float = struct.field(pytree_node=False, default=0.0)
+    smooth_sigma_scale: float = struct.field(pytree_node=False, default=1.0)
     diffusion_in_current_sim: bool = struct.field(pytree_node=False, default=True)
     mc_diff: bool = struct.field(pytree_node=False, default=False)
     nb_sampling_bins_per_pixel: int = struct.field(pytree_node=False, default=10)
@@ -154,7 +156,7 @@ class Params_template:
     long_diff_extent: int = struct.field(pytree_node=False, default=20)
     roi_threshold: float = struct.field(pytree_node=False, default=0.01)  # Threshold for region of interest selection
     roi_split_length: int = struct.field(pytree_node=False, default=400)  # Length of the region of interest split
-    fee_paths_scaling: int = struct.field(pytree_node=False, default=20)  # Scaling factor for fee paths
+    fee_paths_scaling: int = struct.field(pytree_node=False, default=100)  # Scaling factor for fee paths
     nb_tran_diff_bins: int = struct.field(pytree_node=False, default=5)
     hit_prob_threshold: float = struct.field(pytree_node=False, default=1e-5)  # Threshold for hit probability
     tran_diff_bin_edges: jax.Array = struct.field(pytree_node=False, default=None) # Bin edges for transverse diffusion

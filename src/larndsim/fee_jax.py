@@ -49,8 +49,7 @@ def log_diff_ndtr(a, b, min_log_prob=-18.42):
     log_term_safe = _soft_max(log_term, min_log_prob, sharpness=10.0)
 
     log_prob = la + log_term_safe
-
-    return _soft_where(a - b, log_prob, min_log_prob, sharpness=1000.0)
+    return jnp.where(a > b, log_prob, min_log_prob)
 
 @annotate_function
 @jit
@@ -332,7 +331,8 @@ def get_adc_values(params, pixels_signals, noise_rng_key):
 
 
 def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_uncorr,
-                       threshold, interval, Nvalues, min_log_prob):
+                       threshold, interval, Nvalues, min_log_prob,
+                       excess_offset=0.0, smooth_sigma_scale=1.0):
     Nticks = q_sum.shape[0]
     z_scale = 1.0 / sigma
 
@@ -357,21 +357,16 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     log_prob_event = jnp.minimum(log_prob_event, log_guess)
     log_prob_event = _soft_max(log_prob_event, min_log_prob, sharpness=1.0)
 
-    # Secondary ADC threshold correction (UNCORRELATED_NOISE_CHARGE)
-    # In the stochastic model, the final ADC = q[t+interval+1] + N + U must also
-    # exceed the threshold (with U ~ N(0, sigma_uncorr) drawn independently).
-    # Given that the crossing occurs at tick t with N ≈ threshold − q[t], the
-    # ADC passes iff U ≥ q[t] − q[t+interval+1], i.e. with probability
-    # Φ(Δq / σ_uncorr) where Δq is the charge collected in the integration window.
-    safe_sigma_uncorr = jnp.maximum(sigma_uncorr, 1.0)  # guard against sigma_uncorr=0
-    delta_q = q_sum_loc[..., shifted_ticks] - q_sum_loc[..., :-1]
-    log_adc_correction = jss.log_ndtr(delta_q / safe_sigma_uncorr)
-    log_prob_event = log_prob_event + log_adc_correction
-
+    # esperance_value: expected ADC given a crossing at tick t.
+    # esperance_value is kept because it is returned as the expected-charge output.
     esperance_value = q_sum[..., shifted_ticks] + threshold - 0.5 * (q_sum[..., 1:] + q_sum[..., :-1])
-    log_prob_event = _soft_where(
-        esperance_value - threshold, log_prob_event, min_log_prob, sharpness=10.0
-    )
+
+    # Unified Gaussian acceptance correction (Fix 2, corrected)
+    # Replace both log_adc_correction and _soft_where with a single correction
+    # that integrates over the uncorrelated noise U, since reset noise N cancels out.
+    safe_sigma_uncorr = jnp.maximum(sigma_uncorr * smooth_sigma_scale, 1.0)
+    log_accept = jss.log_ndtr((esperance_value - threshold + excess_offset) / safe_sigma_uncorr)
+    log_prob_event = log_prob_event + log_accept
 
     # 3. Aggregate Results
     log_prob_distrib = log_prob_event + previous_log_prob[:, None]
@@ -410,7 +405,7 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
     # --- Vectorize the single-step function ---
     vmapped_step_fun = vmap(
         _find_one_hit_step,
-        in_axes=(0, 0, 0, None, None, None, None, None, None)  # Map over q_sum, charges, probs
+        in_axes=(0, 0, 0, None, None, None, None, None, None, None, None)  # Map over q_sum, charges, probs
     )
 
     # --- Pre-calculate q_sum for all pixels ---
@@ -434,7 +429,8 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
                 q_sum_all, charges, probs,
                 params.RESET_NOISE_CHARGE, params.UNCORRELATED_NOISE_CHARGE,
                 params.DISCRIMINATION_THRESHOLD, interval,
-                Nvalues, min_log_prob
+                Nvalues, min_log_prob,
+                params.excess_offset, params.smooth_sigma_scale
             )
             # LogSumExp gives the log of the total probability
             total_prob_per_pixel = jax.nn.logsumexp(new_probs, axis=1)

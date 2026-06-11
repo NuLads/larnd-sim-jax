@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from larndsim.sim_jax import simulate_wfs, simulate_stochastic, simulate_parametrized, simulate_probabilistic, simulate_markov, pad_size, parse_output
+from larndsim.sim_jax import simulate_wfs, simulate_stochastic, simulate_parametrized, simulate_probabilistic, simulate_markov, pad_to_closest_multiple, parse_output, get_roi_counts
 from larndsim.losses_jax import adc2charge, weighted_wasserstein_1d
 from larndsim.detsim_jax import id2pixel, get_pixel_coordinates, get_hit_z
 from larndsim.fee_jax import get_average_hit_values, digitize
@@ -38,44 +38,7 @@ def compute_occurrence_indices(ids):
     occurrence_indices = cumsum - reset_at_boundary
     return occurrence_indices
 
-def pad_to_closest_multiple(x, dims_to_pad=None, multiple=128, pad_value=0, pad_front=False):
-    """
-    Efficiently pads array x to the closest multiple of a given value using update-in-place syntax.
-    Works with arrays of any number of dimensions.
-    
-    Args:
-        x: Input array to pad
-        dims_to_pad: List of dimension indices to pad (default: all dimensions)
-        multiple: The multiple to pad to (default: 128)
-        pad_value: Value to use for padding (default: 0)
-    
-    Returns:
-        Padded array with shape target_shape
-    """
-
-    # Compute target shape by padding each dimension to the closest multiple
-    if dims_to_pad is None:
-        dims_to_pad = range(x.ndim)
-    target_shape = list(x.shape)
-    for dim in dims_to_pad:
-        target_shape[dim] = ((x.shape[dim] + multiple - 1) // multiple) * multiple
-    target_shape = tuple(target_shape)
-
-    logger.info(f"Padding from shape {x.shape} to target shape {target_shape} with pad value {pad_value}")
-
-
-    # 1. Create a buffer of the target static shape (allocates memory)
-    buffer = jnp.full(target_shape, pad_value, dtype=x.dtype)
-    
-    # 2. Copy 'x' into the start of the buffer
-    # Create slice tuple for all dimensions: [:x.shape[0], :x.shape[1], ...]
-    if pad_front:
-        slices = tuple(slice(target_shape[idim] - dim_size, None) for idim, dim_size in enumerate(x.shape))
-    else:
-        slices = tuple(slice(0, dim_size) for dim_size in x.shape)
-    padded_x = buffer.at[slices].set(x)
-    
-    return padded_x
+# pad_to_closest_multiple is imported from larndsim.sim_jax
 
 class SimulationStrategy:
     def predict(self, params, tracks, fields, rngkey):
@@ -107,6 +70,9 @@ class LUTSimulation(SimulationStrategy):
 class LUTProbabilisticSimulation(SimulationStrategy):
     def __init__(self, response):
         self.response = response
+        self.padded_small_nb = None
+        self.padded_large_nb = None
+        self._cached_Npix = None
 
     def predict(self, params, tracks, fields, rngkey):
         
@@ -115,7 +81,21 @@ class LUTProbabilisticSimulation(SimulationStrategy):
         unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=True)
         wfs = pad_to_closest_multiple(wfs, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
 
-        adcs_distrib, pixel_x, pixel_y, ticks_prob, event = simulate_probabilistic(params, wfs, unique_pixels)
+        padded_small_nb = getattr(self, 'padded_small_nb', None)
+        padded_large_nb = getattr(self, 'padded_large_nb', None)
+        cached_Npix = getattr(self, '_cached_Npix', None)
+
+        if padded_small_nb is None or padded_large_nb is None or cached_Npix != wfs.shape[0]:
+            nb_small, nb_large = get_roi_counts(params, wfs)
+            padded_small_nb = int(((int(nb_small) + 31) // 32) * 32)
+            padded_large_nb = int(((int(nb_large) + 31) // 32) * 32)
+            self.padded_small_nb = padded_small_nb
+            self.padded_large_nb = padded_large_nb
+            self._cached_Npix = wfs.shape[0]
+
+        adcs_distrib, pixel_x, pixel_y, ticks_prob, event = simulate_probabilistic(
+            params, wfs, unique_pixels, padded_small_nb=padded_small_nb, padded_large_nb=padded_large_nb
+        )
         
         # Extract pixel plane for z-coordinate calculation
         _, _, pixel_plane, _ = id2pixel(params, unique_pixels)
@@ -151,6 +131,9 @@ class LUTProbabilisticSamplingSimulation(SimulationStrategy):
     """
     def __init__(self, response):
         self.response = response
+        self.padded_small_nb = None
+        self.padded_large_nb = None
+        self._cached_Npix = None
 
     def predict(self, params, tracks, fields, rngkey):
         # ── Step 1: waveforms + probabilistic distributions ──────────────────
@@ -160,8 +143,20 @@ class LUTProbabilisticSamplingSimulation(SimulationStrategy):
         wfs = pad_to_closest_multiple(
             wfs, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
 
+        padded_small_nb = getattr(self, 'padded_small_nb', None)
+        padded_large_nb = getattr(self, 'padded_large_nb', None)
+        cached_Npix = getattr(self, '_cached_Npix', None)
+
+        if padded_small_nb is None or padded_large_nb is None or cached_Npix != wfs.shape[0]:
+            nb_small, nb_large = get_roi_counts(params, wfs)
+            padded_small_nb = int(((int(nb_small) + 31) // 32) * 32)
+            padded_large_nb = int(((int(nb_large) + 31) // 32) * 32)
+            self.padded_small_nb = padded_small_nb
+            self.padded_large_nb = padded_large_nb
+            self._cached_Npix = wfs.shape[0]
+
         adcs_distrib, pixel_x_pix, pixel_y_pix, ticks_prob, event_pix = \
-            simulate_probabilistic(params, wfs, unique_pixels)
+            simulate_probabilistic(params, wfs, unique_pixels, padded_small_nb=padded_small_nb, padded_large_nb=padded_large_nb)
         # ticks_prob:   (Npix, Nhits, Nticks) – log-intensities
         # adcs_distrib: (Npix, Nhits, Nticks) – expected ADC at each tick
 
@@ -178,12 +173,9 @@ class LUTProbabilisticSamplingSimulation(SimulationStrategy):
         u       = jax.random.uniform(key_bern, shape=(Npix, Nhits))
         has_hit = u < lam                                      # (Npix, Nhits)
 
-        # Categorical tick sampling — one key per (pixel, hit_slot) flat slot
+        # Categorical tick sampling — batched over (pixel, hit_slot) natively by JAX
         logits_flat = ticks_prob.reshape(Npix * Nhits, Nticks)
-        tick_keys   = jax.random.split(key_tick_base, Npix * Nhits)
-        drawn_ticks_flat = jax.vmap(
-            lambda logits, k: jax.random.categorical(k, logits)
-        )(logits_flat, tick_keys)
+        drawn_ticks_flat = jax.random.categorical(key_tick_base, logits_flat, axis=-1)
         drawn_ticks = drawn_ticks_flat.reshape(Npix, Nhits)    # (Npix, Nhits)
 
         # Expected charge (in electrons) at drawn tick + Gaussian noise
