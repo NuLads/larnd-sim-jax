@@ -198,6 +198,7 @@ def quench(params, tracks, fields):
 
         is_muon = jnp.abs(pdg_ids) == 13
         is_proton = jnp.abs(pdg_ids) == 2212
+        supported = is_muon | is_proton
         use_tg_muon = is_muon & ((R_values > 50.0) | (R_values < 0.0))
         use_stop_muon = is_muon & (~use_tg_muon)
 
@@ -211,6 +212,17 @@ def quench(params, tracks, fields):
         dEdx_weights = jnp.where(use_tg_muon[:, None], tg_weights, dEdx_weights)
 
         dE_samples = dEdx_samples * dx
+
+        # For unsupported particle types, fall back to per-segment dE/dx (no density propagation).
+        direct_dEdx = tracks[:, fields.index("dEdx")][:, None]
+        direct_dE = tracks[:, fields.index("dE")][:, None]
+        dEdx_samples = jnp.where(supported[:, None], dEdx_samples, direct_dEdx)
+        dE_samples = jnp.where(supported[:, None], dE_samples, direct_dE)
+        dEdx_weights = jnp.where(
+            supported[:, None],
+            dEdx_weights,
+            jnp.ones((n_tracks, 1), dtype=direct_dEdx.dtype),
+        )
     else:
         # Use the per-segment dEdx value directly, no density propagation.
         dEdx_samples = tracks[:, fields.index("dEdx")][:, None]
