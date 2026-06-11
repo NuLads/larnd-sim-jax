@@ -158,8 +158,7 @@ def quench(params, tracks, fields):
         raise ValueError("quench requires a 'dx' entry in fields for segment length.")
 
     dx = tracks[:, fields.index("dx")][:, None]
-    use_density = bool(getattr(params, "use_dedx_density", True))
-
+    use_density = bool(getattr(params, "use_dedx_density", False))
     if use_density:
         if "range" not in fields:
             raise ValueError("quench requires a 'range' entry in fields for dE/dx density lookup.")
