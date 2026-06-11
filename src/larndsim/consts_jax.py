@@ -518,7 +518,7 @@ def load_detector_properties(params_cls, detprop_file, pixel_file):
         "number_pix_neighbors": 1,
         "electron_sampling_resolution": 0.001,
         "signal_length": 150,
-        "use_dedx_density": True,
+        "use_dedx_density": False,
         "dedx_density_mode": "histogram",
         "MAX_ADC_VALUES": 10,
         "DISCRIMINATION_THRESHOLD": 7e3,
