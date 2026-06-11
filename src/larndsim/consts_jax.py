@@ -253,11 +253,10 @@ def preload_dedx_density_resources(particle_types=None, density_mode="histogram"
             get_dedx_flow_model(particle_type="stopping_proton", force_reload=force_reload)
 
     if not particle_types:
-        return
+        particle_types = ("throughgoing_muon", "stopping_muon", "stopping_proton")
 
     for particle_type in particle_types:
         get_dedx_density_data(particle_type=particle_type, force_reload=force_reload)
-
 
 class RecombinationMode(Enum):
     BOX = 1
