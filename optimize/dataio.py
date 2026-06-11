@@ -162,7 +162,7 @@ class TracksDataset:
         pad=True,
         electron_sampling_resolution=0.1,
         live_selection=False,
-        use_dedx_density=True,
+        use_dedx_density=False,
         dedx_density_mode="histogram",
     ):
         self.use_dedx_density = bool(use_dedx_density)
