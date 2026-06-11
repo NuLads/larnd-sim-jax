@@ -389,7 +389,7 @@ class Params_template:
     shift_y: float = struct.field(pytree_node=False)
     shift_z: float = struct.field(pytree_node=False)
     size_margin: float = struct.field(pytree_node=False)
-    use_dedx_density: bool = struct.field(pytree_node=False, default=True)
+    use_dedx_density: bool = struct.field(pytree_node=False, default=False)
     dedx_density_mode: str = struct.field(pytree_node=False, default="histogram")  # histogram | flow
     diffusion_in_current_sim: bool = struct.field(pytree_node=False, default=True)
     mc_diff: bool = struct.field(pytree_node=False, default=False)
