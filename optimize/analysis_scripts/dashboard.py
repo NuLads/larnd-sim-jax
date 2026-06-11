@@ -371,10 +371,19 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
 
     if has_dedx_history:
         st.subheader("Per-segment dEdx Fit Diagnostics")
-        dedx_diag_cols = st.columns(2)
         sorted_runs_with_dedx = [fp for fp in sorted_filepaths if 'dedx_cache' in all_data[fp]]
-
-        with dedx_diag_cols[0]:
+        
+        # 1. Loss Components Row
+        has_barrier_history = any('dedx_barrier_iter' in d for d in all_data.values())
+        has_mean_penalty_history = any('dedx_mean_penalty_iter' in d for d in all_data.values())
+        
+        loss_ncols = 1 + int(has_barrier_history) + int(has_mean_penalty_history)
+        loss_cols = st.columns(loss_ncols)
+        
+        col_idx = 0
+        
+        # Prior Loss
+        with loss_cols[col_idx]:
             fig = go.Figure()
             for idx, fp in enumerate(sorted_filepaths):
                 d = all_data[fp]
@@ -385,14 +394,65 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
                     fig.add_trace(go.Scatter(y=y_smooth, mode='lines', name=name,
                                             line=dict(color=c, width=2)))
             fig.update_layout(**COMMON_LAYOUT)
-            fig.update_layout(title="dEdx Prior (Student-t NLL)",
+            fig.update_layout(title="dEdx Prior (NLL)",
                               xaxis_title="Iteration", yaxis_title="Prior loss")
             fig.update_xaxes(**AXIS_STYLE)
             fig.update_yaxes(**AXIS_STYLE)
             st.plotly_chart(fig, width='stretch', key="dedx_prior_nll")
             export_list.append(("dEdx - Prior NLL", fig))
-
-        with dedx_diag_cols[1]:
+            col_idx += 1
+            
+        # Soft Barrier Loss
+        if has_barrier_history:
+            with loss_cols[col_idx]:
+                fig = go.Figure()
+                for idx, fp in enumerate(sorted_filepaths):
+                    d = all_data[fp]
+                    name = os.path.splitext(os.path.basename(fp))[0]
+                    c = COLORS[idx % len(COLORS)]
+                    if 'dedx_barrier_iter' in d and len(d['dedx_barrier_iter']) > 0:
+                        y_smooth = smooth_data(d['dedx_barrier_iter'], smoothing_window)
+                        fig.add_trace(go.Scatter(y=y_smooth, mode='lines', name=name,
+                                                line=dict(color=c, width=2)))
+                fig.update_layout(**COMMON_LAYOUT)
+                fig.update_layout(title="dEdx Soft Barrier Penalty",
+                                  xaxis_title="Iteration", yaxis_title="Barrier loss")
+                fig.update_xaxes(**AXIS_STYLE)
+                fig.update_yaxes(**AXIS_STYLE)
+                st.plotly_chart(fig, width='stretch', key="dedx_barrier_penalty")
+                export_list.append(("dEdx - Soft Barrier Penalty", fig))
+                col_idx += 1
+                
+        # Mean Constraint Loss
+        if has_mean_penalty_history:
+            with loss_cols[col_idx]:
+                fig = go.Figure()
+                for idx, fp in enumerate(sorted_filepaths):
+                    d = all_data[fp]
+                    name = os.path.splitext(os.path.basename(fp))[0]
+                    c = COLORS[idx % len(COLORS)]
+                    if 'dedx_mean_penalty_iter' in d and len(d['dedx_mean_penalty_iter']) > 0:
+                        y_smooth = smooth_data(d['dedx_mean_penalty_iter'], smoothing_window)
+                        fig.add_trace(go.Scatter(y=y_smooth, mode='lines', name=name,
+                                                line=dict(color=c, width=2)))
+                fig.update_layout(**COMMON_LAYOUT)
+                fig.update_layout(title="dEdx Mean Constraint Penalty",
+                                  xaxis_title="Iteration", yaxis_title="Mean constraint loss")
+                fig.update_xaxes(**AXIS_STYLE)
+                fig.update_yaxes(**AXIS_STYLE)
+                st.plotly_chart(fig, width='stretch', key="dedx_mean_penalty")
+                export_list.append(("dEdx - Mean Penalty", fig))
+                col_idx += 1
+                
+        # 2. Reconstructed Value Row
+        has_mean_dedx_history = any('mean_dedx_iter' in d for d in all_data.values())
+        val_ncols = 1 + int(has_mean_dedx_history)
+        val_cols = st.columns(val_ncols)
+        
+        val_col_idx = 0
+        
+        # dEdx MAE
+        with val_cols[val_col_idx]:
             fig = go.Figure()
             for idx, fp in enumerate(sorted_filepaths):
                 d = all_data[fp]
@@ -409,6 +469,35 @@ def render_optimization_mode(all_data, smoothing_window, export_list):
             fig.update_yaxes(**AXIS_STYLE)
             st.plotly_chart(fig, width='stretch', key="dedx_mae")
             export_list.append(("dEdx - MAE from prior", fig))
+            val_col_idx += 1
+            
+        # Reconstructed dEdx Mean
+        if has_mean_dedx_history:
+            with val_cols[val_col_idx]:
+                fig = go.Figure()
+                for idx, fp in enumerate(sorted_filepaths):
+                    d = all_data[fp]
+                    name = os.path.splitext(os.path.basename(fp))[0]
+                    c = COLORS[idx % len(COLORS)]
+                    if 'mean_dedx_iter' in d and len(d['mean_dedx_iter']) > 0:
+                        y_smooth = smooth_data(d['mean_dedx_iter'], smoothing_window)
+                        fig.add_trace(go.Scatter(y=y_smooth, mode='lines', name=name,
+                                                line=dict(color=c, width=2)))
+                        
+                        # Add target line
+                        cfg = d.get('config', {})
+                        c_dict = vars(cfg) if hasattr(cfg, '__dict__') else cfg
+                        target_mean = float(c_dict.get('dedx_mean_constraint_target', 1.887)) if isinstance(c_dict, dict) else 1.887
+                        fig.add_hline(y=target_mean, line_dash="dash", line_color=c, opacity=0.4,
+                                      annotation_text=f"Target ({target_mean})")
+                fig.update_layout(**COMMON_LAYOUT)
+                fig.update_layout(title="Fitted dEdx Mean (Weighted)",
+                                  xaxis_title="Iteration", yaxis_title="Mean dEdx (MeV/cm)")
+                fig.update_xaxes(**AXIS_STYLE)
+                fig.update_yaxes(**AXIS_STYLE)
+                st.plotly_chart(fig, width='stretch', key="dedx_mean_val")
+                export_list.append(("dEdx - Reconstructed Mean", fig))
+                val_col_idx += 1
 
         # One hexbin per run that has dedx_cache
         if has_dedx:
