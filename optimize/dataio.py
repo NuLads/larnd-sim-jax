@@ -3,8 +3,46 @@ import numpy as np
 from numpy.lib import recfunctions as rfn
 import logging
 
+from larndsim.consts_jax import preload_dedx_density_resources
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+def _filter_supported_particle_tracks(tracks, dataset_label):
+    if 'pdg_id' not in tracks.dtype.names:
+        logger.warning(f"{dataset_label}: no pdg_id field found, skipping particle filtering")
+        return tracks
+
+    abs_pdg = np.abs(np.asarray(tracks['pdg_id'], dtype=np.int64))
+    keep_mask = np.isin(abs_pdg, [13, 2212])
+    removed = int(tracks.shape[0] - np.count_nonzero(keep_mask))
+    if removed > 0:
+        logger.info(f"{dataset_label}: removed {removed} segments with unsupported pdg_id")
+
+    filtered_tracks = tracks[keep_mask]
+    if filtered_tracks.shape[0] == 0:
+        raise ValueError(f"{dataset_label}: no muon/proton segments remain after pdg_id filtering")
+    return filtered_tracks
+
+
+def _infer_density_particle_types(tracks):
+    if 'pdg_id' not in tracks.dtype.names or tracks.shape[0] == 0:
+        logger.info("_infer_density_particle_types: no pdg_id or empty tracks -> no particle types inferred")
+        return tuple()
+
+    abs_pdg = np.abs(np.asarray(tracks['pdg_id'], dtype=np.int64))
+    has_muons = bool(np.any(abs_pdg == 13))
+    has_protons = bool(np.any(abs_pdg == 2212))
+
+    particle_types = []
+    if has_muons:
+        particle_types.extend(["stopping_muon", "throughgoing_muon"])
+    if has_protons:
+        particle_types.append("stopping_proton")
+    inferred = tuple(particle_types)
+    logger.info(f"_infer_density_particle_types: inferred particle types = {inferred}")
+    return inferred
 
 class DataLoader:
     def __init__(self, dataset, batch_size):
@@ -106,9 +144,28 @@ def chop_tracks(tracks, fields, precision=0.001):
     return new_tracks
 
 class TracksDataset:
-    def __init__(self, filename, nevents, max_nbatch=None, swap_xz=True, random_nevents=False, data_seed=42, track_len_sel=2., 
-                 max_abs_costheta_sel=0.966, min_abs_segz_sel=15., track_z_bound=28., max_batch_len=50, print_input=False,
-                 chopped=True, pad=True, electron_sampling_resolution=0.1, live_selection=False):
+    def __init__(
+        self,
+        filename,
+        nevents,
+        max_nbatch=None,
+        swap_xz=True,
+        random_nevents=False,
+        data_seed=42,
+        track_len_sel=2.,
+        max_abs_costheta_sel=0.966,
+        min_abs_segz_sel=15.,
+        track_z_bound=28.,
+        max_batch_len=50,
+        print_input=False,
+        chopped=True,
+        pad=True,
+        electron_sampling_resolution=0.1,
+        live_selection=False,
+        use_dedx_density=False,
+        dedx_density_mode="histogram",
+    ):
+        self.use_dedx_density = bool(use_dedx_density)
 
         # Build per-batch mappings so __getitem__ can construct a single batch on demand.
         with h5py.File(filename, 'r') as f:
@@ -126,6 +183,19 @@ class TracksDataset:
             tracks['z_start'] = x_start
             tracks['z_end'] = x_end
             tracks['z'] = x
+
+        if self.use_dedx_density:
+            tracks = _filter_supported_particle_tracks(tracks, "TracksDataset")
+            inferred_particle_types = _infer_density_particle_types(tracks)
+            logger.info(
+                "TracksDataset: use_dedx_density=True, "
+                f"dedx_density_mode={dedx_density_mode}, "
+                f"particle_types={inferred_particle_types}"
+            )
+            preload_dedx_density_resources(
+                particle_types=inferred_particle_types,
+                density_mode=dedx_density_mode,
+            )
 
         if not 't0' in tracks.dtype.names:
             tracks = rfn.append_fields(tracks, 't0', np.zeros(tracks.shape[0]), usemask=False)
@@ -461,6 +531,9 @@ class TgtTracksDataset:
             tracks_ds['z_start'] = x_start
             tracks_ds['z_end'] = x_end
             tracks_ds['z'] = x
+
+        if bool(getattr(dataset_sim, "use_dedx_density", True)):
+            tracks_ds = _filter_supported_particle_tracks(tracks_ds, "TgtTracksDataset")
 
         # Keep target rows in memory once and build a fast row index by key.
         self.tracks_struct = tracks_ds

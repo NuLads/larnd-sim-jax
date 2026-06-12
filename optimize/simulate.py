@@ -69,6 +69,8 @@ def main(config):
         'electron_sampling_resolution',
         'number_pix_neighbors',
         'signal_length',
+        'use_dedx_density',
+        'dedx_density_mode',
     ]
 
 
@@ -90,6 +92,8 @@ def main(config):
         pad=False,
         electron_sampling_resolution=config.electron_sampling_resolution,
         live_selection=False,
+        use_dedx_density=config.use_dedx_density,
+        dedx_density_mode=config.dedx_density_mode,
     )
     fields = dataset.get_track_fields()
     evt_col = fields.index("eventID")
@@ -207,6 +211,10 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', action='store_true', help='Use GPU for simulation')
     parser.add_argument('--jac', action='store_true', help='Compute jacobian')
     parser.add_argument('--mc_diff', action='store_true', help='Use Monte Carlo diffusion')
+    parser.add_argument('--use_dedx_density', action='store_true', default=False,
+                        help='Use dE/dx density propagation in quenching (default: disabled).')
+    parser.add_argument('--dedx_density_mode', type=str, default='histogram', choices=['histogram', 'flow'],
+                        help='dE/dx density model when --use_dedx_density is enabled.')
     parser.add_argument('--save_wfs', action='store_true', help='Save waveforms')
     parser.add_argument('--n_events', type=int, default=-1, help='Number of events to be simulated')
     parser.add_argument('--out_np', action='store_true', default=False, help='store target-like output in npz')

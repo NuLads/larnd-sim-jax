@@ -2,7 +2,11 @@ import os, sys
 
 from requests import options
 larndsim_dir=os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..'))
-sys.path.insert(0, larndsim_dir)
+src_dir = os.path.join(larndsim_dir, 'src')
+if src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
+if larndsim_dir not in sys.path:
+    sys.path.insert(0, larndsim_dir)
 import shutil
 import pickle
 import numpy as np
@@ -245,12 +249,16 @@ class ParamFitter:
         self.electron_sampling_resolution = config.electron_sampling_resolution
         self.number_pix_neighbors = config.number_pix_neighbors
         self.signal_length = config.signal_length
+        self.use_dedx_density = bool(getattr(config, "use_dedx_density", False))
+        self.dedx_density_mode = getattr(config, "dedx_density_mode", "histogram")
         self.probabilistic_sim = probabilistic_sim
         self.sz_mini_bt = sz_mini_bt
         self.shuffle_bt = shuffle_bt
         self.shuffle_seed = shuffle_seed
         self.sim_track_fields = sim_track_fields
         self.tgt_track_fields = tgt_track_fields
+
+        print(f"Using dE/dx density propagation: {self.use_dedx_density}, mode: {self.dedx_density_mode}")
 
         if self.normalization_scheme not in ("sigmoid", "exp_log", "divide"):
             raise ValueError(
@@ -394,7 +402,9 @@ class ParamFitter:
         
         params_to_apply = [
             "diffusion_in_current_sim",
-            "mc_diff"
+            "mc_diff",
+            "use_dedx_density",
+            "dedx_density_mode",
         ]
 
         ref_params = ref_params.replace(**{key: getattr(self, key) for key in params_to_apply})
@@ -499,6 +509,12 @@ class ParamFitter:
                 logger.info(f'{param}, target: {param_val}, init {getattr(self.current_params, param)}')    
                 self.target_params[param] = param_val
         self.target_params = self.ref_params.replace(**self.target_params)
+        # Target generation must always use original per-segment dEdx (no dE/dx density propagation).
+        self.target_params = self.target_params.replace(
+            use_dedx_density=False,
+            dedx_density_mode="histogram",
+        )
+        logger.info("Target simulation forced to use_dedx_density=False (original dEdx path)")
         if not self.readout_noise_target:
             logger.info("Not simulating electronics noise for target")
             self.target_params = remove_noise_from_params(self.target_params)
@@ -1099,6 +1115,12 @@ class LikelihoodProfiler(ParamFitter):
             for param in self.relevant_params_list:
                 target_params[param] = ranges[param]['nom']
             self.target_params = self.ref_params.replace(**target_params)
+            # Keep target simulation on the original dEdx path regardless of scan mode.
+            self.target_params = self.target_params.replace(
+                use_dedx_density=False,
+                dedx_density_mode="histogram",
+            )
+            logger.info("Target simulation forced to use_dedx_density=False (original dEdx path)")
             if not self.readout_noise_target:
                 logger.info("Not simulating electronics noise for target")
                 self.target_params = remove_noise_from_params(self.target_params)
