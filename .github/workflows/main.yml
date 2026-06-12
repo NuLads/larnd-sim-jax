@@ -20,6 +20,14 @@ on:
 
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
+env:
+  OMP_NUM_THREADS: 1
+  MKL_NUM_THREADS: 1
+  OPENBLAS_NUM_THREADS: 1
+  VECLIB_MAXIMUM_THREADS: 1
+  NUMEXPR_NUM_THREADS: 1
+  XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
+
 jobs:
   test-sim:
     # Steps represent a sequence of tasks that will be executed as part of the job

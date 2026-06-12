@@ -4,8 +4,8 @@
 
 TARGET_SEED=3
 PARAMS=optimize/scripts/params_test.yaml
-BATCH_SIZE=200
-ITERATIONS=200
+BATCH_SIZE=32
+ITERATIONS=15
 MAX_CLIP_NORM_VAL=1
 DATA_SEED=1
 LOSS=mse_adc
@@ -50,7 +50,7 @@ if [ "$LUT" = TRUE ]; then
         --seed ${TARGET_SEED} \
         --optimizer_fn Adam \
         --random_nevents \
-        --iterations 100 \
+        --iterations ${ITERATIONS} \
         --max_batch_len ${BATCH_SIZE} \
         --lr_scheduler exponential_decay \
         --lr_kw '{"decay_rate" : 0.97}' \
