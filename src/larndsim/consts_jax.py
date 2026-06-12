@@ -388,6 +388,8 @@ class Params_template:
     shift_y: float = struct.field(pytree_node=False)
     shift_z: float = struct.field(pytree_node=False)
     size_margin: float = struct.field(pytree_node=False)
+    excess_offset: float = struct.field(pytree_node=False, default=0.0)
+    smooth_sigma_scale: float = struct.field(pytree_node=False, default=1.0)
     use_dedx_density: bool = struct.field(pytree_node=False, default=False)
     dedx_density_mode: str = struct.field(pytree_node=False, default="histogram")  # histogram | flow
     diffusion_in_current_sim: bool = struct.field(pytree_node=False, default=True)
@@ -532,6 +534,8 @@ def load_detector_properties(params_cls, detprop_file, pixel_file):
         "UNCORRELATED_NOISE_CHARGE": 500,
         "ELECTRON_MOBILITY_PARAMS": (551.6, 7158.3, 4440.43, 4.29, 43.63, 0.2053),
         "size_margin": 2e-2,
+        "excess_offset": 0.0,
+        "smooth_sigma_scale": 1.0,
         "diffusion_in_current_sim": True,
         "mc_diff": False,
         "tpc_centers": jnp.array([[0, 0, 0], [0, 0, 0]]), # Placeholder for TPC centers,
