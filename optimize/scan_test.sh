@@ -3,7 +3,7 @@
 #BASE DECLARATIONS
 
 TARGET_SEED=1
-PARAMS=optimize/scripts/params_test.yaml
+PARAMS=optimize/scripts/params_scan_test.yaml
 BATCH_SIZE=32
 ITERATIONS=10
 MAX_CLIP_NORM_VAL=1
