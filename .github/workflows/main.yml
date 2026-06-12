@@ -88,7 +88,9 @@ jobs:
 
       - name: Make fit plots
         run: |
-          ./optimize/analysis_scripts/plot_fit.py --input_file fit_result/**/*.pkl --output_dir output
+          for f in fit_result/*/*.pkl; do
+            ./optimize/analysis_scripts/plot_fit.py --input_file "$f" --output_dir output
+          done
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
@@ -111,7 +113,9 @@ jobs:
       
       - name: Validate fit convergence
         run: |
-          python3 tests/test_fit_convergence.py --input_file fit_result/**/*.pkl --strict
+          for f in fit_result/*/*.pkl; do
+            python3 tests/test_fit_convergence.py --input_file "$f" --strict
+          done
 
   test-fit-lut:
     runs-on: ubuntu-latest
@@ -136,7 +140,9 @@ jobs:
 
       - name: Make fit plots
         run: |
-          ./optimize/analysis_scripts/plot_fit.py --input_file fit_result/**/*.pkl --output_dir output
+          for f in fit_result/*/*.pkl; do
+            ./optimize/analysis_scripts/plot_fit.py --input_file "$f" --output_dir output
+          done
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
@@ -159,7 +165,9 @@ jobs:
 
       - name: Validate fit convergence
         run: |
-          python3 tests/test_fit_convergence.py --input_file fit_result/**/*.pkl --strict
+          for f in fit_result/*/*.pkl; do
+            python3 tests/test_fit_convergence.py --input_file "$f" --strict
+          done
 
 
   test-fit-nll:
@@ -185,7 +193,9 @@ jobs:
 
       - name: Make fit plots
         run: |
-          ./optimize/analysis_scripts/plot_fit.py --input_file fit_result/**/*.pkl --output_dir output
+          for f in fit_result/*/*.pkl; do
+            ./optimize/analysis_scripts/plot_fit.py --input_file "$f" --output_dir output
+          done
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
@@ -208,7 +218,9 @@ jobs:
 
       - name: Validate fit convergence
         run: |
-          python3 tests/test_fit_convergence.py --input_file fit_result/**/*.pkl --strict
+          for f in fit_result/*/*.pkl; do
+            python3 tests/test_fit_convergence.py --input_file "$f" --strict
+          done
 
 
   test-scan:
