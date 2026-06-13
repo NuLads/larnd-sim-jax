@@ -49,6 +49,7 @@ def log_diff_ndtr(a, b, min_log_prob=-18.42):
     log_term_safe = _soft_max(log_term, min_log_prob, sharpness=10.0)
 
     log_prob = la + log_term_safe
+
     return jnp.where(a > b, log_prob, min_log_prob)
 
 @annotate_function

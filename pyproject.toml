@@ -32,6 +32,10 @@ docs = [
 tests = [
     "pytest"
 ]
+flows = [
+    "equinox",
+    "flowjax",
+]
 dev = [
     'larndsim[docs,tests]',
     'pre-commit',
