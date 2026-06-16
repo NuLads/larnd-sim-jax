@@ -3,9 +3,9 @@
 #BASE DECLARATIONS
 
 TARGET_SEED=1
-PARAMS=optimize/scripts/params_test.yaml
-BATCH_SIZE=100
-ITERATIONS=20
+PARAMS=optimize/scripts/params_scan_test.yaml
+BATCH_SIZE=32
+ITERATIONS=10
 MAX_CLIP_NORM_VAL=1
 DATA_SEED=1
 LOSS=mse_adc
