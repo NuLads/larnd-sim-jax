@@ -830,8 +830,8 @@ class ParamFitter:
                     wfs_eval, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True
                 )
                 nb_small, nb_large = get_roi_counts(self.ref_params, wfs_eval)
-                padded_small_nb = int(((int(nb_small) + 31) // 32) * 32)
-                padded_large_nb = int(((int(nb_large) + 31) // 32) * 32)
+                padded_small_nb = int(((int(nb_small) + 127) // 128) * 128)
+                padded_large_nb = int(((int(nb_large) + 127) // 128) * 128)
                 self._roi_padded_cache[cache_key] = (padded_small_nb, padded_large_nb)
                 logger.info(
                     f"Batch {i}: computed ROI counts: {int(nb_small)} small "

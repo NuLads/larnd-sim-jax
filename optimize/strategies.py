@@ -87,8 +87,8 @@ class LUTProbabilisticSimulation(SimulationStrategy):
 
         if padded_small_nb is None or padded_large_nb is None or cached_Npix != wfs.shape[0]:
             nb_small, nb_large = get_roi_counts(params, wfs)
-            padded_small_nb = int(((int(nb_small) + 31) // 32) * 32)
-            padded_large_nb = int(((int(nb_large) + 31) // 32) * 32)
+            padded_small_nb = int(((int(nb_small) + 127) // 128) * 128)
+            padded_large_nb = int(((int(nb_large) + 127) // 128) * 128)
             self.padded_small_nb = padded_small_nb
             self.padded_large_nb = padded_large_nb
             self._cached_Npix = wfs.shape[0]
@@ -149,8 +149,8 @@ class LUTProbabilisticSamplingSimulation(SimulationStrategy):
 
         if padded_small_nb is None or padded_large_nb is None or cached_Npix != wfs.shape[0]:
             nb_small, nb_large = get_roi_counts(params, wfs)
-            padded_small_nb = int(((int(nb_small) + 31) // 32) * 32)
-            padded_large_nb = int(((int(nb_large) + 31) // 32) * 32)
+            padded_small_nb = int(((int(nb_small) + 127) // 128) * 128)
+            padded_large_nb = int(((int(nb_large) + 127) // 128) * 128)
             self.padded_small_nb = padded_small_nb
             self.padded_large_nb = padded_large_nb
             self._cached_Npix = wfs.shape[0]

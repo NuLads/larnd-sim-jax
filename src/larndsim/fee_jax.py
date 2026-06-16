@@ -605,3 +605,28 @@ def get_average_hit_values(log_ticks_prob, adcs_distrib, min_log_prob=-18.42):
     ) / jnp.maximum(lambda_per_hit, 1e-10)  # (Npix, Nhits)
 
     return expected_ticks_per_hit, expected_adcs_per_hit, lambda_per_hit
+
+def get_adc_values_average_noise_chunked(params, wfs, chunk_size=128):
+    """
+    Chunked version of get_adc_values_average_noise_vmap using jax.lax.scan.
+    This reduces peak memory footprint by processing the waveform array in sequential chunks.
+    """
+    Npix, Nticks = wfs.shape
+    # Ensure Npix is a multiple of chunk_size
+    pad_len = ((Npix + chunk_size - 1) // chunk_size) * chunk_size
+    wfs_padded = jnp.pad(wfs, ((0, pad_len - Npix), (0, 0)), mode='constant', constant_values=0.0)
+    
+    num_chunks = pad_len // chunk_size
+    wfs_chunks = wfs_padded.reshape(num_chunks, chunk_size, Nticks)
+    
+    def scan_fn(carry, wfs_chunk):
+        log_prob_step, charge_step = get_adc_values_average_noise_vmap(params, wfs_chunk)
+        return carry, (log_prob_step, charge_step)
+        
+    _, (log_prob_chunks, charge_chunks) = lax.scan(scan_fn, None, wfs_chunks)
+    
+    Nvalues = params.MAX_ADC_VALUES
+    log_prob_dist = log_prob_chunks.reshape(pad_len, Nvalues, Nticks - 1)
+    charge_dist = charge_chunks.reshape(pad_len, Nvalues, Nticks - 1)
+    
+    return log_prob_dist[:Npix], charge_dist[:Npix]

@@ -11,7 +11,7 @@ import logging
 from larndsim.detsim_jax import generate_electrons, get_pixels, id2pixel, accumulate_signals, accumulate_signals_parametrized, current_lut, get_pixel_coordinates, current_mc, apply_tran_diff, get_hit_z, pixel2id, get_bin_shifts, density_2d, smear_remainders
 from larndsim.quenching_jax import quench
 from larndsim.drifting_jax import drift
-from larndsim.fee_jax import get_adc_values, digitize, get_adc_values_average_noise_vmap, get_adc_values_markov
+from larndsim.fee_jax import get_adc_values, digitize, get_adc_values_average_noise_vmap, get_adc_values_markov, get_adc_values_average_noise_chunked
 from optimize.dataio import chop_tracks
 from larndsim.consts_jax import get_vdrift
 
@@ -852,65 +852,18 @@ def simulate_markov(params, wfs, unique_pixels):
 
 def simulate_probabilistic(params, wfs, unique_pixels, padded_small_nb=None, padded_large_nb=None):
     """
-    Simulates the signal from the drifted electrons and returns probabilistic
-    distributions of ADC values and tick times, along with pixel coordinates
-    and event numbers.
-
-    Args:
-        params: Parameters of the simulation.
-        wfs (jnp.ndarray): Waveforms as a JAX array.
-        unique_pixels (jnp.ndarray): Unique pixel identifiers for the input waveforms.
-        padded_small_nb (int, optional): Number of small ROIs, padded to a multiple of 128.
-        padded_large_nb (int, optional): Number of large ROIs, padded to a multiple of 128.
-
-    Returns:
-        Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-            - adcs_distrib: Probabilistic distribution of ADC values for each
-              pixel/time bin after adding average noise and digitization.
-            - pixel_x: X coordinates of the pixels corresponding to the waveforms.
-            - pixel_y: Y coordinates of the pixels corresponding to the waveforms.
-            - ticks_prob: Tick indices associated with the probabilistic charge/
-              ADC distributions.
-            - event: Event numbers associated with each pixel.
+    Simulates the Front-End Electronics (triggering, digitization) using 
+    rematerialized pixel chunking (scan-over-vmaps) to bound peak memory usage 
+    while avoiding JIT recompilations.
     """
-    if padded_small_nb is None or padded_large_nb is None:
-        # When called standalone (outside value_and_grad), compute accurate counts
-        # When called inside a JAX trace (value_and_grad), fall back to Npix
-        try:
-            nb_small, nb_large = get_roi_counts(params, wfs)
-            padded_small_nb = int(((int(nb_small) + 31) // 32) * 32)
-            padded_large_nb = int(((int(nb_large) + 31) // 32) * 32)
-        except (jax.errors.ConcretizationTypeError, jax.errors.TracerIntegerConversionError):
-            # Inside value_and_grad: wfs is a tracer, int() fails.
-            # Fall back to Npix (always safe, shapes are concrete even in traces).
-            Npix = wfs.shape[0]
-            padded_small_nb = Npix
-            padded_large_nb = Npix
-            logger.warning(
-                f"ROI counts not pre-computed; falling back to Npix={Npix} for both. "
-                f"This is safe but uses more memory. Pre-compute counts outside "
-                f"value_and_grad for optimal performance."
-            )
-
     return _simulate_probabilistic_jit(params, wfs, unique_pixels, padded_small_nb, padded_large_nb)
 
-@partial(jit, static_argnames=["padded_small_nb", "padded_large_nb"])
-def _simulate_probabilistic_jit(params, wfs, unique_pixels, padded_small_nb, padded_large_nb):
+@jit
+def _simulate_probabilistic_jit(params, wfs, unique_pixels, padded_small_nb=None, padded_large_nb=None):
     Npix, Nticks = wfs.shape
 
-    # ROI selection is a discrete, non-differentiable operation; we explicitly stop
-    # gradients from flowing to avoid backpropagating through indexing/masking logic.
-    roi_threshold = params.roi_threshold
-    roi_start = jax.lax.stop_gradient(jnp.argmax(wfs > roi_threshold, axis=1))
-    roi_end = jax.lax.stop_gradient(Nticks - jnp.argmax(wfs[:, ::-1] > roi_threshold, axis=1) - 1)
-
-    has_signal = jax.lax.stop_gradient(jnp.any(wfs > roi_threshold, axis=1))
-    mask_small_rois = jax.lax.stop_gradient(((roi_end - roi_start) < params.roi_split_length) & has_signal)
-    mask_large_rois = jax.lax.stop_gradient(((roi_end - roi_start) >= params.roi_split_length) & has_signal)
-
-    charge_distrib, ticks_prob = fee_sim_from_split(
-        params, padded_small_nb, padded_large_nb, wfs, mask_small_rois, mask_large_rois, roi_start, Nticks - 2
-    )
+    # Process all pixels in sequential chunks of 128 to keep memory usage extremely low
+    ticks_prob, charge_distrib = get_adc_values_average_noise_chunked(params, wfs, chunk_size=128)
 
     adcs_distrib = digitize(params, charge_distrib)
     pixel_x, pixel_y, pixel_plane, event = id2pixel(params, unique_pixels)
