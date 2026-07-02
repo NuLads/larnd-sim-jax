@@ -2,8 +2,9 @@
 #SBATCH --partition=ampere
 
 ##SBATCH --account=mli:cider-ml
+#SBATCH --account=mli:nu-ml-dev
 ##SBATCH --account=neutrino:dune-ml
-#SBATCH --account=neutrino:cider-nu
+##SBATCH --account=neutrino:cider-nu
 ##SBATCH --account=neutrino:ml-dev
 
 #SBATCH --job-name=larndsim
@@ -28,10 +29,10 @@ SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax.sif
 #INPUT_FILE=prepared_data/input_${SLURM_ARRAY_TASK_ID}.h5
 #INPUT_FILE=../Data_selection/event122.h5
 
-# dx 1mm
+# stopping proton, dx 0.1mm
 
-INPUT_FILE=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_2043327/job_25174367_0000/output_25174367_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_range_0.05cm_ntrack_1_seg_0.h5
-#OUTPUT_FILE=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_2043327/job_25174367_0000/output_25174367_0000-larndsim_lbl_trklen2cm_containment2cm_costheta0.966_range_0.05cm_ntrack_1_seg_0.h5
+INPUT_FILE=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_range_0.05cm.h5
+OUTPUT_FILE=output/forward_simulation_output
 
 # apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${SIF_FILE} python3 -m optimize.simulate \
 apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${SIF_FILE} /bin/bash -c "
@@ -44,9 +45,11 @@ python3 -m optimize.simulate \
     --signal_length 400 \
     --mode 'lut' \
     --lut_file src/larndsim/detector_properties/response_44_v2a_full_tick.npz \
-    --save_wfs \
-    #--noise \
-    #--n_events 2 \
+    --noise \
+    --diffusion_in_current_sim \
+    --n_events 2 \
+    #--probabilistic_sim \
+    # --save_wfs \
     # --chop \
     # --noise \
     #--seed 9 \
