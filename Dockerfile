@@ -29,6 +29,7 @@ RUN python3 -m pip install --no-cache-dir  --upgrade pip && \
             -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html && break; \
         if [ "$attempt" -eq 3 ]; then exit 1; fi; \
         echo "Retrying JAX CUDA install (attempt ${attempt}/3 failed)"; \
+        sleep 5; \
     done
 
 RUN python3 -m pip install --no-cache-dir jupyter
