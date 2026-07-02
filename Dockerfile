@@ -24,8 +24,12 @@ WORKDIR /work
 COPY . .
 
 RUN python3 -m pip install --no-cache-dir  --upgrade pip && \
-    python3 -m pip install --no-cache-dir "jax[cuda]" \
-        -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    for attempt in 1 2 3; do \
+        python3 -m pip install --no-cache-dir --retries 10 --timeout 120 "jax[cuda]" \
+            -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html && break; \
+        if [ "$attempt" -eq 3 ]; then exit 1; fi; \
+        echo "Retrying JAX CUDA install (attempt ${attempt}/3 failed)"; \
+    done
 
 RUN python3 -m pip install --no-cache-dir jupyter
 
