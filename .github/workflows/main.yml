@@ -410,31 +410,29 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.RTDS_WEBHOOK_URL }}
           WEBHOOK_TOKEN: ${{ secrets.RTDS_WEBHOOK_TOKEN }}
+          RTD_BRANCH: ${{ github.head_ref || github.ref_name }}
+          RTD_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           python3 - <<'EOF'
-          import hashlib, hmac, json, os, sys, urllib.request, urllib.error
+          import json, os, sys, urllib.error, urllib.request
 
-          with open(os.environ['GITHUB_EVENT_PATH']) as f:
-              payload_data = json.load(f)
+          payload = json.dumps(
+              {
+                  'branches': [os.environ['RTD_BRANCH']],
+                  'default_branch': os.environ['RTD_DEFAULT_BRANCH'],
+                  'token': os.environ['WEBHOOK_TOKEN'],
+              },
+              separators=(',', ':'),
+          ).encode('utf-8')
 
-          # Re-serialize with 2-space indent to match JSON.stringify(payload, undefined, 2)
-          payload = json.dumps(payload_data, indent=2, ensure_ascii=False)
-
-          token = os.environ['WEBHOOK_TOKEN']
-          signature = hmac.new(token.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
-
-          url = os.environ['WEBHOOK_URL']
-          event_name = os.environ['GITHUB_EVENT_NAME']
-
-          req = urllib.request.Request(url, data=payload.encode('utf-8'), method='POST')
+          req = urllib.request.Request(os.environ['WEBHOOK_URL'], data=payload, method='POST')
           req.add_header('Content-Type', 'application/json')
-          req.add_header('X-GitHub-Event', event_name)
-          req.add_header('X-Hub-Signature-256', f'sha256={signature}')
 
           try:
               with urllib.request.urlopen(req) as response:
                   print(f'Payload sent to webhook successfully: {response.status}')
           except urllib.error.HTTPError as e:
               print(f'Failed to send payload to webhook: {e.code} {e.reason}', file=sys.stderr)
+              print(e.read().decode('utf-8', errors='replace'), file=sys.stderr)
               sys.exit(1)
           EOF
