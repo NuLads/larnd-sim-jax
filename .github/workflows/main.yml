@@ -415,6 +415,7 @@ jobs:
         run: |
           python3 - <<'EOF'
           import json, os, sys, urllib.error, urllib.request
+          from urllib.parse import urlparse
 
           payload = json.dumps(
               {
@@ -425,7 +426,13 @@ jobs:
               separators=(',', ':'),
           ).encode('utf-8')
 
-          req = urllib.request.Request(os.environ['WEBHOOK_URL'], data=payload, method='POST')
+          webhook_url = os.environ['WEBHOOK_URL']
+          parsed_url = urlparse(webhook_url)
+          if parsed_url.scheme != 'https' and parsed_url.hostname not in {'127.0.0.1', 'localhost'}:
+              print('RTD webhook URL must use HTTPS.', file=sys.stderr)
+              sys.exit(1)
+
+          req = urllib.request.Request(webhook_url, data=payload, method='POST')
           req.add_header('Content-Type', 'application/json')
 
           try:
