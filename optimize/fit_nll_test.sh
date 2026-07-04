@@ -60,7 +60,7 @@ if [ "$LUT" = TRUE ]; then
 	--clip_from_range \
         --electron_sampling_resolution 0.01 \
         --number_pix_neighbors 2 \
-        --signal_length 150 \
+        --response_roi_length 150 \
         --mode 'lut' \
         --loss_fn ${LOSS} \
         --fit_type 'chain' \
@@ -94,7 +94,7 @@ else
 	--clip_from_range \
         --electron_sampling_resolution 0.01 \
         --number_pix_neighbors 0 \
-        --signal_length 150 \
+        --response_roi_length 150 \
         --mode 'parametrized' \
         --loss_fn ${LOSS} \
         --fit_type 'chain' \

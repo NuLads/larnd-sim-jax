@@ -70,7 +70,7 @@ python3 -m optimize.example_run \
     --electron_sampling_resolution 0.01 \
     --lut_file src/larndsim/detector_properties/response_44.npy \
     --number_pix_neighbors 2 \
-    --signal_length 150 \
+    --response_roi_length 150 \
     --mode 'lut' \
     --loss_fn ${LOSS} \
     --chamfer_adc_norm ${CHAMFER_ADC_NORM} \

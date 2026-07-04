@@ -153,16 +153,16 @@ def validate_local_event_ids(event_ids, context=""):
 
 
 @annotate_function
-@partial(jit, static_argnames='signal_length')
-def accumulate_signals(wfs, currents_idx, charge, response, response_cum, pixID, cathode_ticks, signal_length):
+@partial(jit, static_argnames='response_roi_length')
+def accumulate_signals(wfs, currents_idx, charge, response, response_cum, pixID, cathode_ticks, response_roi_length):
     # Get the number of pixels and ticks
     Npixels, Nticks = wfs.shape
 
     # Compute indices for updating wfs, taking into account start_ticks
-    start_ticks = response.shape[-1] - signal_length - cathode_ticks
-    time_ticks = start_ticks[..., None] + jnp.arange(signal_length)
+    start_ticks = response.shape[-1] - response_roi_length - cathode_ticks
+    time_ticks = start_ticks[..., None] + jnp.arange(response_roi_length)
 
-    # either end of start_ticks or start_ticks + signal_length can be out of the readout range, which is non physical, but it can still have values from the response. They are assigned to time_tick 0, and is meant to be removed.
+    # either end of start_ticks or start_ticks + response_roi_length can be out of the readout range, which is non physical, but it can still have values from the response. They are assigned to time_tick 0, and is meant to be removed.
     time_ticks = jnp.where((time_ticks <= 0 ) | (time_ticks >= Nticks - 1), 0, time_ticks+1) # it should be start_ticks +1 in theory but we cheat by putting the cumsum in the garbage too when strarting at 0 to mimic the expected behavior
 
     start_indices = pixID * Nticks
@@ -174,17 +174,17 @@ def accumulate_signals(wfs, currents_idx, charge, response, response_cum, pixID,
 
     Nx, Ny, Nt = response.shape
 
-    signal_indices = jnp.ravel((currents_idx[..., 0, None]*Ny + currents_idx[..., 1, None])*Nt + jnp.arange(response.shape[-1] - signal_length, response.shape[-1]))
-    # baseline_indices = jnp.ravel(jnp.repeat((currents_idx[..., 0]*Ny + currents_idx[..., 1])*Nt + cathode_ticks, signal_length))
-    # print(jnp.repeat((currents_idx[..., 0]*Ny + currents_idx[..., 1])*Nt + cathode_ticks, signal_length, axis=0))
+    signal_indices = jnp.ravel((currents_idx[..., 0, None]*Ny + currents_idx[..., 1, None])*Nt + jnp.arange(response.shape[-1] - response_roi_length, response.shape[-1]))
+    # baseline_indices = jnp.ravel(jnp.repeat((currents_idx[..., 0]*Ny + currents_idx[..., 1])*Nt + cathode_ticks, response_roi_length))
+    # print(jnp.repeat((currents_idx[..., 0]*Ny + currents_idx[..., 1])*Nt + cathode_ticks, response_roi_length, axis=0))
 
     # Update wfs with accumulated signals - Optimize broadcasting
     wfs = wfs.ravel()
-    # wfs = wfs.at[(flat_indices,)].add((response.take(signal_indices) - response.take(baseline_indices))*jnp.repeat(charge, signal_length))
+    # wfs = wfs.at[(flat_indices,)].add((response.take(signal_indices) - response.take(baseline_indices))*jnp.repeat(charge, response_roi_length))
     
     # More efficient broadcasting - use broadcast_to instead of repeat
     # Pre-compute shape for better performance
-    charge_shape = (charge.shape[0], signal_length)
+    charge_shape = (charge.shape[0], response_roi_length)
     charge_broadcasted = jnp.broadcast_to(charge[:, None], charge_shape).reshape(-1)
     
     # Combine response lookup and multiplication for better cache efficiency
@@ -195,7 +195,7 @@ def accumulate_signals(wfs, currents_idx, charge, response, response_cum, pixID,
     #Now correct for the missed ticks at the beginning
     # Cache the common base index calculation to avoid recomputation
     base_curr_indices = (currents_idx[..., 0]*Ny + currents_idx[..., 1])*Nt
-    integrated_start = response_cum.take(jnp.ravel(base_curr_indices + response.shape[-1] - signal_length))
+    integrated_start = response_cum.take(jnp.ravel(base_curr_indices + response.shape[-1] - response_roi_length))
     real_start = response_cum.take(jnp.ravel(base_curr_indices + cathode_ticks))
     difference = (integrated_start - real_start)*charge
 

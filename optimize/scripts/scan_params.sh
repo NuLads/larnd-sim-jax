@@ -133,7 +133,7 @@ python3 -m optimize.example_run \
     --track_z_bound 28 \
     --electron_sampling_resolution ${ELEC_RESOLUTION} \
     --number_pix_neighbors ${N_NEIGH} \
-    --signal_length ${SIGNAL_LENGTH} \
+    --response_roi_length ${SIGNAL_LENGTH} \
     --mode 'lut' \
     --lut_file src/larndsim/detector_properties/response_44_v2a_full_tick.npz \
     --loss_fn ${LOSS} \
@@ -156,7 +156,7 @@ python3 -m optimize.example_run \
     # --loss_fn SDTW \
     # --keep_in_memory
     # --number_pix_neighbors 0 \
-    # --signal_length 191 \
+    # --response_roi_length 191 \
     # --mode 'parametrized' 
     # --loss_fn space_match
     #--lr_scheduler exponential_decay \

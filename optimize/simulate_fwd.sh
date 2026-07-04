@@ -42,7 +42,7 @@ python3 -m optimize.simulate \
     --output_file ${OUTPUT_FILE} \
     --number_pix_neighbors 4 \
     --electron_sampling_resolution ${SAMPLING_STEP} \
-    --signal_length 400 \
+    --response_roi_length 400 \
     --mode 'lut' \
     --lut_file src/larndsim/detector_properties/response_44_v2a_full_tick.npz \
     --noise \

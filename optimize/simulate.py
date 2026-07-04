@@ -101,13 +101,13 @@ def main(config):
         'mc_diff',
         'electron_sampling_resolution',
         'number_pix_neighbors',
-        'signal_length',
+        'response_roi_length',
         'use_dedx_density',
         'dedx_density_mode',
     ]
 
 
-    ref_params = ref_params.replace(**{k: getattr(config, k) for k in params_to_apply}, time_window=config.signal_length)
+    ref_params = ref_params.replace(**{k: getattr(config, k) for k in params_to_apply}, time_window=config.response_roi_length)
 
     if not config.noise:
         ref_params = ref_params.replace(RESET_NOISE_CHARGE=0, UNCORRELATED_NOISE_CHARGE=0)
@@ -247,7 +247,8 @@ if __name__ == '__main__':
     parser.add_argument('--mode', type=str, help='Mode used to simulate the induced current on the pixels', choices=['lut', 'parametrized'], default='lut')
     parser.add_argument('--electron_sampling_resolution', type=float, required=True, default=0.1, help='Electron sampling resolution')
     parser.add_argument('--number_pix_neighbors', type=int, required=True, help='Number of pixel neighbors')
-    parser.add_argument('--signal_length', type=int, required=True, help='Signal length')
+    parser.add_argument('--response_roi_length', dest="response_roi_length", type=int, required=True,
+                        help='Length in ticks of the induced-current response template applied per segment (response ROI).')
     parser.add_argument('--lut_file', type=str, required=False, default="", help='Path to the LUT file')
     parser.add_argument('--noise', action='store_true', help='Add noise to the simulation')
     parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility')

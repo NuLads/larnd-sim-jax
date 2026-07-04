@@ -146,7 +146,7 @@ def simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_temp
     Npixels = unique_pixels.shape[0]
     Nticks = int(params.time_interval[1] / params.t_sampling) + 1
     Ntemplates, Nx, Ny, Nt = response_template.shape
-    sig_len = params.signal_length
+    sig_len = params.response_roi_length
 
     # --- 1. PREPARE MAIN PIXEL DATA (DIFFERENTIABLE TIME SHIFT) ---
     pix_renum = jnp.searchsorted(unique_pixels, pixels.ravel(), method='sort')
@@ -470,7 +470,7 @@ def simulate_signals_new(params, unique_pixels, pixels, t0_after_diff, response_
         params: Simulation parameters containing:
             - time_interval: Tuple of (t_start, t_end) in microseconds
             - t_sampling: Time sampling interval in microseconds
-            - signal_length: Number of time samples in the signal template
+            - response_roi_length: Number of time samples in the induced-current response template applied per segment
             - number_pix_neighbors: Number of neighbor pixels in each direction
             - long_diff_template: Array of longitudinal diffusion values for template indexing
         unique_pixels (jnp.ndarray): 1D array of unique pixel IDs that received charge.
@@ -539,8 +539,8 @@ def simulate_signals_new(params, unique_pixels, pixels, t0_after_diff, response_
     response_cum = jnp.cumsum(response_template, axis=-1)  # Needed for corrections and neighbor processing
 
     # Compute indices for updating wfs, taking into account start_ticks
-    start_ticks = response_template.shape[-1] - params.signal_length - cathode_ticks
-    time_ticks = start_ticks[..., None] + jnp.arange(params.signal_length)
+    start_ticks = response_template.shape[-1] - params.response_roi_length - cathode_ticks
+    time_ticks = start_ticks[..., None] + jnp.arange(params.response_roi_length)
 
     time_ticks = jnp.where((time_ticks <= 0 ) | (time_ticks >= Nticks - 1), 0, time_ticks+1) # it should be start_ticks +1 in theory but we cheat by putting the cumsum in the garbage too when strarting at 0 to mimic the expected behavior
 
@@ -552,7 +552,7 @@ def simulate_signals_new(params, unique_pixels, pixels, t0_after_diff, response_
     flat_indices = jnp.ravel(end_indices)
 
     # More efficient broadcasting - use broadcast_to instead of ones multiplication
-    charge = jnp.broadcast_to(nelectrons[:, None], (nelectrons.shape[0], params.signal_length)).reshape(-1)
+    charge = jnp.broadcast_to(nelectrons[:, None], (nelectrons.shape[0], params.response_roi_length)).reshape(-1)
 
     Ntemplates, Nx, Ny, Nt = response_template.shape
 
@@ -573,12 +573,12 @@ def simulate_signals_new(params, unique_pixels, pixels, t0_after_diff, response_
     c = (long_diff - x0) * (long_diff - x1) / ((x2 - x0) * (x2 - x1))
 
     # More efficient broadcasting for interpolation coefficients
-    signal_shape = (a.shape[0], params.signal_length)
+    signal_shape = (a.shape[0], params.response_roi_length)
     a_broadcast = jnp.broadcast_to(a[:, None], signal_shape).reshape(-1)
     b_broadcast = jnp.broadcast_to(b[:, None], signal_shape).reshape(-1)
     c_broadcast = jnp.broadcast_to(c[:, None], signal_shape).reshape(-1)
 
-    signal_indices = jnp.ravel((idx[..., None]*Nx*Ny + currents_idx[..., 0, None]*Ny + currents_idx[..., 1, None])*Nt + jnp.arange(response_template.shape[-1] - params.signal_length, response_template.shape[-1]))
+    signal_indices = jnp.ravel((idx[..., None]*Nx*Ny + currents_idx[..., 0, None]*Ny + currents_idx[..., 1, None])*Nt + jnp.arange(response_template.shape[-1] - params.response_roi_length, response_template.shape[-1]))
 
     # Cache template lookups to avoid repeated computation
     template_values_at_indices = response_template.take(signal_indices)
@@ -593,7 +593,7 @@ def simulate_signals_new(params, unique_pixels, pixels, t0_after_diff, response_
     #Now correct for the missed ticks at the beginning
     # Cache the common index calculation to avoid recomputation
     base_indices = (currents_idx[..., 0]*Ny + currents_idx[..., 1])*Nt
-    integrated_start = response_cum.take(jnp.ravel(base_indices + response_template.shape[-1] - params.signal_length))
+    integrated_start = response_cum.take(jnp.ravel(base_indices + response_template.shape[-1] - params.response_roi_length))
     real_start = response_cum.take(jnp.ravel(base_indices + cathode_ticks))
     difference = (integrated_start - real_start)*nelectrons
 
@@ -612,7 +612,7 @@ def simulate_signals_new(params, unique_pixels, pixels, t0_after_diff, response_
 
     cathode_ticks_neigh = (t0_neighbors/params.t_sampling).astype(int) #Start tick from distance to the end of the cathode
     #WARNING: Assuming here that response_template[0] corresponds to no diff
-    wfs = accumulate_signals(wfs, currents_idx_neigh, nelectrons_neigh, response_template[0], response_cum, pix_renumbering_neigh, cathode_ticks_neigh, params.signal_length)
+    wfs = accumulate_signals(wfs, currents_idx_neigh, nelectrons_neigh, response_template[0], response_cum, pix_renumbering_neigh, cathode_ticks_neigh, params.response_roi_length)
 
     return wfs
 
@@ -734,14 +734,14 @@ def select_split_roi(params, wfs):
     """Classify each pixel as small- or large-ROI based on the tick-width of its above-threshold span.
 
     Returns (nb_small, is_small_mask, roi_start_per_pixel). Small-ROI pixels have their signal
-    contained in a `roi_split_length`-wide window; large-ROI pixels get the full waveform.
+    contained in a `wfs_roi_length`-wide window; large-ROI pixels get the full waveform.
     This is discrete/non-differentiable — callers should wrap with stop_gradient.
     """
-    roi_threshold = params.roi_threshold
+    wfs_roi_threshold = params.wfs_roi_threshold
     Npix, Nticks = wfs.shape
-    roi_start = jnp.argmax(wfs > roi_threshold, axis=1)
-    roi_end = Nticks - jnp.argmax(wfs[:, ::-1] > roi_threshold, axis=1) - 1
-    is_small = ((roi_end - roi_start) < params.roi_split_length) & (roi_start > 0)
+    roi_start = jnp.argmax(wfs > wfs_roi_threshold, axis=1)
+    roi_end = Nticks - jnp.argmax(wfs[:, ::-1] > wfs_roi_threshold, axis=1) - 1
+    is_small = ((roi_end - roi_start) < params.wfs_roi_length) & (roi_start > 0)
     nb_small = jnp.sum(is_small)
     return nb_small, is_small, roi_start
 
@@ -751,7 +751,7 @@ def simulate_probabilistic_bucketed(params, wfs, unique_pixels, is_small, roi_st
                                     padded_small_nb, padded_large_nb, min_log_prob=-18.42):
     """Two-bucket waveform-ROI dispatch of simulate_probabilistic.
 
-    Small-ROI pixels get a `roi_split_length`-tick sliced input; large-ROI pixels get the full
+    Small-ROI pixels get a `wfs_roi_length`-tick sliced input; large-ROI pixels get the full
     waveform. Both buckets run through `get_adc_values_average_noise_vmap` independently and
     their outputs are scattered back into the same `(Npix, ...)` shape as the single-bucket path.
 
@@ -761,9 +761,9 @@ def simulate_probabilistic_bucketed(params, wfs, unique_pixels, is_small, roi_st
     Returns the same 7-tuple as `simulate_probabilistic`.
     """
     Npix, Nticks = wfs.shape
-    L_small = params.roi_split_length
+    L_small = params.wfs_roi_length
     H = params.MAX_ADC_VALUES
-    R = params.roi_nticks
+    R = params.hit_roi_length
 
     trash = Npix
     small_idx = jnp.argwhere(is_small, size=padded_small_nb, fill_value=trash)[:, 0]
@@ -842,10 +842,10 @@ def simulate_probabilistic(params, wfs, unique_pixels):
     """
 
     # Single-bucket per-hit ROI: `get_adc_values_average_noise_vmap` emits a
-    # compact `(Npix, MAX_ADC_VALUES, roi_nticks)` window per hit centered on the
-    # argmax of the tick distribution, plus `roi_start` (absolute-tick offset per
-    # hit) and `log_lambda` (full-window logsumexp). The two window shape params
-    # (`roi_nticks`, `pad_before`) are configured via `Params_template`.
+    # compact `(Npix, MAX_ADC_VALUES, hit_roi_length)` window per hit centered on the
+    # anchor of the tick distribution, plus `roi_start` (absolute-tick offset per
+    # hit) and `log_lambda` (full-window logsumexp). The window shape params
+    # (`hit_roi_length`, `hit_roi_pad_before`) are configured via `Params_template`.
     ticks_prob, charge_distrib, roi_start, log_lambda = get_adc_values_average_noise_vmap(params, wfs)
 
     adcs_distrib = digitize(params, charge_distrib)

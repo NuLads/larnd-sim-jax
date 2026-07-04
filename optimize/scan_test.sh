@@ -39,7 +39,7 @@ python3 -m optimize.example_run \
     --max_clip_norm_val ${MAX_CLIP_NORM_VAL} \
     --electron_sampling_resolution 0.005 \
     --number_pix_neighbors 0 \
-    --signal_length 150 \
+    --response_roi_length 150 \
     --mode 'parametrized' \
     --loss_fn ${LOSS} \
     --fit_type 'scan' \

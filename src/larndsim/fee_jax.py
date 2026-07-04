@@ -324,7 +324,7 @@ def get_adc_values(params, pixels_signals, noise_rng_key):
 def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_uncorr,
                        threshold, interval, Nvalues, min_log_prob,
                        excess_offset=0.0, smooth_sigma_scale=1.0,
-                       roi_nticks=400, pad_before=300,
+                       hit_roi_length=400, hit_roi_pad_before=300,
                        hit_roi_anchor_mode="argmax_prob"):
     Nticks = q_sum.shape[0]
     z_scale = 1.0 / sigma
@@ -402,9 +402,9 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     else:  # "argmax_prob" — default, current behaviour
         argmax_tick = jnp.argmax(log_total_hit_dist_tick)
 
-    max_start = max((Nticks - 1) - roi_nticks, 0)
-    roi_start_hit = jnp.clip(argmax_tick - pad_before, 0, max_start)
-    tick_offsets = roi_start_hit + jnp.arange(roi_nticks)
+    max_start = max((Nticks - 1) - hit_roi_length, 0)
+    roi_start_hit = jnp.clip(argmax_tick - hit_roi_pad_before, 0, max_start)
+    tick_offsets = roi_start_hit + jnp.arange(hit_roi_length)
     log_prob_roi = log_total_hit_dist_tick[tick_offsets]
     esperance_roi = esperance_value[tick_offsets]
 
@@ -419,8 +419,8 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
     Npix, Nticks = wfs.shape
     Nvalues = params.fee_paths_scaling
     interval = round((3 * params.CLOCK_CYCLE + params.ADC_HOLD_DELAY * params.CLOCK_CYCLE) / params.t_sampling)
-    roi_nticks = params.roi_nticks
-    pad_before = params.pad_before
+    hit_roi_length = params.hit_roi_length
+    hit_roi_pad_before = params.hit_roi_pad_before
     hit_roi_anchor_mode = params.hit_roi_anchor_mode
 
     # --- Vectorize the single-step function ---
@@ -452,7 +452,7 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
                 params.DISCRIMINATION_THRESHOLD, interval,
                 Nvalues, min_log_prob,
                 params.excess_offset, params.smooth_sigma_scale,
-                roi_nticks, pad_before, hit_roi_anchor_mode
+                hit_roi_length, hit_roi_pad_before, hit_roi_anchor_mode
             )
             # LogSumExp gives the log of the total probability
             total_prob_per_pixel = jax.nn.logsumexp(new_probs, axis=1)
@@ -462,8 +462,8 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
         def _inactive_branch(operand):
             """A cheap pass-through, executed when the whole batch is inactive."""
             return operand, (
-                jnp.full((Npix, roi_nticks), min_log_prob, dtype=jnp.float32),
-                jnp.zeros((Npix, roi_nticks), dtype=jnp.float32),
+                jnp.full((Npix, hit_roi_length), min_log_prob, dtype=jnp.float32),
+                jnp.zeros((Npix, hit_roi_length), dtype=jnp.float32),
                 jnp.zeros((Npix,), dtype=jnp.int32),
                 jnp.full((Npix,), min_log_prob, dtype=jnp.float32),
                 )

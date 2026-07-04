@@ -248,15 +248,15 @@ class ParamFitter:
         self.current_mode = config.mode
         self.electron_sampling_resolution = config.electron_sampling_resolution
         self.number_pix_neighbors = config.number_pix_neighbors
-        self.signal_length = config.signal_length
-        self.roi_nticks = getattr(config, "roi_nticks", None)
-        self.pad_before = getattr(config, "pad_before", None)
+        self.response_roi_length = config.response_roi_length
+        self.hit_roi_length = getattr(config, "hit_roi_length", None)
+        self.hit_roi_pad_before = getattr(config, "hit_roi_pad_before", None)
         self.max_adc_values = getattr(config, "max_adc_values", None)
         self.fee_paths_scaling = getattr(config, "fee_paths_scaling", None)
         self.hit_roi_anchor_mode = getattr(config, "hit_roi_anchor_mode", None)
         self.wfs_roi_mode = getattr(config, "wfs_roi_mode", None)
-        self.roi_threshold = getattr(config, "roi_threshold", None)
-        self.roi_split_length = getattr(config, "roi_split_length", None)
+        self.wfs_roi_threshold = getattr(config, "wfs_roi_threshold", None)
+        self.wfs_roi_length = getattr(config, "wfs_roi_length", None)
         self.use_dedx_density = bool(getattr(config, "use_dedx_density", False))
         self.dedx_density_mode = getattr(config, "dedx_density_mode", "histogram")
         self.probabilistic_sim = probabilistic_sim
@@ -402,16 +402,16 @@ class ParamFitter:
         ref_params = ref_params.replace(
             electron_sampling_resolution=self.electron_sampling_resolution,
             number_pix_neighbors=self.number_pix_neighbors,
-            signal_length=self.signal_length,
-            time_window=self.signal_length)
+            response_roi_length=self.response_roi_length,
+            time_window=self.response_roi_length)
 
-        # Optional per-hit ROI window overrides for the probabilistic FEE output.
+        # Optional hit-ROI window overrides for the probabilistic FEE output.
         # Both are static (bake into JIT shapes), so leave them at defaults unless
         # explicitly requested.
-        if self.roi_nticks is not None:
-            ref_params = ref_params.replace(roi_nticks=int(self.roi_nticks))
-        if self.pad_before is not None:
-            ref_params = ref_params.replace(pad_before=int(self.pad_before))
+        if self.hit_roi_length is not None:
+            ref_params = ref_params.replace(hit_roi_length=int(self.hit_roi_length))
+        if self.hit_roi_pad_before is not None:
+            ref_params = ref_params.replace(hit_roi_pad_before=int(self.hit_roi_pad_before))
         # Optional FEE compute-shape overrides. Both are static integers that bake
         # into JIT shapes:
         #   MAX_ADC_VALUES: number of hits per pixel (H). Reduce for single-track fits (e.g. 6).
@@ -424,10 +424,10 @@ class ParamFitter:
             ref_params = ref_params.replace(hit_roi_anchor_mode=str(self.hit_roi_anchor_mode))
         if self.wfs_roi_mode is not None:
             ref_params = ref_params.replace(wfs_roi_mode=str(self.wfs_roi_mode))
-        if self.roi_threshold is not None:
-            ref_params = ref_params.replace(roi_threshold=float(self.roi_threshold))
-        if self.roi_split_length is not None:
-            ref_params = ref_params.replace(roi_split_length=int(self.roi_split_length))
+        if self.wfs_roi_threshold is not None:
+            ref_params = ref_params.replace(wfs_roi_threshold=float(self.wfs_roi_threshold))
+        if self.wfs_roi_length is not None:
+            ref_params = ref_params.replace(wfs_roi_length=int(self.wfs_roi_length))
         
         if self.lut_file is not None:
             self.response, ref_params = load_lut(self.lut_file, ref_params)

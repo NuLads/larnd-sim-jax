@@ -300,7 +300,7 @@ class Params_template:
         response_bin_size (float): Response bin size in microseconds.
         number_pix_neighbors (int): Number of neighboring pixels considered.
         electron_sampling_resolution (float): Electron sampling resolution.
-        signal_length (float): Length of the signal window.
+        response_roi_length (float): Length in ticks of the induced-current response template applied per segment.
         MAX_ADC_VALUES (int): Maximum number of ADC values stored per pixel.
         DISCRIMINATION_THRESHOLD (float): Discrimination threshold for signal.
         ADC_HOLD_DELAY (int): ADC hold delay in clock cycles.
@@ -351,7 +351,7 @@ class Params_template:
     response_bin_size: float = struct.field(pytree_node=False)
     number_pix_neighbors: int = struct.field(pytree_node=False)
     electron_sampling_resolution: float = struct.field(pytree_node=False)
-    signal_length: float = struct.field(pytree_node=False)
+    response_roi_length: float = struct.field(pytree_node=False)
 
     response_full_drift_t: float = struct.field(pytree_node=False)
     #: Maximum number of ADC values stored per pixel
@@ -398,20 +398,21 @@ class Params_template:
     long_diff_template: jax.Array = struct.field(pytree_node=False, default=None)
     long_diff_extent: int = struct.field(pytree_node=False, default=20)
     fee_paths_scaling: int = struct.field(pytree_node=False, default=100)  # Scaling factor for fee paths
-    roi_nticks: int = struct.field(pytree_node=False, default=400)  # Per-hit output window length in ticks
-    pad_before: int = struct.field(pytree_node=False, default=300)  # Ticks kept before the anchor of the per-hit distribution
+    # Hit ROI — the per-hit output window emitted by fee_jax's `_find_one_hit_step`.
+    hit_roi_length: int = struct.field(pytree_node=False, default=400)      # Length of the per-hit output window in ticks.
+    hit_roi_pad_before: int = struct.field(pytree_node=False, default=300)  # Ticks kept before the anchor of the per-hit distribution.
     # Hit-ROI anchor strategy for the per-hit output window:
     #   "argmax_prob"        — anchor on argmax(log_total_hit_dist_tick) (default; noise-smoothed peak).
     #   "threshold_crossing" — anchor on first tick where reset-adjusted q_sum crosses threshold (physical, cheaper).
     hit_roi_anchor_mode: str = struct.field(pytree_node=False, default="argmax_prob")
-    # Waveform-ROI dispatch (bucketing on the raw waveform before fee_jax).
+    # Waveform ROI — dispatch that slices the input `wfs` before fee_jax (bucketed mode).
     #   "single"   — one fee_jax call over all pixels on the full waveform (default; current behaviour).
-    #   "bucketed" — two fee_jax calls: small-ROI pixels get a windowed input of length roi_split_length,
+    #   "bucketed" — two fee_jax calls: small-ROI pixels get a windowed input of length wfs_roi_length,
     #                the rest get the full waveform. Reduces working memory when most pixels have a
     #                narrow above-threshold span.
     wfs_roi_mode: str = struct.field(pytree_node=False, default="single")
-    roi_threshold: float = struct.field(pytree_node=False, default=0.01)   # Above-this current threshold for waveform-ROI classification (bucketed mode).
-    roi_split_length: int = struct.field(pytree_node=False, default=400)   # Ticks kept for the "small" waveform-ROI bucket.
+    wfs_roi_threshold: float = struct.field(pytree_node=False, default=0.01)  # Above-this-current threshold for waveform-ROI classification (bucketed mode).
+    wfs_roi_length: int = struct.field(pytree_node=False, default=400)        # Ticks kept for the "small" waveform-ROI bucket.
     nb_tran_diff_bins: int = struct.field(pytree_node=False, default=5)
     hit_prob_threshold: float = struct.field(pytree_node=False, default=1e-5)  # Threshold for hit probability
     tran_diff_bin_edges: jax.Array = struct.field(pytree_node=False, default=None) # Bin edges for transverse diffusion
@@ -530,7 +531,7 @@ def load_detector_properties(params_cls, detprop_file, pixel_file):
         "response_bin_size": 0.04434,
         "number_pix_neighbors": 1,
         "electron_sampling_resolution": 0.001,
-        "signal_length": 150,
+        "response_roi_length": 150,
         "use_dedx_density": False,
         "dedx_density_mode": "histogram",
         "MAX_ADC_VALUES": 10,

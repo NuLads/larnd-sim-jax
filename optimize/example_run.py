@@ -317,7 +317,8 @@ if __name__ == '__main__':
     parser.add_argument('--mode', type=str, help='Mode used to simulate the induced current on the pixels', choices=['lut', 'parametrized'], default='lut')
     parser.add_argument('--electron_sampling_resolution', type=float, required=True, help='Electron sampling resolution')
     parser.add_argument('--number_pix_neighbors', type=int, required=True, help='Number of pixel neighbors')
-    parser.add_argument('--signal_length', type=int, required=True, help='Signal length')
+    parser.add_argument('--response_roi_length', dest="response_roi_length", type=int, required=True,
+                        help='Length in ticks of the induced-current response template applied per segment (response ROI).')
     parser.add_argument('--lut_file', type=str, required=False, default="src/larndsim/detector_properties/response_44_v2a_full_tick.npz", help='Path to the LUT file')
     parser.add_argument('--keep_in_memory', default=False, action="store_true", help='Keep the expected output of each batch in memory')
     parser.add_argument('--compute_target_hessian', default=False, action="store_true", help='Computes the Hessian at the target for every batch')
@@ -337,10 +338,10 @@ if __name__ == '__main__':
     parser.add_argument('--live_selection', default=False, action="store_true", help='Whether to run live selection or not')
     parser.add_argument('--read_target', default=False, action="store_true", help='read data(-like) target')
     parser.add_argument('--probabilistic_sim', '--probabilistic-sim', default=False, action="store_true", help='Use probabilistic sim')
-    parser.add_argument('--roi_nticks', dest="roi_nticks", type=int, default=None,
-                        help='Length of the per-hit ROI window emitted by the probabilistic FEE. If unset, uses the Params_template default.')
-    parser.add_argument('--pad_before', dest="pad_before", type=int, default=None,
-                        help='Ticks kept before the argmax of the per-hit distribution. If unset, uses the Params_template default.')
+    parser.add_argument('--hit_roi_length', dest="hit_roi_length", type=int, default=None,
+                        help='Length in ticks of the per-hit output window emitted by the probabilistic FEE (hit ROI). If unset, uses the Params_template default.')
+    parser.add_argument('--hit_roi_pad_before', dest="hit_roi_pad_before", type=int, default=None,
+                        help='Ticks kept before the anchor of the per-hit distribution (hit ROI). If unset, uses the Params_template default.')
     parser.add_argument('--max_adc_values', dest="max_adc_values", type=int, default=None,
                         help='Number of hits per pixel emitted by the FEE (scan length H). Static; changing it triggers a JIT recompile. Default 10.')
     parser.add_argument('--fee_paths_scaling', dest="fee_paths_scaling", type=int, default=None,
@@ -350,10 +351,10 @@ if __name__ == '__main__':
                         help='How the per-hit output window is positioned. "argmax_prob" (default) anchors on the peak of the noise-smoothed probability marginal; "threshold_crossing" anchors on the first tick where the reset-adjusted cumulative charge exceeds threshold (more direct, cheaper).')
     parser.add_argument('--wfs_roi_mode', dest="wfs_roi_mode", type=str, default=None,
                         choices=["single", "bucketed"],
-                        help='Waveform-ROI dispatch mode. "single" (default) runs one fee_jax call on the full waveform for all pixels; "bucketed" classifies pixels by above-threshold span and slices small-ROI pixels down to `roi_split_length` ticks before fee_jax, reducing working memory.')
-    parser.add_argument('--roi_threshold', dest="roi_threshold", type=float, default=None,
+                        help='Waveform-ROI dispatch mode. "single" (default) runs one fee_jax call on the full waveform for all pixels; "bucketed" classifies pixels by above-threshold span and slices small-ROI pixels down to `wfs_roi_length` ticks before fee_jax, reducing working memory.')
+    parser.add_argument('--wfs_roi_threshold', dest="wfs_roi_threshold", type=float, default=None,
                         help='Above-this-current threshold (used only in --wfs_roi_mode bucketed) for classifying pixels as small-ROI. Default 0.01.')
-    parser.add_argument('--roi_split_length', dest="roi_split_length", type=int, default=None,
+    parser.add_argument('--wfs_roi_length', dest="wfs_roi_length", type=int, default=None,
                         help='Ticks kept for the "small" waveform-ROI bucket (used only in --wfs_roi_mode bucketed). Default 400.')
     parser.add_argument('--shuffle_bt', default=False, action="store_true", help='shuffle the batch order within an epoch')
     parser.add_argument('--sz_mini_bt', type=int, default=1, help='Number of mini-batch for one update')

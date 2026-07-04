@@ -116,7 +116,7 @@ class LUTProbabilisticSimulation(SimulationStrategy):
         wfs = pad_to_closest_multiple(wfs, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
 
         # Dispatch: single-call fee_jax on full waveform, or two-bucket dispatch that
-        # slices small-ROI pixels down to `roi_split_length` ticks. Bucketed mode requires
+        # slices small-ROI pixels down to `wfs_roi_length` ticks. Bucketed mode requires
         # host-side padding of the two batch sizes (below), so it can't stay under a single
         # top-level jit. The inner `simulate_probabilistic_bucketed` is still jit'd, and
         # `pad_size` buffers to bound recompiles.

@@ -70,7 +70,7 @@ python3 -m optimize.example_run \
     --max_clip_norm_val 1 \
     --electron_sampling_resolution 0.001 \
     --number_pix_neighbors 0 \
-    --signal_length 191 \
+    --response_roi_length 191 \
     --mode 'parametrized' \
     --loss_fn ${LOSS} \
     --fit_type 'minuit' \
@@ -84,7 +84,7 @@ python3 -m optimize.example_run \
     # --lut_file /home/pgranger/larnd-sim/jit_version/original/build/lib/larndsim/bin/response_44.npy
     # --keep_in_memory
     # --number_pix_neighbors 0 \
-    # --signal_length 191 \
+    # --response_roi_length 191 \
     # --mode 'parametrized' 
     # --loss_fn space_match
     #--lr_scheduler exponential_decay \

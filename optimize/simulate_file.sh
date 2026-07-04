@@ -30,7 +30,7 @@ python3 -m optimize.simulate \
     --output_file output/output-test.h5 \
     --electron_sampling_resolution 0.005 \
     --number_pix_neighbors 0 \
-    --signal_length 191 \
+    --response_roi_length 191 \
     --mode 'parametrized' \
     --noise \
     --jac \

@@ -121,7 +121,7 @@ python3 -m optimize.example_run \
     --max_clip_norm_val ${MAX_CLIP_NORM_VAL} \
     --electron_sampling_resolution ${SAMPLING_STEP} \
     --number_pix_neighbors ${N_NEIGH} \
-    --signal_length ${SIGNAL_LENGTH} \
+    --response_roi_length ${SIGNAL_LENGTH} \
     --mode ${MODE} \
     --lut_file ../Data_selection/response_44_v2a_full_tick.npz \
     --loss_fn ${LOSS} \
@@ -141,7 +141,7 @@ python3 -m optimize.example_run \
     # --lut_file /home/pgranger/larnd-sim/jit_version/original/build/lib/larndsim/bin/response_44.npy
     # --keep_in_memory
     # --number_pix_neighbors 0 \
-    # --signal_length 191 \
+    # --response_roi_length 191 \
     # --mode 'parametrized'
     # --profile_gradient 
     # --loss_fn space_match

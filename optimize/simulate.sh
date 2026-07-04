@@ -37,7 +37,7 @@ python3 -m optimize.simulate \
     --output_file output/output_parametrized_${SLURM_ARRAY_TASK_ID}.h5 \
     --electron_sampling_resolution 0.005 \
     --number_pix_neighbors 0 \
-    --signal_length 150 \
+    --response_roi_length 150 \
     --mode 'parametrized' \
     --diffusion_in_current_sim \
     --out_np \
@@ -48,7 +48,7 @@ python3 -m optimize.simulate \
     --output_file output/output_lut_${SLURM_ARRAY_TASK_ID}.h5 \
     --electron_sampling_resolution 0.005 \
     --number_pix_neighbors 4 \
-    --signal_length 150 \
+    --response_roi_length 150 \
     --mode 'lut' \
     --lut_file src/larndsim/detector_properties/response_44.npy \
     --out_np \

@@ -9,7 +9,7 @@ for ifile in $(seq 0 ${NFILES}); do
         --output_file output/output_${ifile}.h5 \
         --electron_sampling_resolution 0.005 \
         --number_pix_neighbors 4 \
-        --signal_length 100 \
+        --response_roi_length 100 \
         --mode 'lut' \
         --lut_file src/larndsim/detector_properties/response_44.npy \
         --chop
@@ -19,7 +19,7 @@ for ifile in $(seq 0 ${NFILES}); do
     #     --output_file output/output_parametrized_${ifile}.h5 \
     #     --electron_sampling_resolution 0.005 \
     #     --number_pix_neighbors 0 \
-    #     --signal_length 191 \
+    #     --response_roi_length 191 \
     #     --mode 'parametrized' \
     #     --noise \
     #     --diffusion_in_current_sim

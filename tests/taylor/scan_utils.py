@@ -28,7 +28,7 @@ def setup_params_and_tracks(
     pixel_layouts='src/larndsim/pixel_layouts/multi_tile_layout-2.4.16_v4.yaml',
     lut_file='src/larndsim/detector_properties/response_44_v2a_full_tick.npz',
     electron_sampling=0.01,
-    signal_length=150,
+    response_roi_length=150,
     number_pix_neighbors=4,
 ):
     """Load detector config, LUT, and tracks split by event.
@@ -51,8 +51,8 @@ def setup_params_and_tracks(
     ref_params = ref_params.replace(
         electron_sampling_resolution=electron_sampling,
         number_pix_neighbors=number_pix_neighbors,
-        signal_length=signal_length,
-        time_window=signal_length,
+        response_roi_length=response_roi_length,
+        time_window=response_roi_length,
         diffusion_in_current_sim=True,
     )
 
@@ -119,7 +119,7 @@ def compute_event_all_params(
     # --- Pipeline wrappers (take full params object) ---
     def pipeline_smooth(params):
         wfs, unique_pixels = simulate_wfs(params, response, tracks, fields)
-        log_prob, charge = get_adc_values_average_noise_vmap(params, wfs)
+        log_prob, charge, _, _ = get_adc_values_average_noise_vmap(params, wfs)
         adcs_distrib = digitize(params, charge)
         ticks_prob = jnp.exp(log_prob)
         _, expected_adcs, _ = get_average_hit_values(ticks_prob, adcs_distrib)
@@ -127,7 +127,7 @@ def compute_event_all_params(
 
     def pipeline_original(params):
         wfs, unique_pixels = simulate_wfs(params, response, tracks, fields)
-        adcs_distrib, _, _, log_tp, _ = simulate_probabilistic(params, wfs, unique_pixels)
+        adcs_distrib, _, _, log_tp, _, _, _ = simulate_probabilistic(params, wfs, unique_pixels)
         ticks_prob = jnp.exp(log_tp)
         _, expected_adcs, _ = get_average_hit_values(ticks_prob, adcs_distrib)
         return expected_adcs[:, 0]
