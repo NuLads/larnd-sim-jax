@@ -10,7 +10,11 @@ import shutil
 import pickle
 import numpy as np
 from .ranges import ranges
-from larndsim.sim_jax import get_size_history
+from scipy.optimize import minimize
+from larndsim.sim_jax import (
+    get_size_history, simulate_drift_new, simulate_signals, simulate_probabilistic,
+    pad_to_closest_multiple, get_roi_counts, simulate_wfs
+)
 from larndsim.losses_jax import mse_adc, mse_time, mse_time_adc, chamfer_3d, sdtw_adc, sdtw_time, sdtw_time_adc, adc2charge, nll_loss, llhd_loss #, sinkhorn_loss
 from larndsim.consts_jax import build_params_class, load_detector_properties, load_lut
 from larndsim.detsim_jax import validate_event_ids_for_packing, validate_local_event_ids
@@ -34,6 +38,201 @@ from ctypes import cdll
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+# ── Chain kinematics helpers (used by fit_chain_positions mode) ───────────────
+
+def _highland_sigma_mcs(step_cm, momentum_GeV=3.0):
+    r = step_cm / 14.0  # X0_LAR_CM = 14.0 cm for LAr
+    return float((0.0136 / momentum_GeV) * np.sqrt(r) * (1.0 + 0.038 * np.log(r)))
+
+def _build_local_basis_chain(u):
+    cy = jnp.linalg.cross(u, jnp.array([0., 1., 0.]))
+    cx = jnp.linalg.cross(u, jnp.array([1., 0., 0.]))
+    c  = jnp.where(jnp.linalg.norm(cy) > 1e-4, cy, cx)
+    v  = c / jnp.linalg.norm(c)
+    return v, jnp.linalg.cross(u, v)
+
+def _deflection_chain_forward(x0, theta0, phi0, dtheta, dphi, step_len):
+    """Propagate a deflection chain from entry x0 with n_chain segments.
+    LEGACY: used only for backward-compat with old checkpoints.
+    New code uses _absolute_chain_forward.
+    """
+    u0 = jnp.array([jnp.sin(theta0) * jnp.cos(phi0),
+                    jnp.sin(theta0) * jnp.sin(phi0),
+                    jnp.cos(theta0)])
+    u0 = u0 / jnp.linalg.norm(u0)
+    def _step(carry, ang):
+        pos, u = carry
+        v, w = _build_local_basis_chain(u)
+        ct, st = jnp.cos(ang[0]), jnp.sin(ang[0])
+        cp, sp = jnp.cos(ang[1]), jnp.sin(ang[1])
+        u2 = ct * u + st * cp * v + st * sp * w
+        u2 = u2 / jnp.linalg.norm(u2)
+        return (pos + step_len * u, u2), (pos + step_len * u, u2)
+    (pl, ul), (pm, um) = jax.lax.scan(_step, (x0, u0), jnp.stack([dtheta, dphi], axis=1))
+    positions  = jnp.concatenate([x0[None], pm, (pl + step_len * ul)[None]], axis=0)
+    directions = jnp.concatenate([u0[None], um], axis=0)
+    return positions, directions
+
+
+def _absolute_chain_forward(x0, thetas, phis, step_len):
+    """Propagate a chain where each segment has an independent absolute direction.
+
+    Angles layout: angles[:n_chain] = thetas, angles[n_chain:] = phis.
+    Changing theta_k shifts all downstream nodes by the same fixed vector (no lever-arm growth).
+    MCS prior is applied on jnp.diff(thetas) and jnp.diff(phis).
+
+    Returns:
+        positions:  (n_chain+1, 3) — node positions including start
+        directions: (n_chain, 3)   — unit direction of each segment
+    """
+    def _step(carry, angle_pair):
+        pos = carry
+        theta_k, phi_k = angle_pair[0], angle_pair[1]
+        u_k = jnp.array([jnp.sin(theta_k) * jnp.cos(phi_k),
+                         jnp.sin(theta_k) * jnp.sin(phi_k),
+                         jnp.cos(theta_k)])
+        u_k = u_k / jnp.linalg.norm(u_k)
+        new_pos = pos + step_len * u_k
+        return new_pos, (new_pos, u_k)
+
+    _, (nodes_rest, dirs) = jax.lax.scan(
+        _step, x0, jnp.stack([thetas, phis], axis=1))
+    positions = jnp.concatenate([x0[None], nodes_rest], axis=0)
+    return positions, dirs
+
+
+def _build_chain_meta(ctxs):
+    """Precompute flat/padded metadata for the vectorized chain warp.
+
+    Replaces the per-track Python loop with batched operations. Returns ``None``
+    when there are no chain contexts. All per-segment quantities are concatenated
+    into flat arrays; per-track quantities are stacked and padded to ``max_nc``.
+    """
+    if not ctxs:
+        return None
+    ncs = [int(c.n_chain) for c in ctxs]
+    T = len(ctxs)
+    max_nc = max(ncs)
+    seg_rows, seg_track, seg_am, seg_as, seg_ae = [], [], [], [], []
+    for ti, c in enumerate(ctxs):
+        idxs = np.asarray(c.idxs)
+        seg_rows.append(idxs)
+        seg_track.append(np.full(idxs.shape[0], ti, dtype=np.int32))
+        seg_am.append(np.asarray(c.alpha_mid))
+        seg_as.append(np.asarray(c.alpha_start))
+        seg_ae.append(np.asarray(c.alpha_end))
+    return {
+        'T': T, 'max_nc': max_nc,
+        'ncs_np': np.asarray(ncs, np.int32),                       # static, python-side slicing
+        'ncs': jnp.asarray(np.asarray(ncs, np.int32)),
+        'x0': jnp.asarray(np.stack([np.asarray(c.x0_fixed) for c in ctxs]).astype(np.float32)),
+        'step': jnp.asarray(np.asarray([float(c.step_len) for c in ctxs], np.float32)),
+        'sigma': jnp.asarray(np.asarray([float(c.sigma_mcs) for c in ctxs], np.float32)),
+        'seg_rows': jnp.asarray(np.concatenate(seg_rows).astype(np.int32)),
+        'seg_track': jnp.asarray(np.concatenate(seg_track)),
+        'seg_am': jnp.asarray(np.concatenate(seg_am).astype(np.float32)),
+        'seg_as': jnp.asarray(np.concatenate(seg_as).astype(np.float32)),
+        'seg_ae': jnp.asarray(np.concatenate(seg_ae).astype(np.float32)),
+    }
+
+
+def _chain_warp_vectorized(t, chain_angles_pt, meta, col_map):
+    """Vectorized replacement for the per-track chain-warp loop.
+
+    Computes all node positions with a single ``cumsum`` (absolute chain, no
+    lever-arm growth) and writes every segment field with one batched scatter
+    per column. Returns ``(t_warped, thetas, phis)`` with padded ``(T, max_nc)``
+    angle matrices for reuse by the MCS prior.
+    """
+    T, max_nc = meta['T'], meta['max_nc']
+    ncs, ncs_np = meta['ncs'], meta['ncs_np']
+    th_rows, ph_rows = [], []
+    for ti in range(T):
+        a = chain_angles_pt[ti]
+        nc = int(ncs_np[ti])
+        th, ph = a[:nc], a[nc:]
+        pad = max_nc - nc
+        if pad > 0:
+            th = jnp.concatenate([th, jnp.zeros(pad, th.dtype)])
+            ph = jnp.concatenate([ph, jnp.zeros(pad, ph.dtype)])
+        th_rows.append(th)
+        ph_rows.append(ph)
+    thetas = jnp.stack(th_rows)                       # (T, max_nc)
+    phis = jnp.stack(ph_rows)
+    st, ct = jnp.sin(thetas), jnp.cos(thetas)
+    u = jnp.stack([st * jnp.cos(phis), st * jnp.sin(phis), ct], axis=-1)
+    u = u / jnp.linalg.norm(u, axis=-1, keepdims=True)
+    steps = meta['step'][:, None, None] * u
+    nodes = jnp.concatenate(
+        [meta['x0'][:, None, :], meta['x0'][:, None, :] + jnp.cumsum(steps, axis=1)],
+        axis=1)                                        # (T, max_nc+1, 3)
+    seg_track = meta['seg_track']
+    nc_s = ncs[seg_track]
+
+    def _interp(alpha):
+        k = jnp.clip(jnp.floor(alpha * nc_s).astype(jnp.int32), 0, nc_s - 1)
+        frac = alpha * nc_s - k
+        p0 = nodes[seg_track, k]
+        p1 = nodes[seg_track, k + 1]
+        return p0 + frac[:, None] * (p1 - p0)
+
+    nm = _interp(meta['seg_am'])
+    ns = _interp(meta['seg_as'])
+    ne = _interp(meta['seg_ae'])
+    ndx = jnp.sqrt(jnp.sum((ne - ns) ** 2, axis=-1) + 1e-10)
+    r = meta['seg_rows']
+    t = t.at[r, col_map['x']].set(nm[:, 0])
+    t = t.at[r, col_map['y']].set(nm[:, 1])
+    t = t.at[r, col_map['z']].set(nm[:, 2])
+    t = t.at[r, col_map['xs']].set(ns[:, 0])
+    t = t.at[r, col_map['ys']].set(ns[:, 1])
+    t = t.at[r, col_map['zs']].set(ns[:, 2])
+    t = t.at[r, col_map['xe']].set(ne[:, 0])
+    t = t.at[r, col_map['ye']].set(ne[:, 1])
+    t = t.at[r, col_map['ze']].set(ne[:, 2])
+    t = t.at[r, col_map['dx']].set(ndx)
+    return t, thetas, phis
+
+
+def _chain_mcs_vectorized(thetas, phis, meta, mcs_weight):
+    """Vectorized Gaussian MCS prior on the padded chain angles.
+
+    Masks out the diffs that cross the padding boundary so only within-track
+    consecutive deflections contribute (matches the per-track loop exactly).
+    """
+    T, max_nc, ncs = meta['T'], meta['max_nc'], meta['ncs']
+    dt = jnp.diff(thetas, axis=1)                      # (T, max_nc-1)
+    dp = jnp.diff(phis, axis=1)
+    j = jnp.arange(max_nc - 1)
+    mask = (j[None, :] < (ncs[:, None] - 1)).astype(thetas.dtype)
+    mcs = jnp.sum(mask * (dt ** 2 + dp ** 2) / (2.0 * (meta['sigma'][:, None] ** 2)))
+    return mcs_weight * mcs / max(1, T)
+
+
+class _ChainTrackCtx:
+    """Per-track deflection chain context (precomputed at batch init)."""
+    __slots__ = ('track_id', 'idxs', 'n_fine', 'n_chain', 'step_len', 'total_len',
+                 'x0_fixed', 'theta0_i', 'phi0_i', 'sigma_mcs',
+                 'alpha_mid', 'alpha_start', 'alpha_end')
+
+    def __init__(self, track_id, idxs, n_fine, n_chain, step_len, total_len,
+                 x0_fixed, theta0_i, phi0_i, sigma_mcs, alpha_mid, alpha_start, alpha_end):
+        self.track_id   = track_id
+        self.idxs       = idxs
+        self.n_fine     = n_fine
+        self.n_chain    = n_chain
+        self.step_len   = step_len
+        self.total_len  = total_len
+        self.x0_fixed   = x0_fixed
+        self.theta0_i   = theta0_i
+        self.phi0_i     = phi0_i
+        self.sigma_mcs  = sigma_mcs
+        self.alpha_mid  = alpha_mid
+        self.alpha_start = alpha_start
+        self.alpha_end  = alpha_end
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 def value_and_grad_fwd(f, argnums=0, has_aux=False):
     """
@@ -202,6 +401,97 @@ def map_phys_to_norm(val, key, scheme="sigmoid", scale=1.0):
 
     raise ValueError(f"Unsupported normalization scheme in map_phys_to_norm: {scheme}")
 
+
+def get_rotation_matrix(yaw, pitch, roll):
+    cy = jnp.cos(yaw)
+    sy = jnp.sin(yaw)
+    cp = jnp.cos(pitch)
+    sp = jnp.sin(pitch)
+    cr = jnp.cos(roll)
+    sr = jnp.sin(roll)
+    
+    Rx = jnp.array([[1.0, 0.0, 0.0],
+                    [0.0, cr, -sr],
+                    [0.0, sr, cr]])
+    
+    Ry = jnp.array([[cp, 0.0, sp],
+                    [0.0, 1.0, 0.0],
+                    [-sp, 0.0, cp]])
+    
+    Rz = jnp.array([[cy, -sy, 0.0],
+                    [sy, cy, 0.0],
+                    [0.0, 0.0, 1.0]])
+    
+    return jnp.dot(Rz, jnp.dot(Ry, Rx))
+
+def apply_transformation(tracks, fields, translation, rotation_angles):
+    yaw, pitch, roll = rotation_angles
+    R = get_rotation_matrix(yaw, pitch, roll)
+    
+    x_idx = fields.index("x")
+    y_idx = fields.index("y")
+    z_idx = fields.index("z")
+    
+    xs = tracks[:, x_idx]
+    ys = tracks[:, y_idx]
+    zs = tracks[:, z_idx]
+    
+    cog_x = jnp.mean(xs)
+    cog_y = jnp.mean(ys)
+    cog_z = jnp.mean(zs)
+    cog = jnp.array([cog_x, cog_y, cog_z])
+    
+    xs_idx = fields.index("x_start")
+    ys_idx = fields.index("y_start")
+    zs_idx = fields.index("z_start")
+    
+    xe_idx = fields.index("x_end")
+    ye_idx = fields.index("y_end")
+    ze_idx = fields.index("z_end")
+    
+    pts_start = jnp.stack([tracks[:, xs_idx], tracks[:, ys_idx], tracks[:, zs_idx]], axis=-1)
+    pts_end = jnp.stack([tracks[:, xe_idx], tracks[:, ye_idx], tracks[:, ze_idx]], axis=-1)
+    pts_mid = jnp.stack([xs, ys, zs], axis=-1)
+    
+    transformed_start = jnp.dot(pts_start - cog, R.T) + cog + translation
+    transformed_end = jnp.dot(pts_end - cog, R.T) + cog + translation
+    transformed_mid = jnp.dot(pts_mid - cog, R.T) + cog + translation
+    
+    t = tracks
+    t = t.at[:, xs_idx].set(transformed_start[:, 0])
+    t = t.at[:, ys_idx].set(transformed_start[:, 1])
+    t = t.at[:, zs_idx].set(transformed_start[:, 2])
+    
+    t = t.at[:, xe_idx].set(transformed_end[:, 0])
+    t = t.at[:, ye_idx].set(transformed_end[:, 1])
+    t = t.at[:, ze_idx].set(transformed_end[:, 2])
+    
+    t = t.at[:, x_idx].set(transformed_mid[:, 0])
+    t = t.at[:, y_idx].set(transformed_mid[:, 1])
+    t = t.at[:, z_idx].set(transformed_mid[:, 2])
+    
+    # Recompute dx
+    dx_idx = fields.index("dx")
+    dx_new = jnp.sqrt(
+        (transformed_start[:, 0] - transformed_end[:, 0])**2 +
+        (transformed_start[:, 1] - transformed_end[:, 1])**2 +
+        (transformed_start[:, 2] - transformed_end[:, 2])**2 + 1e-10
+    )
+    t = t.at[:, dx_idx].set(dx_new)
+    
+    return t
+
+def simulate_wfs_static(params, response_template, tracks, fields, fixed_pixels):
+    main_pixels, pixels, nelectrons, t0_after_diff, long_diff, currents_idx, pIDs_neigh, currents_idx_neigh, nelectrons_neigh, t0_neigh = simulate_drift_new(params, tracks, fields)
+    
+    pix_renumbering_neigh = jnp.searchsorted(fixed_pixels, pIDs_neigh.ravel(), method='sort')
+    mask = (pix_renumbering_neigh < fixed_pixels.size) & (fixed_pixels[pix_renumbering_neigh] == pIDs_neigh.ravel())
+    pix_renumbering_neigh = jnp.where(mask, pix_renumbering_neigh, 0)
+    
+    wfs = simulate_signals(params, fixed_pixels, pixels, t0_after_diff, response_template, nelectrons, long_diff, currents_idx, nelectrons_neigh, pix_renumbering_neigh, t0_neigh, currents_idx_neigh)
+    
+    return wfs[:, 1:]
+
 class ParamFitter:
     def __init__(self, relevant_params, set_init_params, sim_track_fields, tgt_track_fields,
                  detector_props, pixel_layouts,
@@ -233,6 +523,16 @@ class ParamFitter:
                  dedx_student_scale_r=None,
                  dedx_mean_constraint_weight=0.0,
                  dedx_mean_constraint_target=1.887,
+                 fit_track_positions=False,
+                 track_max_iter=20,
+                 track_alignment_freq=1,
+                 fit_chain_positions=False,
+                 chain_lr=3e-5,
+                 chain_start_iter=0,
+                 chain_update_freq=1,
+                 mcs_prior_weight=1.0,
+                 chain_step_len=2.0,
+                 chain_momentum_GeV=3.0,
                  config = {}):
 
         self.read_target = read_target
@@ -243,6 +543,23 @@ class ParamFitter:
         self.resume_from = resume_from
         self.resumed = False
         self.total_iter = 0
+        self.fit_track_positions = bool(fit_track_positions)
+        self.track_max_iter = int(track_max_iter)
+        self.track_alignment_freq = int(track_alignment_freq)
+        self.fit_chain_positions = bool(fit_chain_positions)
+        self._chain_lr = float(chain_lr)
+        self._chain_start_iter = int(chain_start_iter)
+        self._chain_update_freq = max(1, int(chain_update_freq))
+        self._mcs_prior_weight = float(mcs_prior_weight)
+        self._chain_step_len = float(chain_step_len)
+        self._chain_momentum_GeV = float(chain_momentum_GeV)
+        self._batch_chain_contexts: dict = {}
+        self._batch_chain_meta: dict = {}   # cached vectorized-warp metadata per batch
+        self._batch_fixed_pixels = {}
+        self._batch_target_pixels = {}
+        self._batch_target_expected_adc = {}
+        self._batch_aligned_tracks = {}
+        self._batch_padded_roi = {}
         self.readout_noise_target = readout_noise_target
         self.readout_noise_guess = readout_noise_guess
         self.vary_init = vary_init
@@ -547,6 +864,265 @@ class ParamFitter:
             }
         self.current_params = self.ref_params.replace(**new_physical_params)
 
+    def precompute_static_pixels(self, dataloader_sim, target):
+        logger.info("Precomputing static pixel lists for track alignment...")
+        self._batch_fixed_pixels = {}
+        self._batch_target_pixels = {}
+        self._batch_target_expected_adc = {}
+        self._batch_padded_roi = {}
+        
+        unpadded_pixels = {}
+        
+        # 1. Collect pixels for each batch
+        for i in range(len(dataloader_sim)):
+            # Load guess tracks
+            tracks_sim_bt = dataloader_sim[i].reshape(-1, len(self.sim_track_fields))
+            selected_tracks_sim = jax.device_put(tracks_sim_bt)
+            if self.fit_chain_positions:
+                self._batch_chain_contexts[i] = self._build_chain_contexts_for_batch(
+                    i, np.asarray(tracks_sim_bt))
+
+            # Store true target midpoint positions for per-iteration position residual.
+            # Use arc-length interpolation per track to avoid batch-row index mismatch
+            # between sim and target (they have different fine-step counts).
+            if self.fit_chain_positions and not self.read_target:
+                _tgt_raw = np.asarray(target[i].reshape(-1, len(self.tgt_track_fields)))
+                _tf = self.tgt_track_fields
+                _xi, _yi, _zi = _tf.index('x'), _tf.index('y'), _tf.index('z')
+                _ev_i = _tf.index('eventID') if 'eventID' in _tf else None
+                _tr_i = _tf.index('trackID') if 'trackID' in _tf else None
+                _track_pos_dict = {}
+                for _ctx in self._batch_chain_contexts.get(i, []):
+                    if _ev_i is None or _tr_i is None:
+                        break
+                    _ev_id, _tr_id = _ctx.track_id
+                    _mask = (np.abs(_tgt_raw[:, _ev_i] - _ev_id) < 0.5) & \
+                            (np.abs(_tgt_raw[:, _tr_i] - _tr_id) < 0.5)
+                    _rows = _tgt_raw[_mask]
+                    if len(_rows) < 2:
+                        continue
+                    _pts = _rows[:, [_xi, _yi, _zi]].astype(np.float32)
+                    _diffs   = np.diff(_pts, axis=0)
+                    _seg_len = np.sqrt((_diffs ** 2).sum(axis=1))
+                    _cum     = np.concatenate([[0.], np.cumsum(_seg_len)])
+                    _total   = float(_cum[-1])
+                    if _total < 1e-4:
+                        continue
+                    _alphas  = (_cum / _total).astype(np.float32)
+                    _query   = np.asarray(_ctx.alpha_mid)
+                    _idx     = np.searchsorted(_alphas, _query, side='right') - 1
+                    _idx     = np.clip(_idx, 0, len(_alphas) - 2)
+                    _t_frac  = (_query - _alphas[_idx]) / np.clip(
+                        _alphas[_idx + 1] - _alphas[_idx], 1e-8, None)
+                    _t_frac  = np.clip(_t_frac, 0., 1.)
+                    _interp  = _pts[_idx] + _t_frac[:, None] * (_pts[_idx + 1] - _pts[_idx])
+                    _track_pos_dict[_ctx.track_id] = _interp
+                self._batch_true_positions[i] = _track_pos_dict
+
+            evts_sim = self.get_batch_global_event_ids(dataloader_sim, i, selected_tracks_sim)
+
+            # Load target
+            if not self.read_target:
+                selected_tracks_bt_tgt = target[i].reshape(-1, len(self.tgt_track_fields))
+                this_target = jax.device_put(selected_tracks_bt_tgt)
+            else:
+                this_target = target
+                
+            ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = self.get_simulated_target(this_target, i, evts_sim, regen=False)
+            
+            # Simulate guess wfs
+            wfs_guess, guess_pixels = simulate_wfs(self.ref_params, self.response, selected_tracks_sim, self.sim_track_fields)
+            
+            # Target pixels
+            target_pixels_all = np.array(ref_pixel_id)
+            target_adcs_all = np.array(ref_adcs)
+            target_ticks_all = np.array(ref_ticks)
+            
+            Nticks = wfs_guess.shape[1] - 1
+            valid_mask = (target_pixels_all >= 0) & (target_ticks_all >= 0) & (target_ticks_all < Nticks)
+            target_pixels_clean = target_pixels_all[valid_mask]
+            target_adcs_clean = target_adcs_all[valid_mask]
+            target_ticks_clean = target_ticks_all[valid_mask]
+            
+            unique_tgt_pixels, inverse_indices = np.unique(target_pixels_clean, return_inverse=True)
+            target_expected_adc_np = np.zeros((len(unique_tgt_pixels), Nticks), dtype=np.float32)
+            tick_idx = np.clip(np.round(target_ticks_clean).astype(int), 0, Nticks - 1)
+            np.add.at(target_expected_adc_np, (inverse_indices, tick_idx), target_adcs_clean)
+            
+            target_adc_sum = np.sum(target_expected_adc_np, axis=-1)
+            valid_adc_mask = target_adc_sum > 0.05
+            
+            batch_target_pixels = unique_tgt_pixels[valid_adc_mask]
+            batch_target_expected_adc = target_expected_adc_np[valid_adc_mask]
+            
+            self._batch_target_pixels[i] = jnp.array(batch_target_pixels)
+            self._batch_target_expected_adc[i] = jnp.array(batch_target_expected_adc)
+            
+            # Combined unique pixels for static simulation grid
+            combined = np.unique(np.concatenate([np.array(batch_target_pixels), np.array(guess_pixels[guess_pixels >= 0])]))
+            combined = np.append(combined, -1)
+            unpadded_pixels[i] = combined
+            
+            # Compute padded ROI counts
+            wfs_guess_padded = pad_to_closest_multiple(wfs_guess, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
+            nb_small, nb_large = get_roi_counts(self.ref_params, wfs_guess_padded)
+            padded_small_nb = int(((int(nb_small) + 127) // 128) * 128)
+            padded_large_nb = int(((int(nb_large) + 127) // 128) * 128)
+            self._batch_padded_roi[i] = (padded_small_nb, padded_large_nb)
+
+        # Normalize all batches to the global max ROI sizes so every batch shares
+        # the same (padded_small_nb, padded_large_nb) pair per pixel-count level.
+        # This collapses all JIT signatures to at most one per unique Npix, preventing
+        # per-epoch recompilation of rarely-seen batch shapes under XLA cache pressure.
+        if self._batch_padded_roi:
+            _max_s = max(v[0] for v in self._batch_padded_roi.values())
+            _max_l = max(v[1] for v in self._batch_padded_roi.values())
+            self._batch_padded_roi = {k: (_max_s, _max_l) for k in self._batch_padded_roi}
+            logger.info(
+                f"Global ROI sizes: padded_small={_max_s}, padded_large={_max_l} "
+                f"(applied to all {len(self._batch_padded_roi)} batches)"
+            )
+
+        # 2. Determine global maximum length and pad
+        max_len = max(len(c) for c in unpadded_pixels.values())
+        padded_len = int(((max_len + 127) // 128) * 128)
+        logger.info(f"Global max active pixels: {max_len}, padding all static pixel lists to: {padded_len}")
+        
+        for i in range(len(dataloader_sim)):
+            fixed_pixels_np = pad_to_closest_multiple(unpadded_pixels[i], multiple=padded_len, pad_value=-1, pad_front=False)
+            fixed_pixels_np = np.sort(fixed_pixels_np)
+            self._batch_fixed_pixels[i] = jnp.array(fixed_pixels_np)
+
+    def _build_chain_contexts_for_batch(self, batch_idx, tracks_np):
+        """Build per-track chain contexts from a (N_fine, n_fields) numpy array."""
+        fld = self.sim_track_fields
+        ev_idx  = fld.index('eventID');  tr_idx  = fld.index('trackID')
+        x_idx   = fld.index('x');        y_idx   = fld.index('y');   z_idx   = fld.index('z')
+        xs_idx  = fld.index('x_start');  ys_idx  = fld.index('y_start'); zs_idx = fld.index('z_start')
+        xe_idx  = fld.index('x_end');    ye_idx  = fld.index('y_end');   ze_idx = fld.index('z_end')
+
+        evs = tracks_np[:, ev_idx]
+        trs = tracks_np[:, tr_idx]
+        seen = {}
+        for ev, tr in zip(evs.tolist(), trs.tolist()):
+            k = (ev, tr)
+            if k not in seen:
+                seen[k] = None
+        unique_tracks = list(seen.keys())
+
+        ctxs = []
+        for (ev, tr) in unique_tracks:
+            mask = (evs == ev) & (trs == tr)
+            idxs = np.where(mask)[0]
+            if len(idxs) < 2:
+                continue
+
+            mids   = tracks_np[idxs][:, [x_idx,  y_idx,  z_idx ]]
+            starts = tracks_np[idxs][:, [xs_idx, ys_idx, zs_idx]]
+            ends   = tracks_np[idxs][:, [xe_idx, ye_idx, ze_idx]]
+
+            entry_pt = starts[0].astype(np.float32)
+            exit_pt  = ends[-1].astype(np.float32)
+            d = exit_pt - entry_pt
+            total_len = float(np.linalg.norm(d))
+            if total_len < 1e-4:
+                continue
+
+            n_chain  = max(3, int(total_len / self._chain_step_len))
+            step_len = total_len / n_chain
+            sigma_mcs = _highland_sigma_mcs(step_len, self._chain_momentum_GeV)
+
+            u = d / total_len
+            theta0 = float(np.arccos(np.clip(float(u[2]), -1., 1.)))
+            phi0   = float(np.arctan2(float(u[1]), float(u[0])))
+
+            def _alpha_proj(pts, _entry=entry_pt, _u=u, _L=total_len):
+                rel = pts - _entry
+                a = np.dot(rel, _u) / _L
+                return np.clip(a, 0., 1.).astype(np.float32)
+
+            ctxs.append(_ChainTrackCtx(
+                track_id=(ev, tr),
+                idxs=idxs.astype(np.int32),
+                n_fine=len(idxs),
+                n_chain=n_chain,
+                step_len=step_len,
+                total_len=total_len,
+                x0_fixed=entry_pt,
+                theta0_i=theta0,
+                phi0_i=phi0,
+                sigma_mcs=sigma_mcs,
+                alpha_mid=_alpha_proj(mids),
+                alpha_start=_alpha_proj(starts),
+                alpha_end=_alpha_proj(ends),
+            ))
+        logger.info(f"Batch {batch_idx}: built chain contexts for {len(ctxs)} tracks")
+        return ctxs
+
+    def profile_local_geometry(self, batch_idx, tracks, target, global_params):
+        fixed_pixels = self._batch_fixed_pixels[batch_idx]
+        padded_small_nb, padded_large_nb = self._batch_padded_roi[batch_idx]
+        target_pixels = self._batch_target_pixels[batch_idx]
+        target_expected_adc = self._batch_target_expected_adc[batch_idx]
+
+        # Cache val_and_grad_fn by (pixel shape, roi sizes) so JAX only recompiles
+        # when the static arguments change — not on every call.
+        cache_key = (fixed_pixels.shape, padded_small_nb, padded_large_nb)
+        if not hasattr(self, '_local_geom_jit_cache'):
+            self._local_geom_jit_cache = {}
+        if cache_key not in self._local_geom_jit_cache:
+            # Build a JIT-compiled function that takes all dynamic data explicitly.
+            # Captures padded_small_nb / padded_large_nb as Python ints so JAX
+            # sees them as compile-time constants (static), not traced values.
+            _psn = padded_small_nb
+            _pln = padded_large_nb
+            response = self.response
+            sim_track_fields = self.sim_track_fields
+
+            def _local_loss(geom_vars, tracks_, global_params_, fixed_pixels_,
+                            target_pixels_, target_expected_adc_):
+                translation = geom_vars[0:3]
+                rotation = geom_vars[3:6] * 0.1
+                transformed = apply_transformation(tracks_, sim_track_fields, translation, rotation)
+
+                wfs = simulate_wfs_static(global_params_, response, transformed, sim_track_fields, fixed_pixels_)
+                wfs_padded = pad_to_closest_multiple(wfs, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
+
+                adcs_distrib, pixel_x, pixel_y, ticks_prob, event = simulate_probabilistic(
+                    global_params_, wfs_padded, fixed_pixels_,
+                    padded_small_nb=_psn, padded_large_nb=_pln
+                )
+                expected_adc_raw = jnp.sum(jnp.exp(ticks_prob) * adcs_distrib, axis=1)
+
+                indices = jnp.searchsorted(fixed_pixels_, target_pixels_)
+                indices_safe = jnp.clip(indices, 0, fixed_pixels_.shape[0] - 1)
+                matched_mask = (jnp.take(fixed_pixels_, indices_safe) == target_pixels_)[:, None]
+                guess_expected_adc = jnp.where(matched_mask, jnp.take(expected_adc_raw, indices_safe, axis=0), 0.0)
+
+                return jnp.mean((guess_expected_adc - target_expected_adc_)**2)
+
+            self._local_geom_jit_cache[cache_key] = jax.jit(
+                jax.value_and_grad(_local_loss)
+            )
+            logger.info(f"profile_local_geometry: compiled new JIT trace for key {cache_key}")
+
+        val_and_grad_fn = self._local_geom_jit_cache[cache_key]
+
+        def scipy_loss(x):
+            l, g = val_and_grad_fn(
+                jnp.array(x, dtype=jnp.float32),
+                tracks, global_params, fixed_pixels,
+                target_pixels, target_expected_adc
+            )
+            return float(l), np.array(g, dtype=np.float64)
+
+        x0 = np.zeros(6, dtype=np.float32)
+        bounds = [(-2.0, 2.0), (-2.0, 2.0), (-2.0, 2.0), (-3.14, 3.14), (-3.14, 3.14), (-3.14, 3.14)]
+        res = minimize(scipy_loss, x0, jac=True, method='L-BFGS-B', bounds=bounds, options={'maxiter': self.track_max_iter})
+
+        aligned_tracks = apply_transformation(tracks, self.sim_track_fields, res.x[0:3], res.x[3:6]*0.1)
+        return aligned_tracks
+
     def make_target_sim(self):
         np.random.seed(self.target_seed)
         logger.info("Constructing target param simulation")
@@ -784,13 +1360,34 @@ class ParamFitter:
             self.training_history['dedx_student_loc']   = float(self.dedx_student_loc)
             self.training_history['dedx_student_scale'] = float(self.dedx_student_scale)
             self.training_history['dedx_freeze_iter']   = self.dedx_freeze_iter
+        if hasattr(self, '_chain_cache') and self._chain_cache:
+            self.training_history['chain_cache'] = {
+                int(bi): [{'angles': np.asarray(s['angles'])} for s in states]
+                for bi, states in self._chain_cache.items()
+            }
+            if hasattr(self, '_batch_chain_contexts') and self._batch_chain_contexts:
+                self.training_history['chain_contexts'] = {
+                    int(bi): [{'track_id': ctx.track_id, 'idxs': ctx.idxs,
+                               'n_chain': ctx.n_chain, 'step_len': ctx.step_len,
+                               'total_len': ctx.total_len, 'x0_fixed': ctx.x0_fixed,
+                               'theta0_i': ctx.theta0_i, 'phi0_i': ctx.phi0_i,
+                               'alpha_mid': ctx.alpha_mid}
+                              for ctx in ctxs]
+                    for bi, ctxs in self._batch_chain_contexts.items()
+                }
+            if hasattr(self, '_batch_true_positions') and self._batch_true_positions:
+                self.training_history['true_positions'] = {
+                    int(bi): {str(k): v for k, v in track_dict.items()}
+                    for bi, track_dict in self._batch_true_positions.items()
+                }
+
         if self.resume_from is not None:
             self.training_history['resumed_from'] = self.resume_from
 
         with open(f'fit_result/{self.test_name}/history_iter{self.total_iter}_{self.out_label}.pkl', "wb") as f_history:
             pickle.dump(self.training_history, f_history)
 
-    def compute_loss(self, tracks, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=False, epoch=0, use_physical_params=False, log_dedx=None, parent_ids=None):
+    def compute_loss(self, tracks, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=False, epoch=0, use_physical_params=False, log_dedx=None, parent_ids=None, chain_angles_per_track=None):
         """Compute the simulation loss and (optionally) gradients.
 
         When ``log_dedx`` and ``parent_ids`` are provided the function jointly
@@ -800,8 +1397,9 @@ class ParamFitter:
 
         Returns
         -------
-        (loss_val, grads_norm, grads_dedx, aux, hess, aux_hess)
+        (loss_val, grads_norm, grads_dedx, grads_chain_per_track, aux, hess, aux_hess)
             ``grads_dedx`` is ``None`` unless ``log_dedx`` was supplied.
+            ``grads_chain_per_track`` is ``None`` unless ``chain_angles_per_track`` was supplied.
         """
         if self.probabilistic_sim and not self.probabilistic_sampling_sim:
             rngkey = None
@@ -820,7 +1418,7 @@ class ParamFitter:
                 raise ValueError("Unknown sim_seed_strategy. Must be same, different or random")
 
         assert(with_loss or with_grad)
-        loss_val, grads, grads_dedx, aux, hess, aux_hess = None, None, None, None, None, None
+        loss_val, grads, grads_dedx, grads_chain_per_track, aux, hess, aux_hess = None, None, None, None, None, None, None
 
         # Precompute padded small and large ROI counts for JAX static shapes.
         # This runs simulate_wfs ONCE per unique batch (cached), using the stable
@@ -848,13 +1446,24 @@ class ParamFitter:
                 padded_small_nb = int(((int(nb_small) + 127) // 128) * 128)
                 padded_large_nb = int(((int(nb_large) + 127) // 128) * 128)
                 self._roi_padded_cache[cache_key] = (padded_small_nb, padded_large_nb)
+                # Track running global max so all batches can be normalized once seen.
+                if not hasattr(self, '_roi_global_max'):
+                    self._roi_global_max = (0, 0)
+                gs, gl = self._roi_global_max
+                self._roi_global_max = (max(gs, padded_small_nb), max(gl, padded_large_nb))
                 logger.info(
                     f"Batch {i}: computed ROI counts: {int(nb_small)} small "
                     f"(padded→{padded_small_nb}), {int(nb_large)} large "
                     f"(padded→{padded_large_nb})"
                 )
-            
+
             padded_small_nb, padded_large_nb = self._roi_padded_cache[cache_key]
+            # Apply global max so every batch uses the same ROI sizes, collapsing
+            # all JIT signatures to one per unique Npix and eliminating recompilation.
+            if hasattr(self, '_roi_global_max'):
+                gs, gl = self._roi_global_max
+                padded_small_nb = max(padded_small_nb, gs)
+                padded_large_nb = max(padded_large_nb, gl)
             self.sim_strategy.padded_small_nb = padded_small_nb
             self.sim_strategy.padded_large_nb = padded_large_nb
 
@@ -884,13 +1493,32 @@ class ParamFitter:
             if with_hess:
                 hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.current_params)
 
-        elif log_dedx is not None and parent_ids is not None:
-            # ── Joint fit: norm_params (global) + log_dedx (per-segment, local) ──
+        elif (log_dedx is not None and parent_ids is not None) or (self.fit_chain_positions and chain_angles_per_track is not None):
+            # ── Joint fit: norm_params (global) + optionally log_dedx (per-segment) + optionally chain angles ──
             dedx_idx = self.sim_track_fields.index('dEdx')
             dE_idx   = self.sim_track_fields.index('dE')
             dx_idx   = self.sim_track_fields.index('dx')
 
-            def loss_wrapper_combined(norm_params_input, log_dedx_in):
+            # Pre-resolve field indices for chain warping (used when fit_chain_positions=True)
+            _chain_ctxs = self._batch_chain_contexts.get(i, []) if self.fit_chain_positions else []
+            if self.fit_chain_positions and chain_angles_per_track is not None:
+                _x_idx  = self.sim_track_fields.index('x')
+                _y_idx  = self.sim_track_fields.index('y')
+                _z_idx  = self.sim_track_fields.index('z')
+                _xs_idx = self.sim_track_fields.index('x_start')
+                _ys_idx = self.sim_track_fields.index('y_start')
+                _zs_idx = self.sim_track_fields.index('z_start')
+                _xe_idx = self.sim_track_fields.index('x_end')
+                _ye_idx = self.sim_track_fields.index('y_end')
+                _ze_idx = self.sim_track_fields.index('z_end')
+                _col_map = {'x': _x_idx, 'y': _y_idx, 'z': _z_idx,
+                            'xs': _xs_idx, 'ys': _ys_idx, 'zs': _zs_idx,
+                            'xe': _xe_idx, 'ye': _ye_idx, 'ze': _ze_idx, 'dx': dx_idx}
+                if i not in self._batch_chain_meta:
+                    self._batch_chain_meta[i] = _build_chain_meta(_chain_ctxs)
+                _chain_meta = self._batch_chain_meta[i]
+
+            def loss_wrapper_combined(norm_params_input, log_dedx_in, chain_angles_pt=None):
                 # Map global params: unconstrained → physical
                 if self.normalization_scheme == "divide":
                     new_phys = {
@@ -904,44 +1532,66 @@ class ParamFitter:
                     }
                 physical_params = self.ref_params.replace(**new_phys)
 
+                # Optionally warp track geometry using per-track chain angles.
+                # Each track's segments are repositioned by interpolating along the
+                # deflection chain's node positions.
+                t = tracks
+                _chain_thetas = None
+                _chain_phis = None
+                if chain_angles_pt is not None and _chain_meta is not None:
+                    t, _chain_thetas, _chain_phis = _chain_warp_vectorized(
+                        t, chain_angles_pt, _chain_meta, _col_map)
+
                 # Reconstruct per-step dEdx from per-segment log-mean.
                 # Padding rows have parent_id == -1; preserve their original track dEdx
                 # so they do not inject spurious gradients into log_dedx[0].
-                valid_mask  = (parent_ids >= 0)
-                safe_ids    = jnp.clip(parent_ids, 0, log_dedx_in.shape[0] - 1)
-                dedx_fitted = jnp.maximum(jnp.exp(jnp.take(log_dedx_in, safe_ids)), 1e-3)
-                dedx_sample = jnp.where(valid_mask, dedx_fitted, tracks[:, dedx_idx])
-                t = tracks.at[:, dedx_idx].set(dedx_sample)
-                t = t.at[:, dE_idx].set(dedx_sample * t[:, dx_idx])
+                if log_dedx_in is not None and parent_ids is not None:
+                    valid_mask  = (parent_ids >= 0)
+                    safe_ids    = jnp.clip(parent_ids, 0, log_dedx_in.shape[0] - 1)
+                    dedx_fitted = jnp.maximum(jnp.exp(jnp.take(log_dedx_in, safe_ids)), 1e-3)
+                    dedx_sample = jnp.where(valid_mask, dedx_fitted, t[:, dedx_idx])
+                    t = t.at[:, dedx_idx].set(dedx_sample)
+                    t = t.at[:, dE_idx].set(dedx_sample * t[:, dx_idx])
+                else:
+                    dedx_sample = t[:, dedx_idx]
+                    valid_mask  = jnp.ones(t.shape[0], dtype=bool)
 
                 prediction = self.sim_strategy.predict(physical_params, t, self.sim_track_fields, rngkey)
                 hit_loss, hit_aux = self.loss_strategy.compute(physical_params, prediction, target_data)
 
+                # Read length scale factor if present, otherwise default to 1.0
+                if 'length_scale_factor' in self.sim_track_fields:
+                    scale_factor_idx = self.sim_track_fields.index('length_scale_factor')
+                    length_scale_factor = t[:, scale_factor_idx]
+                else:
+                    length_scale_factor = 1.0
+
                 # Student-t prior on per-step dEdx values.
                 # Weighted by physical step length (dx) to ensure that the regularization
                 # strength is invariant to the sampling resolution.
+                # The location (expected dEdx) is scaled by length_scale_factor.
                 if self.dedx_use_split_t:
                     dedx_prior = split_student_t_nll(
                         dedx_sample,
                         self.dedx_student_nu_l,
                         self.dedx_student_nu_r,
-                        self.dedx_student_loc,
+                        self.dedx_student_loc * length_scale_factor,
                         self.dedx_student_scale_l,
                         self.dedx_student_scale_r,
-                        weights=tracks[:, dx_idx]
+                        weights=t[:, dx_idx]
                     ) * self.dedx_prior_weight
                 else:
                     dedx_prior = student_t_nll(
                         dedx_sample,
                         self.dedx_student_nu,
-                        self.dedx_student_loc,
+                        self.dedx_student_loc * length_scale_factor,
                         self.dedx_student_scale,
-                        weights=tracks[:, dx_idx]
+                        weights=t[:, dx_idx]
                     ) * self.dedx_prior_weight
 
                 # One-sided soft barrier penalty.
                 # Weighted by physical step length (dx) and mask out invalid segments (dx <= 0)
-                dx_weights = tracks[:, dx_idx]
+                dx_weights = t[:, dx_idx]
                 valid_step_mask = (dx_weights > 0)
                 dedx_barrier = self.dedx_soft_barrier_weight * jnp.sum(
                     dx_weights * valid_step_mask * jnp.square(jnp.maximum(0., dedx_sample - self.dedx_soft_barrier_threshold))
@@ -952,26 +1602,77 @@ class ParamFitter:
                 total_dx = jnp.sum(dx_weights * segment_valid)
                 total_dedx_len = jnp.sum(dedx_sample * dx_weights * segment_valid)
                 mean_dedx = total_dedx_len / jnp.maximum(total_dx, 1e-6)
-                dedx_mean_penalty = self.dedx_mean_constraint_weight * jnp.square(mean_dedx - self.dedx_mean_constraint_target)
+
+                # Scale the mean constraint target by the length-weighted mean of scale factors
+                if 'length_scale_factor' in self.sim_track_fields:
+                    mean_scale_factor = jnp.sum(length_scale_factor * dx_weights * segment_valid) / jnp.maximum(total_dx, 1e-6)
+                    scaled_mean_target = self.dedx_mean_constraint_target * mean_scale_factor
+                else:
+                    scaled_mean_target = self.dedx_mean_constraint_target
+
+                dedx_mean_penalty = self.dedx_mean_constraint_weight * jnp.square(mean_dedx - scaled_mean_target)
 
                 total_loss = hit_loss + dedx_prior + dedx_barrier + dedx_mean_penalty
+
+                # Gaussian MCS prior on chain deflection angles (vectorized)
+                if chain_angles_pt is not None and _chain_meta is not None:
+                    _mcs_loss = _chain_mcs_vectorized(
+                        _chain_thetas, _chain_phis, _chain_meta, self._mcs_prior_weight)
+                    total_loss = total_loss + _mcs_loss
+                else:
+                    _mcs_loss = jnp.float32(0.)
+
                 aux_out = dict(hit_aux) if hit_aux is not None else {}
                 aux_out['dedx_prior'] = dedx_prior
                 aux_out['dedx_barrier'] = dedx_barrier
                 aux_out['dedx_mean_penalty'] = dedx_mean_penalty
                 aux_out['mean_dedx'] = mean_dedx
+                aux_out['mcs_prior'] = _mcs_loss
                 return total_loss, aux_out
 
+            _chain_angles_active = (self.fit_chain_positions and chain_angles_per_track is not None)
+            _dedx_active = (log_dedx is not None)
             if with_loss and with_grad:
-                (loss_val, aux), (grads, grads_dedx) = value_and_grad(
-                    loss_wrapper_combined, argnums=(0, 1), has_aux=True
-                )(self.norm_params, log_dedx)
+                if _chain_angles_active and _dedx_active:
+                    # Joint: global params + per-seg dEdx + chain angles
+                    (loss_val, aux), (grads, grads_dedx, grads_chain_per_track) = value_and_grad(
+                        loss_wrapper_combined, argnums=(0, 1, 2), has_aux=True
+                    )(self.norm_params, log_dedx, chain_angles_per_track)
+                elif _chain_angles_active and not _dedx_active:
+                    # Position-only: global params + chain angles (no dEdx)
+                    def _wrap_no_dedx(np_, ca_):
+                        return loss_wrapper_combined(np_, None, ca_)
+                    (loss_val, aux), (_g_np, grads_chain_per_track) = value_and_grad(
+                        _wrap_no_dedx, argnums=(0, 1), has_aux=True
+                    )(self.norm_params, chain_angles_per_track)
+                    grads = _g_np
+                    grads_dedx = None
+                else:
+                    (loss_val, aux), (grads, grads_dedx) = value_and_grad(
+                        loss_wrapper_combined, argnums=(0, 1), has_aux=True
+                    )(self.norm_params, log_dedx, None)
+                    grads_chain_per_track = None
             elif with_loss:
-                loss_val, aux = loss_wrapper_combined(self.norm_params, log_dedx)
+                loss_val, aux = loss_wrapper_combined(self.norm_params, log_dedx,
+                                                      chain_angles_per_track if _chain_angles_active else None)
             elif with_grad:
-                (grads, grads_dedx), aux = grad(
-                    loss_wrapper_combined, argnums=(0, 1), has_aux=True
-                )(self.norm_params, log_dedx)
+                if _chain_angles_active and _dedx_active:
+                    (grads, grads_dedx, grads_chain_per_track), aux = grad(
+                        loss_wrapper_combined, argnums=(0, 1, 2), has_aux=True
+                    )(self.norm_params, log_dedx, chain_angles_per_track)
+                elif _chain_angles_active and not _dedx_active:
+                    def _wrap_no_dedx(np_, ca_):
+                        return loss_wrapper_combined(np_, None, ca_)
+                    (_g_np, grads_chain_per_track), aux = grad(
+                        _wrap_no_dedx, argnums=(0, 1), has_aux=True
+                    )(self.norm_params, chain_angles_per_track)
+                    grads = _g_np
+                    grads_dedx = None
+                else:
+                    (grads, grads_dedx), aux = grad(
+                        loss_wrapper_combined, argnums=(0, 1), has_aux=True
+                    )(self.norm_params, log_dedx, None)
+                    grads_chain_per_track = None
 
         else:
             def loss_wrapper(norm_params_input):
@@ -1001,7 +1702,7 @@ class ParamFitter:
             if with_hess:
                 hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.norm_params)
 
-        return loss_val, grads, grads_dedx, aux, hess, aux_hess
+        return loss_val, grads, grads_dedx, grads_chain_per_track, aux, hess, aux_hess
 
     
     def prepare_fit(self):
@@ -1129,6 +1830,13 @@ class GradientDescentFitter(ParamFitter):
         # Flag to reset calibration Adam state exactly once when dEdx is frozen
         self._dedx_freeze_adam_reset_done = False
 
+        # ── Per-track chain geometry fitting state ───────────────────────────
+        # _chain_cache: batch_idx → list of {'angles': jnp.array(2*n_chain,), 'opt_state'}
+        self._chain_cache: dict = {}
+        self._chain_optimizer = optax.adam(self._chain_lr) if self.fit_chain_positions else None
+        # _batch_true_positions: batch_idx → (N_fine, 3) float32 array of true midpoints
+        self._batch_true_positions: dict = {}
+
         if self.resume_from is not None:
             logger.info(f"Resuming from checkpoint {self.resume_from}")
             self.load_checkpoint(self.resume_from)
@@ -1217,9 +1925,76 @@ class GradientDescentFitter(ParamFitter):
         self._dedx_cache[batch_idx] = {'log_dedx': new_log_dedx, 'opt_state': new_opt_state}
         return new_log_dedx
 
+    def _get_or_init_chain_state(self, batch_idx):
+        """Lazily initialise per-track chain angles and Adam state for batch_idx.
+
+        Angles layout (absolute per-segment directions):
+          angles[:n_chain] = theta_0, theta_1, ..., theta_{n-1}   (global polar angle of each segment)
+          angles[n_chain:] = phi_0,   phi_1,   ..., phi_{n-1}     (global azimuthal angle of each segment)
+        Shape: (2 * n_chain,).  Initialised so all segments point in the initial track direction.
+        MCS prior penalises jnp.diff(thetas) and jnp.diff(phis) — consecutive direction changes.
+        """
+        if batch_idx not in self._chain_cache:
+            ctxs = self._batch_chain_contexts.get(batch_idx, [])
+            states = []
+            for ctx in ctxs:
+                n_c = ctx.n_chain
+                angles = np.empty(2 * n_c, dtype=np.float32)
+                angles[:n_c] = ctx.theta0_i   # all segments start aligned with initial direction
+                angles[n_c:] = ctx.phi0_i
+                angles_jax = jnp.array(angles)
+                opt_state = self._chain_optimizer.init(angles_jax)
+                states.append({'angles': angles_jax, 'opt_state': opt_state})
+            self._chain_cache[batch_idx] = states
+        return self._chain_cache[batch_idx]
+
+    def _process_chain_grads(self, batch_idx, grads_chain_per_track):
+        """Apply one Adam step for per-track chain angles of batch_idx."""
+        states = self._get_or_init_chain_state(batch_idx)
+        new_states = []
+        for state, g in zip(states, grads_chain_per_track):
+            if jnp.any(jnp.isnan(g)):
+                new_states.append(state)
+                continue
+            updates, new_opt_state = self._chain_optimizer.update(g, state['opt_state'])
+            new_angles = state['angles'] + updates
+            new_states.append({'angles': new_angles, 'opt_state': new_opt_state})
+        self._chain_cache[batch_idx] = new_states
+
+    def _compute_pos_residual_batch(self, batch_idx):
+        """Mean 3D distance (cm) between current fitted chain positions and true target positions."""
+        ctxs           = self._batch_chain_contexts.get(batch_idx, [])
+        states         = self._chain_cache.get(batch_idx, [])
+        track_pos_dict = self._batch_true_positions.get(batch_idx, {})
+        if not ctxs or not states:
+            return None
+        dists = []
+        for ctx, state in zip(ctxs, states):
+            true_pts = track_pos_dict.get(ctx.track_id)
+            if true_pts is None:
+                continue
+            angles  = np.asarray(state['angles'])
+            _nc     = ctx.n_chain
+            thetas  = jnp.array(angles[:_nc])
+            phis    = jnp.array(angles[_nc:])
+            pos_nodes, _ = _absolute_chain_forward(
+                jnp.array(ctx.x0_fixed), thetas, phis, ctx.step_len)
+            pos_nodes = np.asarray(pos_nodes)
+            nc = ctx.n_chain
+            for j, alpha in enumerate(ctx.alpha_mid):
+                k = int(np.clip(int(np.floor(alpha * nc)), 0, nc - 1))
+                frac = float(alpha * nc - k)
+                fitted = pos_nodes[k] + frac * (pos_nodes[k + 1] - pos_nodes[k])
+                true   = true_pts[j]  # pre-interpolated at alpha_mid[j]
+                dists.append(float(np.linalg.norm(fitted - true)))
+        return float(np.mean(dists)) if dists else None
+
     def fit(self, dataloader_sim, target, epochs=300, iterations=None, save_freq=10, print_freq=1):
 
         self.prepare_fit()
+
+        if self.fit_track_positions or self.fit_chain_positions:
+            self.precompute_static_pixels(dataloader_sim, target)
 
         start_iter = self.total_iter if self.resume_from is not None else 0
 
@@ -1293,6 +2068,17 @@ class GradientDescentFitter(ParamFitter):
                     selected_tracks_bt_sim = dataloader_sim[i].reshape(-1, len(self.sim_track_fields))
                     self.validate_track_batch_event_ids(selected_tracks_bt_sim, self.sim_track_fields, f"sim batch {i}")
                     selected_tracks_sim = jax.device_put(selected_tracks_bt_sim)
+
+                    if self.fit_track_positions:
+                        if i not in self._batch_aligned_tracks:
+                            self._batch_aligned_tracks[i] = selected_tracks_sim
+                        
+                        if total_iter % self.track_alignment_freq == 0:
+                            logger.info(f"Aligning track geometry locally for batch {i} (iter {total_iter})...")
+                            self._batch_aligned_tracks[i] = self.profile_local_geometry(i, self._batch_aligned_tracks[i], target, self.current_params)
+                        
+                        selected_tracks_sim = self._batch_aligned_tracks[i]
+
                     evts_sim = self.get_batch_global_event_ids(dataloader_sim, i, selected_tracks_sim)
 
                     # target
@@ -1342,6 +2128,19 @@ class GradientDescentFitter(ParamFitter):
                         _parent_ids = None
                         _log_dedx = None
 
+                    # Chain position local state for this batch
+                    # Allow position-only mode (fit_dedx=False) as well as joint mode
+                    _chain_active = (self.fit_chain_positions and
+                                     total_iter >= self._chain_start_iter and
+                                     total_iter % self._chain_update_freq == 0 and
+                                     i in self._batch_chain_contexts and
+                                     (_log_dedx is not None or not self.fit_dedx))
+                    if _chain_active:
+                        _chain_states   = self._get_or_init_chain_state(i)
+                        _chain_angles_pt = [s['angles'] for s in _chain_states]
+                    else:
+                        _chain_angles_pt = None
+
                     # During the warm-up phase (fit_dedx=True but not yet active),
                     # replace the dEdx and dE columns with the prior centre so no
                     # true dEdx leaks into the calibration gradient.
@@ -1359,11 +2158,18 @@ class GradientDescentFitter(ParamFitter):
                         logger.info(f"dEdx fitting deferred: will activate at iteration {self.dedx_start_iter}")
 
                     # loss
-                    loss_val, grads, _grads_dedx, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True, log_dedx=_log_dedx, parent_ids=_parent_ids)
+                    loss_val, grads, _grads_dedx, _grads_chain, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True, log_dedx=_log_dedx, parent_ids=_parent_ids, chain_angles_per_track=_chain_angles_pt)
 
                     # Apply per-segment dEdx gradient immediately after every step.
                     if _grads_dedx is not None and _log_dedx is not None and not _dedx_frozen:
                         self._process_dedx_grads(i, _grads_dedx, _log_dedx)
+
+                    # Apply per-track chain angle gradient immediately after every step.
+                    if _chain_active and _grads_chain is not None:
+                        self._process_chain_grads(i, _grads_chain)
+                        _pos_res = self._compute_pos_residual_batch(i)
+                        if _pos_res is not None:
+                            self.training_history.setdefault('pos_residual_iter', []).append(_pos_res)
 
                     # Accumulate gradients if sz_mini_bt > 1
                     if self.sz_mini_bt > 1:
@@ -1577,7 +2383,7 @@ class LikelihoodProfiler(ParamFitter):
                     start_time = time()
                     new_param_values = {param: lower + iter*param_step}
                     self.current_params = self.ref_params.replace(**new_param_values)
-                    loss_val, grads, _, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, use_physical_params=True)
+                    loss_val, grads, _, _, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, use_physical_params=True)
 
                     stop_time = time()
 
@@ -1693,13 +2499,13 @@ class MinuitFitter(ParamFitter):
                 def loss_wrapper(args): # type: ignore
                     # Update the current params with the new values
                     self.current_params = self.current_params.replace(**{key: args[i] for i, key in enumerate(self.relevant_params_list)})
-                    loss_val, _, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_grad=False, use_physical_params=True)
+                    loss_val, _, _, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_grad=False, use_physical_params=True)
                     return loss_val
 
                 def grad_wrapper(args): # type: ignore
                     # Update the current params with the new values
                     self.current_params = self.current_params.replace(**{key: args[i] for i, key in enumerate(self.relevant_params_list)})
-                    _, grads, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=False, use_physical_params=True)
+                    _, grads, _, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=False, use_physical_params=True)
                     return [getattr(grads, key) for key in self.relevant_params_list]
 
                 self.configure_minimizer(loss_wrapper, grad_wrapper)
@@ -1727,7 +2533,7 @@ class MinuitFitter(ParamFitter):
                     # target
                     ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = get_target(self, i, evts_sim, target)
 
-                    loss_val, _, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_grad=False, with_loss=True, use_physical_params=True)
+                    loss_val, _, _, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_grad=False, with_loss=True, use_physical_params=True)
                     tot_loss += loss_val # type: ignore
                 logger.debug(f"Total loss: {tot_loss}")
                 return tot_loss
@@ -1747,7 +2553,7 @@ class MinuitFitter(ParamFitter):
                     # target
                     ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = get_target(self, i, evts_sim, target)
 
-                    _, grads, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=False, use_physical_params=True)
+                    _, grads, _, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=False, use_physical_params=True)
                     tot_grad = [getattr(grads, key) + tot_grad[i] for i, key in enumerate(self.relevant_params_list)]
                 logger.debug(f"Average gradient: {[g/len(dataloader_sim) for g in tot_grad]}")
                 return [g for g in tot_grad]
@@ -1797,7 +2603,7 @@ class HessianCalculator(ParamFitter):
             self.training_history['n_hit'].append(n_hit)
 
             if self.current_mode == 'lut':
-                loss_val, grads, _, aux, hess, aux_hess = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=True)
+                loss_val, grads, _, _, aux, hess, aux_hess = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=True)
                 self.training_history['hessian'].append(format_hessian(hess))
                 self.training_history['gradient'].append(format_hessian(grads))
                 self.training_history['losses_iter'].append(loss_val.item())
