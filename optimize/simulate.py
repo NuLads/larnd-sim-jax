@@ -159,7 +159,7 @@ def main(config):
             if config.probabilistic_sim:
                 unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=True)
                 wfs = pad_to_closest_multiple(wfs, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
-                adcs_distrib, pix_x_prob, pix_y_prob, ticks_prob, event_prob = simulate_probabilistic(ref_params, wfs, unique_pixels)
+                adcs_distrib, pix_x_prob, pix_y_prob, ticks_prob, event_prob, roi_start_prob, log_lambda_prob = simulate_probabilistic(ref_params, wfs, unique_pixels)
                 _, _, pixel_plane_prob, _ = id2pixel(ref_params, unique_pixels)
             else:
                 adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event, hit_pixels = simulate_stochastic(ref_params, wfs, unique_pixels, rngseed=rngseed)
@@ -174,6 +174,8 @@ def main(config):
             ds = {
                 'adcs_distrib': adcs_distrib,
                 'ticks_prob':   ticks_prob,
+                'roi_start':    roi_start_prob,
+                'log_lambda':   log_lambda_prob,
                 'pix_x':        pix_x_prob,
                 'pix_y':        pix_y_prob,
                 'pixel_plane':  pixel_plane_prob,

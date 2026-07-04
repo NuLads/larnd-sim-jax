@@ -397,9 +397,21 @@ class Params_template:
     nb_sampling_bins_per_pixel: int = struct.field(pytree_node=False, default=10)
     long_diff_template: jax.Array = struct.field(pytree_node=False, default=None)
     long_diff_extent: int = struct.field(pytree_node=False, default=20)
-    roi_threshold: float = struct.field(pytree_node=False, default=0.01)  # Threshold for region of interest selection
-    roi_split_length: int = struct.field(pytree_node=False, default=400)  # Length of the region of interest split
     fee_paths_scaling: int = struct.field(pytree_node=False, default=100)  # Scaling factor for fee paths
+    roi_nticks: int = struct.field(pytree_node=False, default=400)  # Per-hit output window length in ticks
+    pad_before: int = struct.field(pytree_node=False, default=300)  # Ticks kept before the anchor of the per-hit distribution
+    # Hit-ROI anchor strategy for the per-hit output window:
+    #   "argmax_prob"        — anchor on argmax(log_total_hit_dist_tick) (default; noise-smoothed peak).
+    #   "threshold_crossing" — anchor on first tick where reset-adjusted q_sum crosses threshold (physical, cheaper).
+    hit_roi_anchor_mode: str = struct.field(pytree_node=False, default="argmax_prob")
+    # Waveform-ROI dispatch (bucketing on the raw waveform before fee_jax).
+    #   "single"   — one fee_jax call over all pixels on the full waveform (default; current behaviour).
+    #   "bucketed" — two fee_jax calls: small-ROI pixels get a windowed input of length roi_split_length,
+    #                the rest get the full waveform. Reduces working memory when most pixels have a
+    #                narrow above-threshold span.
+    wfs_roi_mode: str = struct.field(pytree_node=False, default="single")
+    roi_threshold: float = struct.field(pytree_node=False, default=0.01)   # Above-this current threshold for waveform-ROI classification (bucketed mode).
+    roi_split_length: int = struct.field(pytree_node=False, default=400)   # Ticks kept for the "small" waveform-ROI bucket.
     nb_tran_diff_bins: int = struct.field(pytree_node=False, default=5)
     hit_prob_threshold: float = struct.field(pytree_node=False, default=1e-5)  # Threshold for hit probability
     tran_diff_bin_edges: jax.Array = struct.field(pytree_node=False, default=None) # Bin edges for transverse diffusion

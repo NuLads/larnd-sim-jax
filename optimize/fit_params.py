@@ -27,6 +27,7 @@ import iminuit
 from tqdm import tqdm
 
 from .strategies import LUTSimulation, LUTProbabilisticSimulation, ParametrizedSimulation, GenericLossStrategy
+from .benchmark import summarize_history, print_summary
 
 from ctypes import cdll
 # libcudart = cdll.LoadLibrary('libcudart.so')
@@ -248,6 +249,14 @@ class ParamFitter:
         self.electron_sampling_resolution = config.electron_sampling_resolution
         self.number_pix_neighbors = config.number_pix_neighbors
         self.signal_length = config.signal_length
+        self.roi_nticks = getattr(config, "roi_nticks", None)
+        self.pad_before = getattr(config, "pad_before", None)
+        self.max_adc_values = getattr(config, "max_adc_values", None)
+        self.fee_paths_scaling = getattr(config, "fee_paths_scaling", None)
+        self.hit_roi_anchor_mode = getattr(config, "hit_roi_anchor_mode", None)
+        self.wfs_roi_mode = getattr(config, "wfs_roi_mode", None)
+        self.roi_threshold = getattr(config, "roi_threshold", None)
+        self.roi_split_length = getattr(config, "roi_split_length", None)
         self.use_dedx_density = bool(getattr(config, "use_dedx_density", False))
         self.dedx_density_mode = getattr(config, "dedx_density_mode", "histogram")
         self.probabilistic_sim = probabilistic_sim
@@ -395,6 +404,30 @@ class ParamFitter:
             number_pix_neighbors=self.number_pix_neighbors,
             signal_length=self.signal_length,
             time_window=self.signal_length)
+
+        # Optional per-hit ROI window overrides for the probabilistic FEE output.
+        # Both are static (bake into JIT shapes), so leave them at defaults unless
+        # explicitly requested.
+        if self.roi_nticks is not None:
+            ref_params = ref_params.replace(roi_nticks=int(self.roi_nticks))
+        if self.pad_before is not None:
+            ref_params = ref_params.replace(pad_before=int(self.pad_before))
+        # Optional FEE compute-shape overrides. Both are static integers that bake
+        # into JIT shapes:
+        #   MAX_ADC_VALUES: number of hits per pixel (H). Reduce for single-track fits (e.g. 6).
+        #   fee_paths_scaling: beam-search width (Nvalues). Reduce to shrink working memory (e.g. 16-32).
+        if self.max_adc_values is not None:
+            ref_params = ref_params.replace(MAX_ADC_VALUES=int(self.max_adc_values))
+        if self.fee_paths_scaling is not None:
+            ref_params = ref_params.replace(fee_paths_scaling=int(self.fee_paths_scaling))
+        if self.hit_roi_anchor_mode is not None:
+            ref_params = ref_params.replace(hit_roi_anchor_mode=str(self.hit_roi_anchor_mode))
+        if self.wfs_roi_mode is not None:
+            ref_params = ref_params.replace(wfs_roi_mode=str(self.wfs_roi_mode))
+        if self.roi_threshold is not None:
+            ref_params = ref_params.replace(roi_threshold=float(self.roi_threshold))
+        if self.roi_split_length is not None:
+            ref_params = ref_params.replace(roi_split_length=int(self.roi_split_length))
         
         if self.lut_file is not None:
             self.response, ref_params = load_lut(self.lut_file, ref_params)
@@ -1099,6 +1132,14 @@ class GradientDescentFitter(ParamFitter):
                 shutil.rmtree('target_' + self.out_label, ignore_errors=True)
 
             # libcudart.cudaProfilerStop()
+
+        # Runtime & peak-memory summary for the fit that just completed.
+        try:
+            summary = summarize_history(self.training_history, warmup_steps=1)
+            print_summary(summary, header=f"{self.__class__.__name__} benchmark ({self.out_label})")
+            self.training_history['benchmark_summary'] = summary
+        except Exception as exc:
+            logger.warning(f"Could not summarize benchmark history: {exc}")
 
 
 class LikelihoodProfiler(ParamFitter):

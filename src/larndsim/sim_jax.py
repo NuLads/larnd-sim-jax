@@ -329,7 +329,7 @@ def simulate_signals_parametrized(params, electrons, pIDs, unique_pixels, rngkey
     pixel_coords = get_pixel_coordinates(params, pixel_x, pixel_y, pixel_plane)
     pixel_x = pixel_coords[:, 0]
     pixel_y = pixel_coords[:, 1]
-    pixel_z  = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, 10))
+    pixel_z  = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, params.MAX_ADC_VALUES))
     ref_hit_prob = jnp.where(ticks < wfs.shape[1] - 3, 1., 0.)  # Assuming hit probability is based on whether ticks are within the waveform length
 
     return adcs, pixel_x, pixel_y, pixel_z, ticks, ref_hit_prob, event
@@ -646,45 +646,6 @@ def parse_output(params, adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event
 
     return adcs_output, pixel_x_output, pixel_y_output, pixel_z_output, ticks_output, hit_prob_output, event_output, unique_pixels_output, nb_valid
 
-@jit
-def select_split_roi(params, wfs):
-    roi_threshold = params.roi_threshold
-    Npix, Nticks = wfs.shape
-    roi_start = jnp.argmax(wfs > roi_threshold, axis=1)
-    roi_end = Nticks - jnp.argmax(wfs[:, ::-1] > roi_threshold, axis=1) - 1
-
-    mask_small_rois = ((roi_end - roi_start) < params.roi_split_length) & (roi_start > 0)
-    nb_small_rois = jnp.sum(mask_small_rois)
-    return nb_small_rois, mask_small_rois, roi_start
-
-@partial(jit, static_argnames=["padded_small_nb", "padded_large_nb"])
-def fee_sim_from_split(params, padded_small_nb, padded_large_nb, wfs, mask_small_rois, roi_start, max_tick_nb):
-    Npix = wfs.shape[0]
-
-
-    small_roi_idx = jnp.argwhere(mask_small_rois, size=padded_small_nb, fill_value=0)[:, 0]
-    large_roi_idx = jnp.argwhere(~mask_small_rois, size=padded_large_nb, fill_value=0)[:, 0]
-
-    small_roi_start = roi_start[small_roi_idx]
-
-    large_rois = wfs.at[large_roi_idx, :].get()
-    small_rois = wfs.at[small_roi_idx[:, None], (jnp.arange(params.roi_split_length) + small_roi_start[:, None])].get()
-
-    ticks_distrib_small, charge_distrib_small = get_adc_values_average_noise_vmap(params, small_rois)
-    ticks_distrib_large, charge_distrib_large = get_adc_values_average_noise_vmap(params, large_rois)
-
-    charge_distrib = jnp.zeros((Npix, charge_distrib_small.shape[1], charge_distrib_small.shape[2]))
-
-    charge_distrib = charge_distrib.at[small_roi_idx, :, :].set(charge_distrib_small[:small_roi_idx.shape[0], :, :])
-    charge_distrib = charge_distrib.at[large_roi_idx, :, :].set(charge_distrib_large[:large_roi_idx.shape[0], :, :])
-
-
-    ticks_distrib = jnp.zeros((Npix, ticks_distrib_small.shape[1], ticks_distrib_small.shape[2]))
-    ticks_distrib = ticks_distrib.at[small_roi_idx, :, small_roi_start:small_roi_start + params.roi_split_length].set(ticks_distrib_small[:small_roi_idx.shape[0], :, :])
-    ticks_distrib = ticks_distrib.at[large_roi_idx, :, :].set(ticks_distrib_large[:large_roi_idx.shape[0], :, :])
-    ticks_distrib = jnp.minimum(ticks_distrib, max_tick_nb)  # Ensure ticks do not exceed waveform length
-
-    return charge_distrib, ticks_distrib
 
 def simulate_wfs(params, response_template, tracks, fields):
     """
@@ -762,11 +723,100 @@ def simulate_stochastic(params, wfs, unique_pixels, rngseed):
     pixel_coords = get_pixel_coordinates(params, pixel_x, pixel_y, pixel_plane)
     pixel_x = pixel_coords[:, 0]
     pixel_y = pixel_coords[:, 1]
-    pixel_z  = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, 10))
+    pixel_z  = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, params.MAX_ADC_VALUES))
 
     adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event, hit_pixels, nb_valid = parse_output(params, adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event, unique_pixels)
 
     return adcs[:nb_valid], pixel_x[:nb_valid], pixel_y[:nb_valid], pixel_z[:nb_valid], ticks[:nb_valid], hit_prob[:nb_valid], event[:nb_valid], hit_pixels[:nb_valid]
+
+@jit
+def select_split_roi(params, wfs):
+    """Classify each pixel as small- or large-ROI based on the tick-width of its above-threshold span.
+
+    Returns (nb_small, is_small_mask, roi_start_per_pixel). Small-ROI pixels have their signal
+    contained in a `roi_split_length`-wide window; large-ROI pixels get the full waveform.
+    This is discrete/non-differentiable — callers should wrap with stop_gradient.
+    """
+    roi_threshold = params.roi_threshold
+    Npix, Nticks = wfs.shape
+    roi_start = jnp.argmax(wfs > roi_threshold, axis=1)
+    roi_end = Nticks - jnp.argmax(wfs[:, ::-1] > roi_threshold, axis=1) - 1
+    is_small = ((roi_end - roi_start) < params.roi_split_length) & (roi_start > 0)
+    nb_small = jnp.sum(is_small)
+    return nb_small, is_small, roi_start
+
+
+@partial(jit, static_argnames=["padded_small_nb", "padded_large_nb"])
+def simulate_probabilistic_bucketed(params, wfs, unique_pixels, is_small, roi_start_pix,
+                                    padded_small_nb, padded_large_nb, min_log_prob=-18.42):
+    """Two-bucket waveform-ROI dispatch of simulate_probabilistic.
+
+    Small-ROI pixels get a `roi_split_length`-tick sliced input; large-ROI pixels get the full
+    waveform. Both buckets run through `get_adc_values_average_noise_vmap` independently and
+    their outputs are scattered back into the same `(Npix, ...)` shape as the single-bucket path.
+
+    Padding indices point at a trash slot at row Npix to avoid scatter collisions from the
+    fill_value padding of `jnp.argwhere`.
+
+    Returns the same 7-tuple as `simulate_probabilistic`.
+    """
+    Npix, Nticks = wfs.shape
+    L_small = params.roi_split_length
+    H = params.MAX_ADC_VALUES
+    R = params.roi_nticks
+
+    trash = Npix
+    small_idx = jnp.argwhere(is_small, size=padded_small_nb, fill_value=trash)[:, 0]
+    large_idx = jnp.argwhere(~is_small, size=padded_large_nb, fill_value=trash)[:, 0]
+
+    # Gather waveform slices. Use safe-index (min with Npix-1) for the trash-slot rows to
+    # avoid an OOB gather — those rows' outputs will be scattered to the trash slot and
+    # discarded at the end.
+    safe_small = jnp.minimum(small_idx, Npix - 1)
+    safe_large = jnp.minimum(large_idx, Npix - 1)
+
+    small_starts = roi_start_pix[safe_small]
+    small_offsets = jnp.clip(small_starts[:, None] + jnp.arange(L_small)[None, :], 0, Nticks - 1)
+    small_wfs = wfs[safe_small[:, None], small_offsets]
+    large_wfs = wfs[safe_large]
+
+    tp_small, ch_small, inner_roi_small, ll_small = get_adc_values_average_noise_vmap(params, small_wfs)
+    tp_large, ch_large, inner_roi_large, ll_large = get_adc_values_average_noise_vmap(params, large_wfs)
+
+    # Absolute-tick anchors: for small pixels, add the outer pixel-level roi_start
+    # (in the full readout window) to the inner per-hit roi_start returned by fee_jax.
+    abs_start_small = small_starts[:, None] + inner_roi_small
+    abs_start_large = inner_roi_large  # outer offset = 0 for the full-waveform bucket
+
+    # Scatter into (Npix+1, ...) tensors using row Npix as a trash slot, then discard it.
+    log_prob = jnp.full((Npix + 1, H, R), min_log_prob, dtype=jnp.float32)
+    log_prob = log_prob.at[small_idx].set(tp_small)
+    log_prob = log_prob.at[large_idx].set(tp_large)
+    log_prob = log_prob[:Npix]
+
+    charge = jnp.zeros((Npix + 1, H, R), dtype=jnp.float32)
+    charge = charge.at[small_idx].set(ch_small)
+    charge = charge.at[large_idx].set(ch_large)
+    charge = charge[:Npix]
+
+    roi_start_out = jnp.zeros((Npix + 1, H), dtype=jnp.int32)
+    roi_start_out = roi_start_out.at[small_idx].set(abs_start_small)
+    roi_start_out = roi_start_out.at[large_idx].set(abs_start_large)
+    roi_start_out = roi_start_out[:Npix]
+
+    log_lambda = jnp.full((Npix + 1, H), min_log_prob, dtype=jnp.float32)
+    log_lambda = log_lambda.at[small_idx].set(ll_small)
+    log_lambda = log_lambda.at[large_idx].set(ll_large)
+    log_lambda = log_lambda[:Npix]
+
+    adcs_distrib = digitize(params, charge)
+    pixel_x, pixel_y, pixel_plane, event = id2pixel(params, unique_pixels)
+    pixel_coords = get_pixel_coordinates(params, pixel_x, pixel_y, pixel_plane)
+    pixel_x = pixel_coords[:, 0]
+    pixel_y = pixel_coords[:, 1]
+
+    return adcs_distrib, pixel_x, pixel_y, log_prob, event, roi_start_out, log_lambda
+
 
 @jit
 def simulate_probabilistic(params, wfs, unique_pixels):
@@ -791,26 +841,20 @@ def simulate_probabilistic(params, wfs, unique_pixels):
             - event: Event numbers associated with each pixel.
     """
 
-    # Npix = wfs.shape[0]
-    # ROI selection is a discrete, non-differentiable operation; we explicitly stop
-    # gradients from flowing through select_split_roi to avoid backpropagating through
-    # this indexing/masking logic while still allowing gradients on downstream signals.
-    # nb_small_rois, mask_small_rois, roi_start = jax.lax.stop_gradient(select_split_roi(params, wfs))
-    # nb_small_rois = int(nb_small_rois)
-    # padded_small_nb = pad_size(nb_small_rois, "wfs_roi", 0.1)
-    # padded_large_nb = pad_size(Npix - nb_small_rois, "wfs_roi", 0.1)
-
-    # integral, ticks, hit_prob = fee_sim_from_split(params, padded_small_nb, padded_large_nb, wfs[:, 1:], mask_small_rois, roi_start, wfs.shape[1] - 2)
-    
-    ticks_prob, charge_distrib = get_adc_values_average_noise_vmap(params, wfs)
+    # Single-bucket per-hit ROI: `get_adc_values_average_noise_vmap` emits a
+    # compact `(Npix, MAX_ADC_VALUES, roi_nticks)` window per hit centered on the
+    # argmax of the tick distribution, plus `roi_start` (absolute-tick offset per
+    # hit) and `log_lambda` (full-window logsumexp). The two window shape params
+    # (`roi_nticks`, `pad_before`) are configured via `Params_template`.
+    ticks_prob, charge_distrib, roi_start, log_lambda = get_adc_values_average_noise_vmap(params, wfs)
 
     adcs_distrib = digitize(params, charge_distrib)
     pixel_x, pixel_y, pixel_plane, event = id2pixel(params, unique_pixels)
     pixel_coords = get_pixel_coordinates(params, pixel_x, pixel_y, pixel_plane)
     pixel_x = pixel_coords[:, 0]
     pixel_y = pixel_coords[:, 1]
-    
-    return adcs_distrib, pixel_x, pixel_y, ticks_prob, event
+
+    return adcs_distrib, pixel_x, pixel_y, ticks_prob, event, roi_start, log_lambda
 
 
 def prepare_tracks(params, tracks_file, invert_xz=True):

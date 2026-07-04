@@ -98,7 +98,7 @@ def prepare_hits(params, adcs, pixels, ticks, match_z=False):
     pixel_x = pixel_coords[:, 0]
     pixel_y = pixel_coords[:, 1]
     if match_z:
-        drift = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, 10))
+        drift = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, params.MAX_ADC_VALUES))
     else:
         drift = ticks * params.t_sampling
 
@@ -255,11 +255,11 @@ def chamfer_3d_old(params, adcs, pixel_x, pixel_y, pixel_z, ticks, eventID, adcs
     plane_ref = pixel_z_ref < 0 #FIXME store this information in the reference, so it can be properly used.
     drift_ref =  get_hit_z(params, ticks_ref.flatten(), plane_ref.astype(int), fixed_v = True)
 
-    mask = (adcs.flatten() > params.DISCRIMINATION_THRESHOLD/1e3) & (jnp.repeat(eventID, 10) >=0)
-    if len(adcs_ref.flatten()) == len(eventID_ref) * 10:
-        eventID_ref = jnp.repeat(eventID_ref,10)
-        pixel_x_ref = jnp.repeat(pixel_x_ref,10)
-        pixel_y_ref = jnp.repeat(pixel_y_ref,10)
+    mask = (adcs.flatten() > params.DISCRIMINATION_THRESHOLD/1e3) & (jnp.repeat(eventID, params.MAX_ADC_VALUES) >=0)
+    if len(adcs_ref.flatten()) == len(eventID_ref) * params.MAX_ADC_VALUES:
+        eventID_ref = jnp.repeat(eventID_ref, params.MAX_ADC_VALUES)
+        pixel_x_ref = jnp.repeat(pixel_x_ref, params.MAX_ADC_VALUES)
+        pixel_y_ref = jnp.repeat(pixel_y_ref, params.MAX_ADC_VALUES)
     mask_ref = (adcs_ref.flatten() > params.DISCRIMINATION_THRESHOLD/1e3) & (eventID_ref >= 0)
 
     nb_selected = jnp.count_nonzero(mask)
@@ -267,9 +267,9 @@ def chamfer_3d_old(params, adcs, pixel_x, pixel_y, pixel_z, ticks, eventID, adcs
     
     padded_size = pad_size(max(int(nb_selected), int(nb_selected_ref)), "batch_hits")
 
-    eventID_masked = jnp.pad(jnp.repeat(eventID, 10)[mask], (0, padded_size - nb_selected), mode='constant', constant_values=-1e9)
-    pixel_x_masked = jnp.pad(jnp.repeat(pixel_x, 10)[mask], (0, padded_size - nb_selected), mode='constant', constant_values=-1e9)
-    pixel_y_masked = jnp.pad(jnp.repeat(pixel_y, 10)[mask], (0, padded_size - nb_selected), mode='constant', constant_values=-1e9)
+    eventID_masked = jnp.pad(jnp.repeat(eventID, params.MAX_ADC_VALUES)[mask], (0, padded_size - nb_selected), mode='constant', constant_values=-1e9)
+    pixel_x_masked = jnp.pad(jnp.repeat(pixel_x, params.MAX_ADC_VALUES)[mask], (0, padded_size - nb_selected), mode='constant', constant_values=-1e9)
+    pixel_y_masked = jnp.pad(jnp.repeat(pixel_y, params.MAX_ADC_VALUES)[mask], (0, padded_size - nb_selected), mode='constant', constant_values=-1e9)
     drift_masked = jnp.pad(drift.flatten()[mask], (0, padded_size - nb_selected), mode='constant', constant_values=-1e9)
     adcs_masked = jnp.pad(adcs.flatten()[mask], (0, padded_size - nb_selected), mode='constant', constant_values=0)/adc_norm
 
@@ -365,7 +365,7 @@ def get_hits_space_coords(params, pIDs, ticks):
     pixel_coords = get_pixel_coordinates(params, pixel_x, pixel_y, pixel_plane)
     pixel_x = pixel_coords[:, 0]
     pixel_y = pixel_coords[:, 1]
-    pixel_z = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, 10))
+    pixel_z = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, params.MAX_ADC_VALUES))
 
     return pixel_x, pixel_y, pixel_z, eventID
 

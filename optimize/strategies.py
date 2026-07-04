@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from larndsim.sim_jax import simulate_wfs, simulate_stochastic, simulate_parametrized, simulate_probabilistic, pad_size
+from larndsim.sim_jax import simulate_wfs, simulate_stochastic, simulate_parametrized, simulate_probabilistic, simulate_probabilistic_bucketed, select_split_roi, pad_size
 from larndsim.losses_jax import adc2charge
 from larndsim.detsim_jax import id2pixel, get_hit_z
 from larndsim.fee_jax import get_average_hit_values
@@ -115,20 +115,41 @@ class LUTProbabilisticSimulation(SimulationStrategy):
         unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=True)
         wfs = pad_to_closest_multiple(wfs, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
 
-        adcs_distrib, pixel_x, pixel_y, ticks_prob, event = simulate_probabilistic(params, wfs, unique_pixels)
-        
+        # Dispatch: single-call fee_jax on full waveform, or two-bucket dispatch that
+        # slices small-ROI pixels down to `roi_split_length` ticks. Bucketed mode requires
+        # host-side padding of the two batch sizes (below), so it can't stay under a single
+        # top-level jit. The inner `simulate_probabilistic_bucketed` is still jit'd, and
+        # `pad_size` buffers to bound recompiles.
+        if getattr(params, "wfs_roi_mode", "single") == "bucketed":
+            import jax
+            nb_small, is_small, roi_start_pix = jax.lax.stop_gradient(
+                select_split_roi(params, wfs)
+            )
+            nb_small_int = int(nb_small)
+            Npix = wfs.shape[0]
+            padded_small_nb = pad_size(nb_small_int, "wfs_small_roi", 0.1)
+            padded_large_nb = pad_size(Npix - nb_small_int, "wfs_large_roi", 0.1)
+            adcs_distrib, pixel_x, pixel_y, ticks_prob, event, roi_start, log_lambda = simulate_probabilistic_bucketed(
+                params, wfs, unique_pixels, is_small, roi_start_pix,
+                padded_small_nb, padded_large_nb
+            )
+        else:
+            adcs_distrib, pixel_x, pixel_y, ticks_prob, event, roi_start, log_lambda = simulate_probabilistic(params, wfs, unique_pixels)
+
         # Extract pixel plane for z-coordinate calculation
         _, _, pixel_plane, _ = id2pixel(params, unique_pixels)
-        
+
         # We return the raw distributions for the ProbabilisticLossStrategy
         return {
-            'adcs_distrib': adcs_distrib, # (Npix, Nvalues, Nticks)
-            'hit_prob': ticks_prob,     # (Npix, Nvalues, Nticks)
+            'adcs_distrib': adcs_distrib, # (Npix, H, ROI_Nticks)
+            'hit_prob': ticks_prob,       # (Npix, H, ROI_Nticks) — window-local ticks
+            'roi_start': roi_start,       # (Npix, H) — absolute-tick offset of each hit's window
+            'log_lambda': log_lambda,     # (Npix, H) — precomputed logsumexp of full-window distribution
             'pixel_x': pixel_x,
             'pixel_y': pixel_y,
             'pixel_plane': pixel_plane,   # Needed for z-coordinate calculation
             'event': event,
-            'unique_pixels': unique_pixels, 
+            'unique_pixels': unique_pixels,
             'hit_pixels': unique_pixels,
             'wfs': wfs
         }
@@ -404,24 +425,31 @@ class ProbabilisticLossStrategy(LossStrategy):
         # ticks_prob shape: (Npix, Nvalues, Nticks)
         # We need P(tick, charge | pixel_id) for the observed (tick, charge) pairs
         
-        ticks_prob = prediction['hit_prob']  # (Npix, Nvalues, Nticks)
-        adcs_distrib = prediction['adcs_distrib']  # (Npix, Nvalues, Nticks)
-        
-        # Compute marginal probability P(tick | pixel) = sum_values P(tick, value | pixel)
-        # marginal_tick_prob = jnp.sum(ticks_prob, axis=1)  # (Npix, Nticks)
-        
+        ticks_prob = prediction['hit_prob']         # (Npix, H, ROI_Nticks) window-local
+        adcs_distrib = prediction['adcs_distrib']   # (Npix, H, ROI_Nticks) window-local
+        roi_start = prediction['roi_start']         # (Npix, H) absolute-tick offset per (pixel, hit)
+        log_lambda = prediction['log_lambda']       # (Npix, H) full-window logsumexp
+        roi_L = ticks_prob.shape[-1]                # window length
+
         # Step 3: For each target hit, compute likelihood
         target_ticks = target['ticks'].astype(int)
         target_adcs = target['adcs']
         target_charge = adc2charge(target_adcs, params)
-        
+
         # Gather probabilities for the matched pixels at observed ticks
-        # For each hit i: marginal_tick_prob[pixel_indices[i], target_ticks[i]]
+        # For each hit i: convert absolute target_tick to window-local index using this
+        # hit's ROI offset, then clamp & floor for target ticks that fall outside the
+        # emitted window.
 
         trigger_nb = compute_occurrence_indices(target_pixel_ids)
-        # jax.debug.print("trigger_nb={trigger_nb}", trigger_nb=trigger_nb)
 
-        hit_tick_probs = ticks_prob[pixel_indices_safe, trigger_nb, target_ticks]
+        per_hit_roi_start = roi_start[pixel_indices_safe, trigger_nb]
+        local_ticks = target_ticks - per_hit_roi_start
+        in_window = (local_ticks >= 0) & (local_ticks < roi_L)
+        safe_local = jnp.clip(local_ticks, 0, roi_L - 1)
+
+        hit_tick_probs = ticks_prob[pixel_indices_safe, trigger_nb, safe_local]
+        hit_tick_probs = jnp.where(in_window, hit_tick_probs, jnp.log(self.eps))
         # jax.debug.print("hit_tick_probs={pixel_indices_safe}", pixel_indices_safe=pixel_indices_safe[:5])
         # jax.debug.print("trigger_nb={trigger_nb}", trigger_nb=trigger_nb[:5])
         # jax.debug.print("target_ticks={target_ticks}", target_ticks=target_ticks[:5])
@@ -440,8 +468,10 @@ class ProbabilisticLossStrategy(LossStrategy):
         # expected_charge_adc = jnp.sum(adcs_distrib * conditional_value_prob, axis=1)  # (Npix, Nticks)
         # expected_charge = adc2charge(expected_charge_adc, params)
         
-        # Gather expected charges for observed hits
-        hit_expected_charges = adc2charge(adcs_distrib[pixel_indices_safe, trigger_nb, target_ticks], params)  # (Nhits,)
+        # Gather expected charges for observed hits — same window-local translation
+        hit_expected_adcs = adcs_distrib[pixel_indices_safe, trigger_nb, safe_local]
+        hit_expected_adcs = jnp.where(in_window, hit_expected_adcs, 0.0)
+        hit_expected_charges = adc2charge(hit_expected_adcs, params)  # (Nhits,)
         hit_expected_charges = jnp.where(pixel_match_valid, hit_expected_charges, 0.0)  # Set to 0 for invalid matches
         # Step 5: Compute log-likelihood components
         
@@ -525,8 +555,10 @@ class ProbabilisticLossStrategy(LossStrategy):
         # jax.debug.print("total_log_likelihood_hits={total_log_likelihood_hits}", total_log_likelihood_hits=total_log_likelihood_hits)
         
         # # Step 8: Add penalty for false positives (predicted hits where none observed)
-        # # For each predicted pixel, compute λ = Σ_t P(tick|pixel) = expected number of hits
-        lambda_per_pixel = jnp.sum(ticks_prob, axis=(1, 2))  # (Npix,)
+        # # For each predicted pixel, compute λ = Σ_h exp(log_lambda[p, h]) = expected number of hits.
+        # log_lambda is precomputed on the full tick axis inside _find_one_hit_step, so it
+        # is invariant to the trimmed output window.
+        lambda_per_pixel = jnp.sum(jnp.exp(log_lambda), axis=1)  # (Npix,)
         
         # # Check which predicted pixels have at least one observed hit
         # # For each predicted pixel, check if it appears in target_pixel_ids

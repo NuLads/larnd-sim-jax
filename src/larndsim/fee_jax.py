@@ -154,16 +154,6 @@ def get_adc_values_average_noise(params, pixels_signals):
 
     return (charge_avg.T, tick_avg.T, no_hit_prob.T)
 
-def select_roi(params, wfs):
-    roi_threshold = params.roi_threshold
-    Npix, Nticks = wfs.shape
-    roi_start = jnp.argmax(wfs > roi_threshold, axis=1)
-    roi_end = Nticks - jnp.argmax(wfs[:, ::-1] > roi_threshold, axis=1) - 1
-    with_roi = roi_start > 0
-    largest_roi = jnp.max((roi_end-roi_start)[with_roi])
-    wfs_with_roi = wfs.at[jnp.arange(Npix)[:, None], (jnp.arange(largest_roi) + roi_start[:, None])].get(unique_indices=True)
-    return wfs_with_roi, roi_start
-
 
 @annotate_function
 @jit
@@ -333,7 +323,9 @@ def get_adc_values(params, pixels_signals, noise_rng_key):
 
 def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_uncorr,
                        threshold, interval, Nvalues, min_log_prob,
-                       excess_offset=0.0, smooth_sigma_scale=1.0):
+                       excess_offset=0.0, smooth_sigma_scale=1.0,
+                       roi_nticks=400, pad_before=300,
+                       hit_roi_anchor_mode="argmax_prob"):
     Nticks = q_sum.shape[0]
     z_scale = 1.0 / sigma
 
@@ -391,7 +383,32 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     best_path_next_ticks = jnp.clip(shifted_ticks[top_k_ticks] + 1, 0, Nticks - 1)
     charges_new = q_sum[best_path_next_ticks]
 
-    return (charges_new, new_log_prob), (log_total_hit_dist_tick, esperance_value)
+    # 6. Trim per-hit output to a compact window around an anchor tick.
+    # log_lambda is computed on the full tick axis before trimming so that the
+    # loss's expected-hit-count term stays correct even after the window trim.
+    log_lambda = jax.nn.logsumexp(log_total_hit_dist_tick)
+
+    # Anchor mode is a static string (no per-pixel branching at runtime).
+    # - "argmax_prob"        : peak of the probability marginal — smoothed by noise σ.
+    # - "threshold_crossing" : first tick where the reset-adjusted cumulative charge
+    #                          crosses threshold in any beam path — more directly
+    #                          interpretable and independent of the log-prob calibration.
+    if hit_roi_anchor_mode == "threshold_crossing":
+        q_max_over_paths = jnp.max(q_sum_loc[:, :-1], axis=0)   # (Nticks-1,)
+        above = q_max_over_paths > threshold
+        any_crossing = jnp.any(above)
+        first_crossing = jnp.argmax(above)                       # 0 if all-False
+        argmax_tick = jnp.where(any_crossing, first_crossing, jnp.int32(0))
+    else:  # "argmax_prob" — default, current behaviour
+        argmax_tick = jnp.argmax(log_total_hit_dist_tick)
+
+    max_start = max((Nticks - 1) - roi_nticks, 0)
+    roi_start_hit = jnp.clip(argmax_tick - pad_before, 0, max_start)
+    tick_offsets = roi_start_hit + jnp.arange(roi_nticks)
+    log_prob_roi = log_total_hit_dist_tick[tick_offsets]
+    esperance_roi = esperance_value[tick_offsets]
+
+    return (charges_new, new_log_prob), (log_prob_roi, esperance_roi, roi_start_hit, log_lambda)
 
 @partial(jit, static_argnums=(2, 3))
 def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_prob=-18.42):
@@ -402,11 +419,14 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
     Npix, Nticks = wfs.shape
     Nvalues = params.fee_paths_scaling
     interval = round((3 * params.CLOCK_CYCLE + params.ADC_HOLD_DELAY * params.CLOCK_CYCLE) / params.t_sampling)
-    
+    roi_nticks = params.roi_nticks
+    pad_before = params.pad_before
+    hit_roi_anchor_mode = params.hit_roi_anchor_mode
+
     # --- Vectorize the single-step function ---
     vmapped_step_fun = vmap(
         _find_one_hit_step,
-        in_axes=(0, 0, 0, None, None, None, None, None, None, None, None)  # Map over q_sum, charges, probs
+        in_axes=(0, 0, 0, None, None, None, None, None, None, None, None, None, None, None)  # Map over q_sum, charges, probs
     )
 
     # --- Pre-calculate q_sum for all pixels ---
@@ -426,23 +446,26 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
             """The expensive vmapped computation, only run when globally active."""
             charges, probs, _ = operand
             # Run one hit-finding step for all pixels in parallel
-            (new_charges, new_probs), (prob_dist, charge_dist) = vmapped_step_fun(
+            (new_charges, new_probs), (prob_dist, charge_dist, roi_start_hit, log_lambda) = vmapped_step_fun(
                 q_sum_all, charges, probs,
                 params.RESET_NOISE_CHARGE, params.UNCORRELATED_NOISE_CHARGE,
                 params.DISCRIMINATION_THRESHOLD, interval,
                 Nvalues, min_log_prob,
-                params.excess_offset, params.smooth_sigma_scale
+                params.excess_offset, params.smooth_sigma_scale,
+                roi_nticks, pad_before, hit_roi_anchor_mode
             )
             # LogSumExp gives the log of the total probability
             total_prob_per_pixel = jax.nn.logsumexp(new_probs, axis=1)
             new_active = jnp.any(total_prob_per_pixel > jnp.log(stop_threshold))
-            return (new_charges, new_probs, new_active), (prob_dist, charge_dist)
+            return (new_charges, new_probs, new_active), (prob_dist, charge_dist, roi_start_hit, log_lambda)
 
         def _inactive_branch(operand):
             """A cheap pass-through, executed when the whole batch is inactive."""
             return operand, (
-                jnp.full((Npix, Nticks - 1), min_log_prob, dtype=jnp.float32),
-                jnp.zeros((Npix, Nticks - 1), dtype=jnp.float32),
+                jnp.full((Npix, roi_nticks), min_log_prob, dtype=jnp.float32),
+                jnp.zeros((Npix, roi_nticks), dtype=jnp.float32),
+                jnp.zeros((Npix,), dtype=jnp.int32),
+                jnp.full((Npix,), min_log_prob, dtype=jnp.float32),
                 )
 
         # --- Global Conditional Execution ---
@@ -461,17 +484,14 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
     
     init_loop = (initial_charges, initial_log_probs, initial_active)
 
-    _, (log_prob_distrib, charge_distrib) = lax.scan(global_scan_fun, init_loop, jnp.arange(0, params.MAX_ADC_VALUES))
-    # log_prob_distrib = jnp.full((Npix, params.MAX_ADC_VALUES, Nticks - 1), -jnp.inf, dtype=jnp.float32)
-    # charge_distrib = jnp.zeros((Npix, params.MAX_ADC_VALUES, Nticks - 1), dtype=jnp.float32)
-    # carry = init_loop
-    # for _ in range(params.MAX_ADC_VALUES):
-    #     carry, (log_prob_step, charge_step) = global_scan_fun(carry, None)
-    #     log_prob_distrib = log_prob_distrib.at[:, _, :].set(log_prob_step)
-    #     charge_distrib = charge_distrib.at[:, _, :].set(charge_step)
+    _, (log_prob_distrib, charge_distrib, roi_start, log_lambda) = lax.scan(global_scan_fun, init_loop, jnp.arange(0, params.MAX_ADC_VALUES))
 
-
-    return jnp.moveaxis(log_prob_distrib, 0, 1), jnp.moveaxis(charge_distrib, 0, 1)
+    return (
+        jnp.moveaxis(log_prob_distrib, 0, 1),
+        jnp.moveaxis(charge_distrib, 0, 1),
+        jnp.moveaxis(roi_start, 0, 1),
+        jnp.moveaxis(log_lambda, 0, 1),
+    )
 
 @jit
 def get_average_hit_values(log_ticks_prob, adcs_distrib, min_log_prob=-18.42):

@@ -337,6 +337,24 @@ if __name__ == '__main__':
     parser.add_argument('--live_selection', default=False, action="store_true", help='Whether to run live selection or not')
     parser.add_argument('--read_target', default=False, action="store_true", help='read data(-like) target')
     parser.add_argument('--probabilistic_sim', '--probabilistic-sim', default=False, action="store_true", help='Use probabilistic sim')
+    parser.add_argument('--roi_nticks', dest="roi_nticks", type=int, default=None,
+                        help='Length of the per-hit ROI window emitted by the probabilistic FEE. If unset, uses the Params_template default.')
+    parser.add_argument('--pad_before', dest="pad_before", type=int, default=None,
+                        help='Ticks kept before the argmax of the per-hit distribution. If unset, uses the Params_template default.')
+    parser.add_argument('--max_adc_values', dest="max_adc_values", type=int, default=None,
+                        help='Number of hits per pixel emitted by the FEE (scan length H). Static; changing it triggers a JIT recompile. Default 10.')
+    parser.add_argument('--fee_paths_scaling', dest="fee_paths_scaling", type=int, default=None,
+                        help='Beam-search width (Nvalues) per pixel inside the probabilistic FEE. Static; changing it triggers a JIT recompile. Default 100; try 16-32 for single tracks.')
+    parser.add_argument('--hit_roi_anchor_mode', dest="hit_roi_anchor_mode", type=str, default=None,
+                        choices=["argmax_prob", "threshold_crossing"],
+                        help='How the per-hit output window is positioned. "argmax_prob" (default) anchors on the peak of the noise-smoothed probability marginal; "threshold_crossing" anchors on the first tick where the reset-adjusted cumulative charge exceeds threshold (more direct, cheaper).')
+    parser.add_argument('--wfs_roi_mode', dest="wfs_roi_mode", type=str, default=None,
+                        choices=["single", "bucketed"],
+                        help='Waveform-ROI dispatch mode. "single" (default) runs one fee_jax call on the full waveform for all pixels; "bucketed" classifies pixels by above-threshold span and slices small-ROI pixels down to `roi_split_length` ticks before fee_jax, reducing working memory.')
+    parser.add_argument('--roi_threshold', dest="roi_threshold", type=float, default=None,
+                        help='Above-this-current threshold (used only in --wfs_roi_mode bucketed) for classifying pixels as small-ROI. Default 0.01.')
+    parser.add_argument('--roi_split_length', dest="roi_split_length", type=int, default=None,
+                        help='Ticks kept for the "small" waveform-ROI bucket (used only in --wfs_roi_mode bucketed). Default 400.')
     parser.add_argument('--shuffle_bt', default=False, action="store_true", help='shuffle the batch order within an epoch')
     parser.add_argument('--sz_mini_bt', type=int, default=1, help='Number of mini-batch for one update')
     parser.add_argument('--normalization_scheme', type=str, default='sigmoid', choices=['sigmoid', 'exp_log', 'divide'],
