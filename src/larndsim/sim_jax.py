@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from jax import jit, random, debug
+from jax import jit, random, debug, vmap
 import jax
 import numpy as np
 from numpy.lib import recfunctions as rfn
@@ -8,10 +8,10 @@ import logging
 # from jax.experimental import checkify
 
 # from larndsim.consts_jax import consts
-from larndsim.detsim_jax import generate_electrons, get_pixels, id2pixel, accumulate_signals, accumulate_signals_parametrized, current_lut, get_pixel_coordinates, current_mc, apply_tran_diff, get_hit_z, pixel2id, get_bin_shifts, density_2d
+from larndsim.detsim_jax import generate_electrons, get_pixels, id2pixel, accumulate_signals, accumulate_signals_parametrized, current_lut, get_pixel_coordinates, current_mc, apply_tran_diff, get_hit_z, pixel2id, get_bin_shifts, density_2d, smear_remainders
 from larndsim.quenching_jax import quench
 from larndsim.drifting_jax import drift
-from larndsim.fee_jax import get_adc_values, digitize, get_adc_values_average_noise_vmap
+from larndsim.fee_jax import get_adc_values, digitize, get_adc_values_average_noise_vmap, get_adc_values_markov, get_adc_values_average_noise_chunked
 from optimize.dataio import chop_tracks
 from larndsim.consts_jax import get_vdrift
 
@@ -19,6 +19,46 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 size_history_dict = {}
+
+def pad_to_closest_multiple(x, dims_to_pad=None, multiple=128, pad_value=0, pad_front=False):
+    """
+    Efficiently pads array x to the closest multiple of a given value using update-in-place syntax.
+    Works with arrays of any number of dimensions.
+    """
+    if dims_to_pad is None:
+        dims_to_pad = range(x.ndim)
+    target_shape = list(x.shape)
+    for dim in dims_to_pad:
+        target_shape[dim] = ((x.shape[dim] + multiple - 1) // multiple) * multiple
+    target_shape = tuple(target_shape)
+
+    logger.info(f"Padding from shape {x.shape} to target shape {target_shape} with pad value {pad_value}")
+
+    buffer = jnp.full(target_shape, pad_value, dtype=x.dtype)
+    
+    if pad_front:
+        slices = tuple(slice(target_shape[idim] - dim_size, None) for idim, dim_size in enumerate(x.shape))
+    else:
+        slices = tuple(slice(0, dim_size) for dim_size in x.shape)
+    padded_x = buffer.at[slices].set(x)
+    
+    return padded_x
+
+@jit
+def get_roi_counts(params, wfs):
+    roi_threshold = params.roi_threshold
+    Npix, Nticks = wfs.shape
+    roi_start = jnp.argmax(wfs > roi_threshold, axis=1)
+    roi_end = Nticks - jnp.argmax(wfs[:, ::-1] > roi_threshold, axis=1) - 1
+
+    has_signal = jnp.any(wfs > roi_threshold, axis=1)
+    mask_small_rois = ((roi_end - roi_start) < params.roi_split_length) & has_signal
+    mask_large_rois = ((roi_end - roi_start) >= params.roi_split_length) & has_signal
+
+    nb_small_rois = jnp.sum(mask_small_rois)
+    nb_large_rois = jnp.sum(mask_large_rois)
+
+    return nb_small_rois, nb_large_rois
 
 def load_data(fname, invert_xz=True):
     import h5py
@@ -264,16 +304,12 @@ def simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_temp
     # We now concatenate the _0 and _1 variants to smoothly accumulate both
     all_indices = jnp.concatenate([
         main_flat_indices_0, main_flat_indices_1, 
-        neigh_flat_indices_0, neigh_flat_indices_1, 
-        idx_corr_main_0, idx_corr_main_1, 
-        idx_corr_neigh_0, idx_corr_neigh_1
+        neigh_flat_indices_0, neigh_flat_indices_1
     ])
     
     all_values = jnp.concatenate([
         main_vals_0, main_vals_1, 
-        neigh_vals_0, neigh_vals_1, 
-        diff_main_0, diff_main_1, 
-        diff_neigh_0, diff_neigh_1
+        neigh_vals_0, neigh_vals_1
     ])
 
     wfs_flat = jax.ops.segment_sum(
@@ -282,8 +318,32 @@ def simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_temp
         num_segments=Npixels * Nticks,
         indices_are_sorted=False
     )
-
-    return wfs_flat.reshape(Npixels, Nticks)
+    
+    wfs = wfs_flat.reshape(Npixels, Nticks)
+    
+    # --- 5. SMEAR BOUNDARY REMAINDERS ---
+    # Accumulate remainders into a separate array and apply smearing
+    diff_indices = jnp.concatenate([
+        idx_corr_main_0, idx_corr_main_1, 
+        idx_corr_neigh_0, idx_corr_neigh_1
+    ])
+    
+    diff_values = jnp.concatenate([
+        diff_main_0, diff_main_1, 
+        diff_neigh_0, diff_neigh_1
+    ])
+    
+    R_flat = jax.ops.segment_sum(
+        diff_values,
+        diff_indices,
+        num_segments=Npixels * Nticks,
+        indices_are_sorted=False
+    )
+    
+    R = R_flat.reshape(Npixels, Nticks)
+    smeared = smear_remainders(R)
+    
+    return wfs + smeared
 
 
 @partial(jit, static_argnames=['fields'])
@@ -361,9 +421,8 @@ def simulate_parametrized(params: Any, tracks: jnp.ndarray, fields: List[str], r
     electrons, pIDs = simulate_drift(params, tracks, fields, rngkey1)
     pIDs = pIDs.ravel()
     unique_pixels = jnp.unique(pIDs)
-    padded_size = pad_size(unique_pixels.shape[0], "unique_pixels")
-
-    unique_pixels = jnp.sort(jnp.pad(unique_pixels, (0, padded_size - unique_pixels.shape[0]), mode='constant', constant_values=-1))
+    unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=False)
+    unique_pixels = jnp.sort(unique_pixels)
 
     adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event = simulate_signals_parametrized(params, electrons, pIDs, unique_pixels, rngkey2, fields)
 
@@ -598,9 +657,14 @@ def simulate_signals_new(params, unique_pixels, pixels, t0_after_diff, response_
     difference = (integrated_start - real_start)*nelectrons
 
     start_ticks = jnp.where((start_ticks <= 0 ) | (start_ticks >= Nticks - 1), 0, start_ticks) + pix_renumbering * Nticks
-    wfs = wfs.at[start_ticks].add(difference)
-
-    wfs = wfs.reshape((Npixels, Nticks))
+    
+    R_flat = jnp.zeros_like(wfs)
+    R_flat = R_flat.at[start_ticks].add(difference)
+    R = R_flat.reshape((Npixels, Nticks))
+    
+    smeared = smear_remainders(R)
+    
+    wfs = wfs.reshape((Npixels, Nticks)) + smeared
 
     # Optimize neighbor pixel processing
     npix = (2*params.number_pix_neighbors + 1)**2
@@ -653,36 +717,42 @@ def select_split_roi(params, wfs):
     roi_start = jnp.argmax(wfs > roi_threshold, axis=1)
     roi_end = Nticks - jnp.argmax(wfs[:, ::-1] > roi_threshold, axis=1) - 1
 
-    mask_small_rois = ((roi_end - roi_start) < params.roi_split_length) & (roi_start > 0)
+    has_signal = jnp.any(wfs > roi_threshold, axis=1)
+    mask_small_rois = ((roi_end - roi_start) < params.roi_split_length) & has_signal
     nb_small_rois = jnp.sum(mask_small_rois)
     return nb_small_rois, mask_small_rois, roi_start
 
 @partial(jit, static_argnames=["padded_small_nb", "padded_large_nb"])
-def fee_sim_from_split(params, padded_small_nb, padded_large_nb, wfs, mask_small_rois, roi_start, max_tick_nb):
-    Npix = wfs.shape[0]
+def fee_sim_from_split(params, padded_small_nb, padded_large_nb, wfs, mask_small_rois, mask_large_rois, roi_start, max_tick_nb):
+    Npix, Nticks = wfs.shape
+    Nvalues = params.MAX_ADC_VALUES
 
+    # Reconstruct the global output arrays
+    min_log_prob = -18.42
+    charge_distrib = jnp.zeros((Npix, Nvalues, Nticks - 1), dtype=wfs.dtype)
+    ticks_distrib = jnp.full((Npix, Nvalues, Nticks - 1), min_log_prob, dtype=wfs.dtype)
 
-    small_roi_idx = jnp.argwhere(mask_small_rois, size=padded_small_nb, fill_value=0)[:, 0]
-    large_roi_idx = jnp.argwhere(~mask_small_rois, size=padded_large_nb, fill_value=0)[:, 0]
+    # 1. Map small ROIs back to their global time coordinates
+    if padded_small_nb > 0:
+        small_roi_idx = jnp.argwhere(mask_small_rois, size=padded_small_nb, fill_value=Npix - 1)[:, 0]
+        small_roi_start = jnp.clip(roi_start[small_roi_idx], 0, jnp.maximum(0, Nticks - params.roi_split_length))
+        small_rois = wfs[small_roi_idx[:, None], small_roi_start[:, None] + jnp.arange(params.roi_split_length)]
+        ticks_distrib_small, charge_distrib_small = get_adc_values_average_noise_vmap(params, small_rois)
+        
+        dim0 = small_roi_idx[:, None, None]
+        dim1 = jnp.arange(Nvalues)[None, :, None]
+        dim2 = small_roi_start[:, None, None] + jnp.arange(params.roi_split_length - 1)[None, None, :]
+        ticks_distrib = ticks_distrib.at[dim0, dim1, dim2].set(ticks_distrib_small)
+        charge_distrib = charge_distrib.at[dim0, dim1, dim2].set(charge_distrib_small)
 
-    small_roi_start = roi_start[small_roi_idx]
-
-    large_rois = wfs.at[large_roi_idx, :].get()
-    small_rois = wfs.at[small_roi_idx[:, None], (jnp.arange(params.roi_split_length) + small_roi_start[:, None])].get()
-
-    ticks_distrib_small, charge_distrib_small = get_adc_values_average_noise_vmap(params, small_rois)
-    ticks_distrib_large, charge_distrib_large = get_adc_values_average_noise_vmap(params, large_rois)
-
-    charge_distrib = jnp.zeros((Npix, charge_distrib_small.shape[1], charge_distrib_small.shape[2]))
-
-    charge_distrib = charge_distrib.at[small_roi_idx, :, :].set(charge_distrib_small[:small_roi_idx.shape[0], :, :])
-    charge_distrib = charge_distrib.at[large_roi_idx, :, :].set(charge_distrib_large[:large_roi_idx.shape[0], :, :])
-
-
-    ticks_distrib = jnp.zeros((Npix, ticks_distrib_small.shape[1], ticks_distrib_small.shape[2]))
-    ticks_distrib = ticks_distrib.at[small_roi_idx, :, small_roi_start:small_roi_start + params.roi_split_length].set(ticks_distrib_small[:small_roi_idx.shape[0], :, :])
-    ticks_distrib = ticks_distrib.at[large_roi_idx, :, :].set(ticks_distrib_large[:large_roi_idx.shape[0], :, :])
-    ticks_distrib = jnp.minimum(ticks_distrib, max_tick_nb)  # Ensure ticks do not exceed waveform length
+    # 2. Copy large ROIs
+    if padded_large_nb > 0:
+        large_roi_idx = jnp.argwhere(mask_large_rois, size=padded_large_nb, fill_value=Npix - 1)[:, 0]
+        large_rois = wfs[large_roi_idx, :]
+        ticks_distrib_large, charge_distrib_large = get_adc_values_average_noise_vmap(params, large_rois)
+        
+        ticks_distrib = ticks_distrib.at[large_roi_idx, :, :].set(ticks_distrib_large)
+        charge_distrib = charge_distrib.at[large_roi_idx, :, :].set(charge_distrib_large)
 
     return charge_distrib, ticks_distrib
 
@@ -716,9 +786,9 @@ def simulate_wfs(params, response_template, tracks, fields):
     #Sorting the pixels and getting the unique ones
     unique_pixels = jnp.unique(main_pixels.ravel())
     unique_pixels = jnp.append(unique_pixels, -1)
-    padded_unique = pad_size(unique_pixels.shape[0], "unique_pixels", 0.2)
-
-    unique_pixels = jnp.sort(jnp.pad(unique_pixels, (0, padded_unique - unique_pixels.shape[0]), mode='constant', constant_values=-1))
+    
+    unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=False)
+    unique_pixels = jnp.sort(unique_pixels)
     pix_renumbering_neigh= jnp.searchsorted(unique_pixels, pIDs_neigh.ravel(), method='sort')
 
     mask = (pix_renumbering_neigh < unique_pixels.size) & (unique_pixels[pix_renumbering_neigh] == pIDs_neigh.ravel())
@@ -769,40 +839,31 @@ def simulate_stochastic(params, wfs, unique_pixels, rngseed):
     return adcs[:nb_valid], pixel_x[:nb_valid], pixel_y[:nb_valid], pixel_z[:nb_valid], ticks[:nb_valid], hit_prob[:nb_valid], event[:nb_valid], hit_pixels[:nb_valid]
 
 @jit
-def simulate_probabilistic(params, wfs, unique_pixels):
+def simulate_markov(params, wfs, unique_pixels):
     """
-    Simulates the signal from the drifted electrons and returns probabilistic
-    distributions of ADC values and tick times, along with pixel coordinates
-    and event numbers.
-
-    Args:
-        params: Parameters of the simulation.
-        wfs (jnp.ndarray): Waveforms as a JAX array.
-        unique_pixels (jnp.ndarray): Unique pixel identifiers for the input waveforms.
-
-    Returns:
-        Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-            - adcs_distrib: Probabilistic distribution of ADC values for each
-              pixel/time bin after adding average noise and digitization.
-            - pixel_x: X coordinates of the pixels corresponding to the waveforms.
-            - pixel_y: Y coordinates of the pixels corresponding to the waveforms.
-            - ticks_prob: Tick indices associated with the probabilistic charge/
-              ADC distributions.
-            - event: Event numbers associated with each pixel.
+    Simulates the hit-finding process using Markov transition matrices.
     """
-
-    # Npix = wfs.shape[0]
-    # ROI selection is a discrete, non-differentiable operation; we explicitly stop
-    # gradients from flowing through select_split_roi to avoid backpropagating through
-    # this indexing/masking logic while still allowing gradients on downstream signals.
-    # nb_small_rois, mask_small_rois, roi_start = jax.lax.stop_gradient(select_split_roi(params, wfs))
-    # nb_small_rois = int(nb_small_rois)
-    # padded_small_nb = pad_size(nb_small_rois, "wfs_roi", 0.1)
-    # padded_large_nb = pad_size(Npix - nb_small_rois, "wfs_roi", 0.1)
-
-    # integral, ticks, hit_prob = fee_sim_from_split(params, padded_small_nb, padded_large_nb, wfs[:, 1:], mask_small_rois, roi_start, wfs.shape[1] - 2)
+    log_p1, log_T, expected_Q, log_p_none, Q1, log_p_none_at_zero = get_adc_values_markov(params, wfs)
     
-    ticks_prob, charge_distrib = get_adc_values_average_noise_vmap(params, wfs)
+    # We also need pixel coordinates for the loss function
+    pixel_x, pixel_y, pixel_plane, event = id2pixel(params, unique_pixels)
+    
+    return log_p1, log_T, expected_Q, log_p_none, Q1, log_p_none_at_zero, pixel_x, pixel_y, pixel_plane, event
+
+def simulate_probabilistic(params, wfs, unique_pixels, padded_small_nb=None, padded_large_nb=None):
+    """
+    Simulates the Front-End Electronics (triggering, digitization) using 
+    rematerialized pixel chunking (scan-over-vmaps) to bound peak memory usage 
+    while avoiding JIT recompilations.
+    """
+    return _simulate_probabilistic_jit(params, wfs, unique_pixels, padded_small_nb, padded_large_nb)
+
+@jit
+def _simulate_probabilistic_jit(params, wfs, unique_pixels, padded_small_nb=None, padded_large_nb=None):
+    Npix, Nticks = wfs.shape
+
+    # Process all pixels in sequential chunks of 128 to keep memory usage extremely low
+    ticks_prob, charge_distrib = get_adc_values_average_noise_chunked(params, wfs, chunk_size=128)
 
     adcs_distrib = digitize(params, charge_distrib)
     pixel_x, pixel_y, pixel_plane, event = id2pixel(params, unique_pixels)
@@ -819,7 +880,7 @@ def prepare_tracks(params, tracks_file, invert_xz=True):
 
     tracks = set_pixel_plane(params, tracks, fields)
     original_tracks = tracks.copy()
-    tracks = chop_tracks(tracks, fields, params.electron_sampling_resolution)
+    tracks, parent_ids = chop_tracks(tracks, fields, params.electron_sampling_resolution)
     tracks = jnp.array(tracks)
 
     return tracks, fields, original_tracks

@@ -26,7 +26,8 @@ import iminuit
 
 from tqdm import tqdm
 
-from .strategies import LUTSimulation, LUTProbabilisticSimulation, ParametrizedSimulation, GenericLossStrategy
+from .strategies import LUTSimulation, LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation, ParametrizedSimulation, GenericLossStrategy
+from .dedx_utils import student_t_nll, DEDX_STUDENT_NU, DEDX_STUDENT_LOC, DEDX_STUDENT_SCALE, split_student_t_nll, DEDX_SPLIT_NU_L, DEDX_SPLIT_NU_R, DEDX_SPLIT_SCALE_L, DEDX_SPLIT_SCALE_R, DEDX_SPLIT_LOC
 
 from ctypes import cdll
 # libcudart = cdll.LoadLibrary('libcudart.so')
@@ -214,10 +215,24 @@ class ParamFitter:
                  mc_diff = False,
                  read_target=False,
                  probabilistic_sim=False,
+                 probabilistic_sampling_sim=False,
+                 probabilistic_sampling_target=False,
                  normalization_scheme="sigmoid",
                  normalization_scale_sigmoid=1.0,
                  normalization_scale_exp_log=1.0,
                  sz_mini_bt=1, shuffle_bt=False, shuffle_seed=42, resume_from=None,
+                 fit_dedx=False, dedx_prior_weight=0.1, dedx_lr=None, dedx_start_iter=0,
+                 dedx_freeze_iter=None,
+                 dedx_student_nu=None, dedx_student_loc=None, dedx_student_scale=None,
+                 dedx_soft_barrier_threshold=8.5,
+                 dedx_soft_barrier_weight=1.0,
+                 dedx_use_split_t=True,
+                 dedx_student_nu_l=None,
+                 dedx_student_nu_r=None,
+                 dedx_student_scale_l=None,
+                 dedx_student_scale_r=None,
+                 dedx_mean_constraint_weight=0.0,
+                 dedx_mean_constraint_target=1.887,
                  config = {}):
 
         self.read_target = read_target
@@ -251,8 +266,38 @@ class ParamFitter:
         self.use_dedx_density = bool(getattr(config, "use_dedx_density", False))
         self.dedx_density_mode = getattr(config, "dedx_density_mode", "histogram")
         self.probabilistic_sim = probabilistic_sim
+        self.probabilistic_sampling_sim = probabilistic_sampling_sim
+        self.probabilistic_sampling_target = probabilistic_sampling_target
+        if probabilistic_sim and probabilistic_sampling_sim:
+            raise ValueError("probabilistic_sim and probabilistic_sampling_sim are mutually exclusive.")
+        if probabilistic_sampling_target and not probabilistic_sim:
+            raise ValueError("probabilistic_sampling_target requires probabilistic_sim to be set "
+                             "(guess must be probabilistic so the loss can compare against sampled hits).")
+        if probabilistic_sampling_target and probabilistic_sampling_sim:
+            raise ValueError("probabilistic_sampling_target and probabilistic_sampling_sim are mutually exclusive.")
         self.sz_mini_bt = sz_mini_bt
         self.shuffle_bt = shuffle_bt
+        self.fit_dedx = fit_dedx
+        self.dedx_prior_weight = float(dedx_prior_weight)
+        self.dedx_lr = dedx_lr
+        self.dedx_start_iter = int(dedx_start_iter)
+        self.dedx_freeze_iter = int(dedx_freeze_iter) if dedx_freeze_iter is not None else None
+        self.dedx_use_split_t = bool(dedx_use_split_t)
+        self.dedx_student_nu_l = jnp.array(dedx_student_nu_l, dtype=jnp.float32) if dedx_student_nu_l is not None else DEDX_SPLIT_NU_L
+        self.dedx_student_nu_r = jnp.array(dedx_student_nu_r, dtype=jnp.float32) if dedx_student_nu_r is not None else DEDX_SPLIT_NU_R
+        self.dedx_student_scale_l = jnp.array(dedx_student_scale_l, dtype=jnp.float32) if dedx_student_scale_l is not None else DEDX_SPLIT_SCALE_L
+        self.dedx_student_scale_r = jnp.array(dedx_student_scale_r, dtype=jnp.float32) if dedx_student_scale_r is not None else DEDX_SPLIT_SCALE_R
+
+        self.dedx_student_nu    = jnp.array(dedx_student_nu,    dtype=jnp.float32) if dedx_student_nu    is not None else DEDX_STUDENT_NU
+        if dedx_student_loc is not None:
+            self.dedx_student_loc = jnp.array(dedx_student_loc, dtype=jnp.float32)
+        else:
+            self.dedx_student_loc = DEDX_SPLIT_LOC if self.dedx_use_split_t else DEDX_STUDENT_LOC
+        self.dedx_student_scale = jnp.array(dedx_student_scale, dtype=jnp.float32) if dedx_student_scale is not None else DEDX_STUDENT_SCALE
+        self.dedx_soft_barrier_threshold = float(dedx_soft_barrier_threshold)
+        self.dedx_soft_barrier_weight = float(dedx_soft_barrier_weight)
+        self.dedx_mean_constraint_weight = float(dedx_mean_constraint_weight)
+        self.dedx_mean_constraint_target = float(dedx_mean_constraint_target)
         self.shuffle_seed = shuffle_seed
         self.sim_track_fields = sim_track_fields
         self.tgt_track_fields = tgt_track_fields
@@ -283,6 +328,13 @@ class ParamFitter:
         else:
             raise TypeError("relevant_params must be list of param names or list of dicts with learning rates")
 
+        target_dir_name = f"target_{self.test_name}_{self.out_label}_" + "_".join(self.relevant_params_list)
+        if len(target_dir_name) > 200:
+            import hashlib
+            hash_str = hashlib.sha256(target_dir_name.encode('utf-8')).hexdigest()[:16]
+            self.target_dir = f"target_{self.test_name}_{hash_str}"
+        else:
+            self.target_dir = target_dir_name
         self.target_val_dict = None
         if len(set_target_vals) > 0:
             if len(set_target_vals) % 2 != 0:
@@ -316,6 +368,8 @@ class ParamFitter:
             "sdtw_time_adc": (sdtw_time_adc, {'gamma': 1., 'alpha': 0.5}),
             "nll": (nll_loss, {'adc_norm': adc_norm, 'sigma': 1.0}),
             "llhd": (llhd_loss, {}),
+            "distribution": (None, {}),
+            "markov_llhd": (None, {}),
             #"sinkhorn_loss": (sinkhorn_loss, {})
         }
 
@@ -345,6 +399,15 @@ class ParamFitter:
         if loss_fn == 'llhd':
             from .strategies import ProbabilisticLossStrategy
             self.loss_strategy = ProbabilisticLossStrategy(loss_fn=llhd_loss, **self.loss_fn_kw)
+        elif loss_fn == 'distribution':
+            from .strategies import DistributionLossStrategy
+            dist_feature = config.dist_feature if hasattr(config, 'dist_feature') else 'charge'
+            self.loss_strategy = DistributionLossStrategy(feature=dist_feature, **self.loss_fn_kw)
+            logger.info(f"Using DistributionLossStrategy with feature {dist_feature}")
+        elif loss_fn == 'markov_llhd':
+            from .strategies import MarkovLossStrategy
+            self.loss_strategy = MarkovLossStrategy(**self.loss_fn_kw)
+            logger.info("Using MarkovLossStrategy")
         elif self.probabilistic_sim:
             # Use CollapsedProbabilisticLossStrategy for probabilistic simulation with deterministic losses
             from .strategies import CollapsedProbabilisticLossStrategy
@@ -412,8 +475,13 @@ class ParamFitter:
         if self.current_mode == 'lut':
             if self.probabilistic_sim:
                 self.sim_strategy = LUTProbabilisticSimulation(self.response)
+            elif self.probabilistic_sampling_sim:
+                self.sim_strategy = LUTProbabilisticSamplingSimulation(self.response)
             else:
                 self.sim_strategy = LUTSimulation(self.response)
+        elif self.current_mode == 'markov':
+            from .strategies import LUTMarkovSimulation
+            self.sim_strategy = LUTMarkovSimulation(self.response)
         elif self.current_mode == 'parametrized':
             self.sim_strategy = ParametrizedSimulation()
         else:
@@ -550,14 +618,24 @@ class ParamFitter:
                 ref_hit_prob = jnp.ones(ref_adcs.shape[0]) #Assuming all hits are valid
         else:
             #Simulating the reference during the first epoch
-            fname = 'target_' + self.out_label + '/batch' + str(i) + '_target.npz'
+            fname = os.path.join(self.target_dir, f'batch{i}_target.npz')
             if regen or not os.path.exists(fname):
                 
                 # Target generation should always produce "hits" (stochastic),
                 # even if the fitting strategy is probabilistic.
                 target_strategy = self.sim_strategy
                 if isinstance(self.sim_strategy, LUTProbabilisticSimulation):
-                    target_strategy = LUTSimulation(self.response)
+                    if self.probabilistic_sampling_target:
+                        # Draw the target from the probabilistic distribution (fake-stochastic).
+                        # The guess is still the full probability distribution, so gradients
+                        # flow through the probabilistic model via ProbabilisticLossStrategy.
+                        target_strategy = LUTProbabilisticSamplingSimulation(self.response)
+                    else:
+                        # Default: fall back to the real stochastic FEE to generate a
+                        # proper hit-list target.
+                        target_strategy = LUTSimulation(self.response)
+                # LUTProbabilisticSamplingSimulation already produces hit-list output,
+                # so we let it use itself as its own target generator.
                 
                 prediction = target_strategy.predict(self.target_params, target, self.tgt_track_fields, rngkey=i+1)
                 
@@ -574,6 +652,7 @@ class ParamFitter:
                 #Saving the target for the batch
                 #TODO: See if we have to do this for each event
                 
+                os.makedirs(os.path.dirname(fname), exist_ok=True)
                 with open(fname, 'wb') as f:
                     jnp.savez(f, adcs=ref_adcs, pixel_x=ref_pixel_x, pixel_y=ref_pixel_y, pixel_z=ref_pixel_z, ticks=ref_ticks, hit_prob=ref_hit_prob, event=ref_event, pixel_id=ref_pixel_id)
                     if self.keep_in_memory:
@@ -657,6 +736,22 @@ class ParamFitter:
         self.opt_state = opt_state
         self.resumed = True
 
+        dedx_cache = loaded.get('dedx_cache')
+        if dedx_cache is not None and hasattr(self, '_dedx_cache'):
+            self._dedx_cache = dedx_cache
+        batch_parent_ids = loaded.get('batch_parent_ids')
+        if batch_parent_ids is not None and hasattr(self, '_batch_parent_ids'):
+            self._batch_parent_ids = batch_parent_ids
+        true_dedx_cache = loaded.get('true_dedx_cache')
+        if true_dedx_cache is not None and hasattr(self, '_batch_true_dedx'):
+            self._batch_true_dedx = true_dedx_cache
+
+        # If resuming past the activation point, mark the Adam reset as already done
+        if hasattr(self, '_dedx_adam_reset_done') and self.total_iter >= self.dedx_start_iter:
+            self._dedx_adam_reset_done = True
+        if hasattr(self, '_dedx_freeze_adam_reset_done') and self.dedx_freeze_iter is not None and self.total_iter >= self.dedx_freeze_iter:
+            self._dedx_freeze_adam_reset_done = True
+
     def save_checkpoint(self, total_iter):
         """Persist history plus resume-critical optimizer/parameter state."""
         self.total_iter = int(total_iter)
@@ -673,14 +768,42 @@ class ParamFitter:
         )
         if hasattr(self, 'opt_state'):
             self.training_history['opt_state'] = self.opt_state
+        if hasattr(self, '_dedx_cache') and self._dedx_cache:
+            # Convert JAX arrays to plain numpy so pickle round-trips cleanly
+            dedx_cache_np = {
+                int(k): {'log_dedx': np.asarray(v['log_dedx']), 'opt_state': v['opt_state']}
+                for k, v in self._dedx_cache.items()
+            }
+            true_dedx_np = {int(k): np.asarray(v) for k, v in self._batch_true_dedx.items()}
+            self.training_history['dedx_cache'] = dedx_cache_np
+            self.training_history['batch_parent_ids'] = {
+                int(k): np.asarray(v) for k, v in self._batch_parent_ids.items()
+            }
+            self.training_history['true_dedx_cache'] = true_dedx_np
+            self.training_history['dedx_student_nu']    = float(self.dedx_student_nu)
+            self.training_history['dedx_student_loc']   = float(self.dedx_student_loc)
+            self.training_history['dedx_student_scale'] = float(self.dedx_student_scale)
+            self.training_history['dedx_freeze_iter']   = self.dedx_freeze_iter
         if self.resume_from is not None:
             self.training_history['resumed_from'] = self.resume_from
 
         with open(f'fit_result/{self.test_name}/history_iter{self.total_iter}_{self.out_label}.pkl', "wb") as f_history:
             pickle.dump(self.training_history, f_history)
 
-    def compute_loss(self, tracks, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=False, epoch=0, use_physical_params=False):
-        if self.probabilistic_sim:
+    def compute_loss(self, tracks, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=False, epoch=0, use_physical_params=False, log_dedx=None, parent_ids=None):
+        """Compute the simulation loss and (optionally) gradients.
+
+        When ``log_dedx`` and ``parent_ids`` are provided the function jointly
+        differentiates w.r.t. both the global normalised physics parameters and
+        the per-segment log-dEdx values.  The per-segment dEdx regularisation
+        (Student-t NLL) is included in the loss automatically.
+
+        Returns
+        -------
+        (loss_val, grads_norm, grads_dedx, aux, hess, aux_hess)
+            ``grads_dedx`` is ``None`` unless ``log_dedx`` was supplied.
+        """
+        if self.probabilistic_sim and not self.probabilistic_sampling_sim:
             rngkey = None
         else:
             if self.sim_seed_strategy == "same":
@@ -697,7 +820,43 @@ class ParamFitter:
                 raise ValueError("Unknown sim_seed_strategy. Must be same, different or random")
 
         assert(with_loss or with_grad)
-        loss_val, grads, aux, hess, aux_hess = None, None, None, None, None
+        loss_val, grads, grads_dedx, aux, hess, aux_hess = None, None, None, None, None, None
+
+        # Precompute padded small and large ROI counts for JAX static shapes.
+        # This runs simulate_wfs ONCE per unique batch (cached), using the stable
+        # ref_params. The ROI structure depends primarily on track geometry, not
+        # the physics parameters being fitted, so computing with ref_params is safe.
+        # The 128-multiple rounding provides headroom for small waveform changes
+        # across iterations as physics parameters evolve.
+        from optimize.strategies import LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation
+        if isinstance(self.sim_strategy, (LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation)):
+            from larndsim.sim_jax import get_roi_counts, simulate_wfs, pad_to_closest_multiple
+            # Use (batch_index, track_count) as cache key. This is stable across
+            # epochs even with shuffling (track count is a good proxy for identity).
+            cache_key = (i, tracks.shape[0])
+            if not hasattr(self, '_roi_padded_cache'):
+                self._roi_padded_cache = {}
+            
+            if cache_key not in self._roi_padded_cache:
+                wfs_eval, _ = simulate_wfs(
+                    self.ref_params, self.sim_strategy.response, tracks, self.sim_track_fields
+                )
+                wfs_eval = pad_to_closest_multiple(
+                    wfs_eval, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True
+                )
+                nb_small, nb_large = get_roi_counts(self.ref_params, wfs_eval)
+                padded_small_nb = int(((int(nb_small) + 127) // 128) * 128)
+                padded_large_nb = int(((int(nb_large) + 127) // 128) * 128)
+                self._roi_padded_cache[cache_key] = (padded_small_nb, padded_large_nb)
+                logger.info(
+                    f"Batch {i}: computed ROI counts: {int(nb_small)} small "
+                    f"(padded→{padded_small_nb}), {int(nb_large)} large "
+                    f"(padded→{padded_large_nb})"
+                )
+            
+            padded_small_nb, padded_large_nb = self._roi_padded_cache[cache_key]
+            self.sim_strategy.padded_small_nb = padded_small_nb
+            self.sim_strategy.padded_large_nb = padded_large_nb
 
         target_data = {
             'adcs': ref_adcs,
@@ -724,6 +883,96 @@ class ParamFitter:
 
             if with_hess:
                 hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.current_params)
+
+        elif log_dedx is not None and parent_ids is not None:
+            # ── Joint fit: norm_params (global) + log_dedx (per-segment, local) ──
+            dedx_idx = self.sim_track_fields.index('dEdx')
+            dE_idx   = self.sim_track_fields.index('dE')
+            dx_idx   = self.sim_track_fields.index('dx')
+
+            def loss_wrapper_combined(norm_params_input, log_dedx_in):
+                # Map global params: unconstrained → physical
+                if self.normalization_scheme == "divide":
+                    new_phys = {
+                        key: getattr(norm_params_input, key) * getattr(self.params_normalization, key)
+                        for key in self.relevant_params_list
+                    }
+                else:
+                    new_phys = {
+                        key: map_norm_to_phys(getattr(norm_params_input, key), key, scheme=self.normalization_scheme, scale=self._norm_scale_for_scheme())
+                        for key in self.relevant_params_list
+                    }
+                physical_params = self.ref_params.replace(**new_phys)
+
+                # Reconstruct per-step dEdx from per-segment log-mean.
+                # Padding rows have parent_id == -1; preserve their original track dEdx
+                # so they do not inject spurious gradients into log_dedx[0].
+                valid_mask  = (parent_ids >= 0)
+                safe_ids    = jnp.clip(parent_ids, 0, log_dedx_in.shape[0] - 1)
+                dedx_fitted = jnp.maximum(jnp.exp(jnp.take(log_dedx_in, safe_ids)), 1e-3)
+                dedx_sample = jnp.where(valid_mask, dedx_fitted, tracks[:, dedx_idx])
+                t = tracks.at[:, dedx_idx].set(dedx_sample)
+                t = t.at[:, dE_idx].set(dedx_sample * t[:, dx_idx])
+
+                prediction = self.sim_strategy.predict(physical_params, t, self.sim_track_fields, rngkey)
+                hit_loss, hit_aux = self.loss_strategy.compute(physical_params, prediction, target_data)
+
+                # Student-t prior on per-step dEdx values.
+                # Weighted by physical step length (dx) to ensure that the regularization
+                # strength is invariant to the sampling resolution.
+                if self.dedx_use_split_t:
+                    dedx_prior = split_student_t_nll(
+                        dedx_sample,
+                        self.dedx_student_nu_l,
+                        self.dedx_student_nu_r,
+                        self.dedx_student_loc,
+                        self.dedx_student_scale_l,
+                        self.dedx_student_scale_r,
+                        weights=tracks[:, dx_idx]
+                    ) * self.dedx_prior_weight
+                else:
+                    dedx_prior = student_t_nll(
+                        dedx_sample,
+                        self.dedx_student_nu,
+                        self.dedx_student_loc,
+                        self.dedx_student_scale,
+                        weights=tracks[:, dx_idx]
+                    ) * self.dedx_prior_weight
+
+                # One-sided soft barrier penalty.
+                # Weighted by physical step length (dx) and mask out invalid segments (dx <= 0)
+                dx_weights = tracks[:, dx_idx]
+                valid_step_mask = (dx_weights > 0)
+                dedx_barrier = self.dedx_soft_barrier_weight * jnp.sum(
+                    dx_weights * valid_step_mask * jnp.square(jnp.maximum(0., dedx_sample - self.dedx_soft_barrier_threshold))
+                )
+
+                # Length-weighted mean dEdx constraint
+                segment_valid = valid_mask & valid_step_mask
+                total_dx = jnp.sum(dx_weights * segment_valid)
+                total_dedx_len = jnp.sum(dedx_sample * dx_weights * segment_valid)
+                mean_dedx = total_dedx_len / jnp.maximum(total_dx, 1e-6)
+                dedx_mean_penalty = self.dedx_mean_constraint_weight * jnp.square(mean_dedx - self.dedx_mean_constraint_target)
+
+                total_loss = hit_loss + dedx_prior + dedx_barrier + dedx_mean_penalty
+                aux_out = dict(hit_aux) if hit_aux is not None else {}
+                aux_out['dedx_prior'] = dedx_prior
+                aux_out['dedx_barrier'] = dedx_barrier
+                aux_out['dedx_mean_penalty'] = dedx_mean_penalty
+                aux_out['mean_dedx'] = mean_dedx
+                return total_loss, aux_out
+
+            if with_loss and with_grad:
+                (loss_val, aux), (grads, grads_dedx) = value_and_grad(
+                    loss_wrapper_combined, argnums=(0, 1), has_aux=True
+                )(self.norm_params, log_dedx)
+            elif with_loss:
+                loss_val, aux = loss_wrapper_combined(self.norm_params, log_dedx)
+            elif with_grad:
+                (grads, grads_dedx), aux = grad(
+                    loss_wrapper_combined, argnums=(0, 1), has_aux=True
+                )(self.norm_params, log_dedx)
+
         else:
             def loss_wrapper(norm_params_input):
                 # Map from unconstrained space to physical space internally
@@ -752,13 +1001,13 @@ class ParamFitter:
             if with_hess:
                 hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.norm_params)
 
-        return loss_val, grads, aux, hess, aux_hess
+        return loss_val, grads, grads_dedx, aux, hess, aux_hess
 
     
     def prepare_fit(self):
         # make a folder for the pixel target
 
-        target_dir = 'target_' + self.out_label
+        target_dir = self.target_dir
         if os.path.exists(target_dir):
             shutil.rmtree(target_dir, ignore_errors=True)
         os.makedirs(target_dir, exist_ok=True)
@@ -776,6 +1025,12 @@ class ParamFitter:
         self.training_history['step_time'] = []
         self.training_history['losses_iter'] = []
         self.training_history['aux_iter'] = []
+        if self.fit_dedx:
+            self.training_history['dedx_prior_iter'] = []
+            self.training_history['dedx_barrier_iter'] = []
+            self.training_history['dedx_mean_penalty_iter'] = []
+            self.training_history['mean_dedx_iter'] = []
+            self.training_history['dedx_mae_iter'] = []
 
         # Include initial value in training history (if haven't loaded a checkpoint)
         for param in self.relevant_params_list:
@@ -862,6 +1117,18 @@ class GradientDescentFitter(ParamFitter):
     
         self.opt_state = self.optimizer.init(extract_relevant_params(self.norm_params, self.relevant_params_list))
 
+        # ── Per-segment dEdx fitting state ──────────────────────────────────────
+        # _dedx_cache: batch_idx → {'log_dedx': jnp.array, 'opt_state': optax_state}
+        self._dedx_cache: dict = {}
+        self._batch_parent_ids: dict = {}
+        self._batch_true_dedx: dict = {}   # batch_idx → np.array of true (input) dEdx per orig segment
+        _dedx_lr = self.dedx_lr if self.dedx_lr is not None else lr
+        self._dedx_optimizer = optax.adam(_dedx_lr) if self.fit_dedx else None
+        # Flag to reset calibration Adam state exactly once when dEdx activates
+        self._dedx_adam_reset_done = False
+        # Flag to reset calibration Adam state exactly once when dEdx is frozen
+        self._dedx_freeze_adam_reset_done = False
+
         if self.resume_from is not None:
             logger.info(f"Resuming from checkpoint {self.resume_from}")
             self.load_checkpoint(self.resume_from)
@@ -929,6 +1196,27 @@ class GradientDescentFitter(ParamFitter):
     def add_grads(self, g1, g2):
         return jax.tree_util.tree_map(lambda a, b: a + b, g1, g2)
 
+    def _get_or_init_dedx_state(self, batch_idx, n_orig_segs):
+        """Lazily initialise per-segment log-dEdx and its Adam state for *batch_idx*.
+
+        All segments are initialised to log(dedx_student_loc) — the prior centre.
+        No true dEdx information is used.
+        """
+        if batch_idx not in self._dedx_cache:
+            log_dedx = jnp.log(jnp.full((n_orig_segs,), float(self.dedx_student_loc)))
+            opt_state = self._dedx_optimizer.init(log_dedx)
+            self._dedx_cache[batch_idx] = {'log_dedx': log_dedx, 'opt_state': opt_state}
+        entry = self._dedx_cache[batch_idx]
+        return entry['log_dedx'], entry['opt_state']
+
+    def _process_dedx_grads(self, batch_idx, grads_dedx, current_log_dedx):
+        """Apply one Adam step for per-segment log-dEdx of *batch_idx*."""
+        _, opt_state = self._get_or_init_dedx_state(batch_idx, len(current_log_dedx))
+        updates, new_opt_state = self._dedx_optimizer.update(grads_dedx, opt_state)
+        new_log_dedx = current_log_dedx + updates
+        self._dedx_cache[batch_idx] = {'log_dedx': new_log_dedx, 'opt_state': new_opt_state}
+        return new_log_dedx
+
     def fit(self, dataloader_sim, target, epochs=300, iterations=None, save_freq=10, print_freq=1):
 
         self.prepare_fit()
@@ -957,6 +1245,31 @@ class GradientDescentFitter(ParamFitter):
 
         if iterations is not None:
             epochs = iterations // len(dataloader_sim) + 1
+
+        # Pre-fetch per-segment parent IDs for dEdx fitting
+        if self.fit_dedx:
+            _ds = getattr(dataloader_sim, 'dataset', None)
+            if _ds is not None and hasattr(_ds, 'get_parent_segment_ids'):
+                logger.info("Pre-fetching parent segment IDs for per-segment dEdx fitting")
+                _dedx_field_idx = self.sim_track_fields.index('dEdx') if 'dEdx' in self.sim_track_fields else None
+                for _bi in range(len(dataloader_sim)):
+                    _batch_raw = dataloader_sim[_bi]  # populate TracksDataset cache, shape [max_steps, n_fields]
+                    _pids = _ds.get_parent_segment_ids(_bi)
+                    self._batch_parent_ids[_bi] = np.asarray(_pids, dtype=np.int32)
+                    # Collect true (input) dEdx: per original segment, take the first sub-step's value
+                    if _dedx_field_idx is not None:
+                        _batch_flat = np.asarray(_batch_raw).reshape(-1, len(self.sim_track_fields))
+                        _raw_pids = np.asarray(_pids)
+                        _n_orig = int(_raw_pids[_raw_pids >= 0].max()) + 1 if np.any(_raw_pids >= 0) else 0
+                        _true_dedx = np.zeros(_n_orig, dtype=np.float32)
+                        for _seg in range(_n_orig):
+                            _rows = np.where(_raw_pids == _seg)[0]
+                            if len(_rows) > 0:
+                                _true_dedx[_seg] = float(_batch_flat[_rows[0], _dedx_field_idx])
+                        self._batch_true_dedx[_bi] = _true_dedx
+            else:
+                logger.warning("TracksDataset does not support get_parent_segment_ids; disabling fit_dedx")
+                self.fit_dedx = False
 
         # The training loop
         # total_iter = 0
@@ -991,35 +1304,95 @@ class GradientDescentFitter(ParamFitter):
                         this_target = target
                     ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = self.get_simulated_target(this_target, i, evts_sim, regen=False)
 
-                    # loss
-                    loss_val, grads, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True)
+                    # dEdx local state for this batch (gated by dedx_start_iter / dedx_freeze_iter)
+                    _dedx_active  = self.fit_dedx and (total_iter >= self.dedx_start_iter)
+                    _dedx_frozen  = _dedx_active and (self.dedx_freeze_iter is not None) and (total_iter >= self.dedx_freeze_iter)
+                    _use_dedx     = _dedx_active  # still inject dEdx values into the loss even when frozen
 
-                    # split the code, ugly, but no additional operation if there's no averaging
+                    # Reset calibration Adam state once at the exact moment dEdx activates.
+                    # Guard with i_bt % sz_mini_bt == 0 so the reset never fires mid-window
+                    # when mini-batch gradient averaging is in use (sz_mini_bt > 1).
+                    _at_window_start = (i_bt % max(1, self.sz_mini_bt) == 0)
+                    if _use_dedx and not self._dedx_adam_reset_done and _at_window_start:
+                        logger.info(
+                            f"dEdx activated at iteration {total_iter}: resetting calibration Adam state."
+                        )
+                        self.opt_state = self.optimizer.init(
+                            extract_relevant_params(self.norm_params, self.relevant_params_list)
+                        )
+                        self._dedx_adam_reset_done = True
+
+                    # Reset calibration Adam state once when dEdx is frozen so the
+                    # optimiser adapts cleanly to the new (dEdx-free gradient) landscape.
+                    if _dedx_frozen and not self._dedx_freeze_adam_reset_done and _at_window_start:
+                        logger.info(
+                            f"dEdx frozen at iteration {total_iter}: resetting calibration Adam state "
+                            f"for fine-tuning phase."
+                        )
+                        self.opt_state = self.optimizer.init(
+                            extract_relevant_params(self.norm_params, self.relevant_params_list)
+                        )
+                        self._dedx_freeze_adam_reset_done = True
+
+                    if _use_dedx and i in self._batch_parent_ids:
+                        _parent_ids = jax.device_put(jnp.asarray(self._batch_parent_ids[i], dtype=jnp.int32))
+                        _n_orig = int(jnp.max(_parent_ids).item()) + 1
+                        _log_dedx, _ = self._get_or_init_dedx_state(i, _n_orig)
+                    else:
+                        _parent_ids = None
+                        _log_dedx = None
+
+                    # During the warm-up phase (fit_dedx=True but not yet active),
+                    # replace the dEdx and dE columns with the prior centre so no
+                    # true dEdx leaks into the calibration gradient.
+                    if self.fit_dedx and not _use_dedx:
+                        _dedx_idx = self.sim_track_fields.index('dEdx')
+                        _dE_idx   = self.sim_track_fields.index('dE')
+                        _dx_idx   = self.sim_track_fields.index('dx')
+                        _loc      = float(self.dedx_student_loc)
+                        selected_tracks_sim = selected_tracks_sim.at[:, _dedx_idx].set(_loc)
+                        selected_tracks_sim = selected_tracks_sim.at[:, _dE_idx].set(
+                            _loc * selected_tracks_sim[:, _dx_idx]
+                        )
+
+                    if self.fit_dedx and not _use_dedx and total_iter == 0:
+                        logger.info(f"dEdx fitting deferred: will activate at iteration {self.dedx_start_iter}")
+
+                    # loss
+                    loss_val, grads, _grads_dedx, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True, log_dedx=_log_dedx, parent_ids=_parent_ids)
+
+                    # Apply per-segment dEdx gradient immediately after every step.
+                    if _grads_dedx is not None and _log_dedx is not None and not _dedx_frozen:
+                        self._process_dedx_grads(i, _grads_dedx, _log_dedx)
+
+                    # Accumulate gradients if sz_mini_bt > 1
                     if self.sz_mini_bt > 1:
-                        # initialize batch grads and mean
-                        if i_bt == 0:
+                        # Initialize at the start of each mini-batch window
+                        if i_bt % self.sz_mini_bt == 0:
                             summed_grads = jax.tree_util.tree_map(jnp.zeros_like, grads)
                             bt_loss = []
+                            window_start_time = time()
 
                         summed_grads = self.add_grads(summed_grads, grads)
                         bt_loss.append(loss_val.item())
 
-                        if i_bt != 0 and i_bt % self.sz_mini_bt == 0:
-                            update_grads = jax.tree_util.tree_map(lambda x: x / self.sz_mini_bt, summed_grads)
+                        # Perform update at the end of the window
+                        if (i_bt + 1) % self.sz_mini_bt == 0 or (i_bt == len(indices) - 1):
+                            n_samples = len(bt_loss)
+                            update_grads = jax.tree_util.tree_map(lambda x: x / n_samples, summed_grads)
                             avg_loss = np.mean(bt_loss)
  
-                            modified_grads = self.process_grads(update_grads) #Grads are modified ans applied in this function
+                            modified_grads = self.process_grads(update_grads)
                             stop_time = time()
 
                             for param in self.relevant_params_list:
                                 self.training_history[param+"_grad"].append(modified_grads[param].item())
-                            self.training_history['step_time'].append(stop_time - start_time)
+                            self.training_history['step_time'].append(stop_time - window_start_time)
 
                             self.training_history['losses_iter'].append(avg_loss) # type: ignore
                             aux_serializable = {k: serialize_value(v) for k, v in aux.items()} if aux is not None else {}
                             self.training_history['aux_iter'].append(aux_serializable) # type: ignore
                             for param in self.relevant_params_list:
-                                #TODO: Need to check why this is not consistent
                                 if type(getattr(self.current_params, param)) == float:
                                     self.training_history[param + '_iter'].append(getattr(self.current_params, param))
                                 else:
@@ -1033,15 +1406,31 @@ class GradientDescentFitter(ParamFitter):
                             if iterations is not None:
                                 if total_iter % print_freq == 0:
                                     for param in self.relevant_params_list:
-                                        logger.info(f"{param} {getattr(self.current_params,param)} {modified_grads[param]}")
+                                        logger.info(f"Iter {total_iter}: {param} {getattr(self.current_params,param)} {modified_grads[param]}")
 
-                            # zero-ing out the grads and loss
-                            summed_grads = jax.tree_util.tree_map(jnp.zeros_like, grads)
-                            bt_loss = []
+                            total_iter += 1
+                            self.total_iter = total_iter
+                            pbar.update(1)
+
+                            # Checkpointing and termination should only happen after an update
+                            if iterations is not None:
+                                if total_iter > 0 and total_iter % save_freq == 0:
+                                    self.save_checkpoint(total_iter)
+                                    if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
+                                        os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
+                            
+                            if target_iter is not None:
+                                if total_iter >= target_iter:
+                                    self.save_checkpoint(total_iter)
+                                    if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
+                                        os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
+                                    if os.path.exists(self.target_dir):
+                                        shutil.rmtree(self.target_dir, ignore_errors=True)
+                                    terminate_fit = True
+                                    break
+
                     else:
-
-                        modified_grads = self.process_grads(grads) #Grads are modified ans applied in this function
-
+                        modified_grads = self.process_grads(grads)
                         stop_time = time()
 
                         for param in self.relevant_params_list:
@@ -1050,8 +1439,8 @@ class GradientDescentFitter(ParamFitter):
 
                         self.training_history['losses_iter'].append(loss_val.item()) # type: ignore
                         aux_serializable = {k: serialize_value(v) for k, v in aux.items()} if aux is not None else {}
+                        self.training_history['aux_iter'].append(aux_serializable) # type: ignore
                         for param in self.relevant_params_list:
-                            #TODO: Need to check why this is not consistent
                             if type(getattr(self.current_params, param)) == float:
                                 self.training_history[param + '_iter'].append(getattr(self.current_params, param))
                             else:
@@ -1063,40 +1452,61 @@ class GradientDescentFitter(ParamFitter):
 
                         if iterations is not None:
                             if total_iter % print_freq == 0:
-                                for param in self.relevant_params_list:
-                                    logger.info(f"{param} {getattr(self.current_params,param)} {modified_grads[param]}")
+                                logger.info(f"Iter {total_iter}: {param} {getattr(self.current_params,param)} {modified_grads[param]}")
+                        
+                        total_iter += 1
+                        self.total_iter = total_iter
+                        pbar.update(1)
+
+                        # Checkpointing and termination should only happen after an update
+                        if iterations is not None:
+                            if total_iter > 0 and total_iter % save_freq == 0:
+                                self.save_checkpoint(total_iter)
+                                if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
+                                    os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
+                        
+                        if target_iter is not None:
+                            if total_iter >= target_iter:
+                                self.save_checkpoint(total_iter)
+                                if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
+                                    os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
+                                if os.path.exists(self.target_dir):
+                                    shutil.rmtree(self.target_dir, ignore_errors=True)
+                                terminate_fit = True
+                                break
                             
-                    if iterations is not None:
-                        if total_iter % save_freq == 0:
-                            self.save_checkpoint(total_iter)
-
-                            if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
-                                os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
-
-                    total_iter += 1
-                    self.total_iter = total_iter
-                    pbar.update(1)
-                    
-                    if target_iter is not None:
-                        if total_iter >= target_iter:
-                            self.save_checkpoint(total_iter)
-
-                            if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
-                                os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
-
-                            if os.path.exists('target_' + self.out_label):
-                                shutil.rmtree('target_' + self.out_label, ignore_errors=True)
-
-                            terminate_fit = True
-                            break
+                    # Log dEdx diagnostics unconditionally every inner step
+                    if self.fit_dedx:
+                        _aux_s = {k: serialize_value(v) for k, v in aux.items()} if aux is not None else {}
+                        _dedx_prior = float(_aux_s.get('dedx_prior', 0.0))
+                        self.training_history['dedx_prior_iter'].append(_dedx_prior)
+                        _dedx_barrier = float(_aux_s.get('dedx_barrier', 0.0))
+                        self.training_history['dedx_barrier_iter'].append(_dedx_barrier)
+                        _dedx_mean_penalty = float(_aux_s.get('dedx_mean_penalty', 0.0))
+                        self.training_history['dedx_mean_penalty_iter'].append(_dedx_mean_penalty)
+                        _mean_dedx = float(_aux_s.get('mean_dedx', 0.0))
+                        self.training_history['mean_dedx_iter'].append(_mean_dedx)
+                        if i in self._dedx_cache:
+                            _cur_dedx = np.asarray(jnp.exp(self._dedx_cache[i]['log_dedx']))
+                            _true = self._batch_true_dedx.get(i)
+                            if _true is not None and len(_true) == len(_cur_dedx):
+                                _mae = float(np.mean(np.abs(_cur_dedx - _true)))
+                            else:
+                                _mae = float(np.mean(np.abs(_cur_dedx - float(self.dedx_student_loc))))
+                            self.training_history['dedx_mae_iter'].append(_mae)
+                            if _dedx_frozen:
+                                logger.debug(f"dEdx FROZEN (iter {total_iter}): MAE vs truth = {_mae:.4f}")
+                        else:
+                            # Warm-up phase: dEdx not yet active — keep lists aligned with NaN
+                            self.training_history['dedx_mae_iter'].append(float('nan'))
 
             self.save_checkpoint(total_iter)
 
             if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
                 os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
 
-            if os.path.exists('target_' + self.out_label):
-                shutil.rmtree('target_' + self.out_label, ignore_errors=True)
+            if os.path.exists(self.target_dir):
+                shutil.rmtree(self.target_dir, ignore_errors=True)
 
             # libcudart.cudaProfilerStop()
 
@@ -1167,7 +1577,7 @@ class LikelihoodProfiler(ParamFitter):
                     start_time = time()
                     new_param_values = {param: lower + iter*param_step}
                     self.current_params = self.ref_params.replace(**new_param_values)
-                    loss_val, grads, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, use_physical_params=True)
+                    loss_val, grads, _, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, use_physical_params=True)
 
                     stop_time = time()
 
@@ -1194,8 +1604,8 @@ class LikelihoodProfiler(ParamFitter):
                 if os.path.exists(f'fit_result/{self.test_name}/history_{param}_batch{i-1}_{self.out_label}.pkl'):
                     os.remove(f'fit_result/{self.test_name}/history_{param}_batch{i-1}_{self.out_label}.pkl')
 
-        if os.path.exists('target_' + self.out_label):
-            shutil.rmtree('target_' + self.out_label, ignore_errors=True)
+        if os.path.exists(self.target_dir):
+            shutil.rmtree(self.target_dir, ignore_errors=True)
 
 class MinuitFitter(ParamFitter):
     def __init__(self, separate_fits=True, minimizer_strategy=1, minimizer_tol=1e-5, **kwargs):
@@ -1283,13 +1693,13 @@ class MinuitFitter(ParamFitter):
                 def loss_wrapper(args): # type: ignore
                     # Update the current params with the new values
                     self.current_params = self.current_params.replace(**{key: args[i] for i, key in enumerate(self.relevant_params_list)})
-                    loss_val, _, _ , _, _= self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_grad=False, use_physical_params=True)
+                    loss_val, _, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_grad=False, use_physical_params=True)
                     return loss_val
 
                 def grad_wrapper(args): # type: ignore
                     # Update the current params with the new values
                     self.current_params = self.current_params.replace(**{key: args[i] for i, key in enumerate(self.relevant_params_list)})
-                    _, grads, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=False, use_physical_params=True)
+                    _, grads, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=False, use_physical_params=True)
                     return [getattr(grads, key) for key in self.relevant_params_list]
 
                 self.configure_minimizer(loss_wrapper, grad_wrapper)
@@ -1317,7 +1727,7 @@ class MinuitFitter(ParamFitter):
                     # target
                     ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = get_target(self, i, evts_sim, target)
 
-                    loss_val, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_grad=False, with_loss=True, use_physical_params=True)
+                    loss_val, _, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_grad=False, with_loss=True, use_physical_params=True)
                     tot_loss += loss_val # type: ignore
                 logger.debug(f"Total loss: {tot_loss}")
                 return tot_loss
@@ -1337,7 +1747,7 @@ class MinuitFitter(ParamFitter):
                     # target
                     ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = get_target(self, i, evts_sim, target)
 
-                    _, grads, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=False, use_physical_params=True)
+                    _, grads, _, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=False, use_physical_params=True)
                     tot_grad = [getattr(grads, key) + tot_grad[i] for i, key in enumerate(self.relevant_params_list)]
                 logger.debug(f"Average gradient: {[g/len(dataloader_sim) for g in tot_grad]}")
                 return [g for g in tot_grad]
@@ -1387,7 +1797,7 @@ class HessianCalculator(ParamFitter):
             self.training_history['n_hit'].append(n_hit)
 
             if self.current_mode == 'lut':
-                loss_val, grads, aux, hess, aux_hess = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=True)
+                loss_val, grads, _, aux, hess, aux_hess = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=True)
                 self.training_history['hessian'].append(format_hessian(hess))
                 self.training_history['gradient'].append(format_hessian(grads))
                 self.training_history['losses_iter'].append(loss_val.item())
@@ -1401,5 +1811,5 @@ class HessianCalculator(ParamFitter):
             if os.path.exists(f'fit_result/{self.test_name}/history_batch{i-1}_{self.out_label}.pkl'):
                 os.remove(f'fit_result/{self.test_name}/history_batch{i-1}_{self.out_label}.pkl')
 
-        if os.path.exists('target_' + self.out_label):
-            shutil.rmtree('target_' + self.out_label, ignore_errors=True)
+        if os.path.exists(self.target_dir):
+            shutil.rmtree(self.target_dir, ignore_errors=True)

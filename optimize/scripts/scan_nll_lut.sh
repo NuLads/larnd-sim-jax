@@ -19,7 +19,7 @@ fi
 
 TARGET_SEED=$SLURM_ARRAY_TASK_ID
 # PARAMS=optimize/scripts/param_list.yaml
-BATCH_SIZE=400
+BATCH_SIZE=200
 ITERATIONS=50
 DATA_SEED=1
 LOSS=llhd
@@ -55,7 +55,7 @@ python3 -m optimize.example_run \
     --out_label ${LABEL} \
     --test_name ${BASE_LABEL} \
     --seed ${TARGET_SEED} \
-    --random_ntrack \
+    --random_nevent \
     --iterations ${ITERATIONS} \
     --max_batch_len ${BATCH_SIZE} \
     --track_z_bound 28 \

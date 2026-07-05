@@ -141,7 +141,9 @@ def chop_tracks(tracks, fields, precision=0.001):
     direction = segment / (length[:, None] + eps)
     nsteps = np.maximum(np.ceil(length / precision), 1).astype(int).flatten()
     new_tracks = np.vstack([split_track(tracks[i], nsteps[i], length[i], direction[i], i) for i in range(tracks.shape[0])])
-    return new_tracks
+    # parent_segment_ids[j] = index of the original (pre-chop) segment that chopped row j came from
+    parent_segment_ids = np.repeat(np.arange(len(tracks), dtype=np.int32), nsteps)
+    return new_tracks, parent_segment_ids
 
 class TracksDataset:
     def __init__(
@@ -169,7 +171,22 @@ class TracksDataset:
 
         # Build per-batch mappings so __getitem__ can construct a single batch on demand.
         with h5py.File(filename, 'r') as f:
-            tracks = f['segments'][:] # convert to array
+            if nevents is not None and nevents > 0 and not random_nevents:
+                ds = f['segments']
+                event_id_field = 'event_id' if 'event_id' in ds.dtype.names else 'eventID'
+                event_ids = ds[event_id_field]
+                chunk_size = min(50000, len(ds))
+                first_event_ids = event_ids[:chunk_size]
+                unique_evts = np.unique(first_event_ids)
+                is_sorted = np.all(np.diff(first_event_ids) >= 0)
+                if len(unique_evts) >= nevents and is_sorted:
+                    cutoff_evt = unique_evts[nevents - 1]
+                    cutoff_idx = int(np.searchsorted(first_event_ids, cutoff_evt, side='right'))
+                    tracks = ds[:cutoff_idx]
+                else:
+                    tracks = ds[:]
+            else:
+                tracks = f['segments'][:]
 
         if swap_xz:
             x_start = np.copy(tracks['x_start'] )
@@ -461,7 +478,16 @@ class TracksDataset:
         batch_arr = remap_event_ids_to_local(batch_arr, selected_struct['eventID'], self.batch_event_global_ids[idx], self.track_fields)
 
         if self.chopped:
-            batch_arr = chop_tracks(batch_arr, self.track_fields, precision=self.electron_sampling_resolution)
+            batch_arr, parent_seg_ids = chop_tracks(batch_arr, self.track_fields, precision=self.electron_sampling_resolution)
+            # cache so callers can retrieve via get_parent_segment_ids(idx)
+            if not hasattr(self, '_parent_seg_ids_cache'):
+                self._parent_seg_ids_cache = {}
+            self._parent_seg_ids_cache[idx] = parent_seg_ids
+        else:
+            # without chopping every row is its own parent
+            if not hasattr(self, '_parent_seg_ids_cache'):
+                self._parent_seg_ids_cache = {}
+            self._parent_seg_ids_cache[idx] = np.arange(batch_arr.shape[0], dtype=np.int32)
 
         # pad to global max
         if self.pad and self.max_batch_nsteps > 0:
@@ -477,6 +503,25 @@ class TracksDataset:
 
     def get_track_fields(self):
         return self.track_fields
+
+    def get_parent_segment_ids(self, idx):
+        """Return an int32 array of shape [N_chopped_rows] mapping each chopped (or
+        padded) row back to the index of its original pre-chop segment within the
+        batch.  Padded rows beyond the real data map to -1.
+
+        NOTE: __getitem__(idx) must be called at least once before this method
+        so that the cache is populated.
+        """
+        if not hasattr(self, '_parent_seg_ids_cache') or idx not in self._parent_seg_ids_cache:
+            # Trigger population
+            _ = self[idx]
+        raw = self._parent_seg_ids_cache[idx]
+        target_len = self.max_batch_nsteps if (self.pad and self.max_batch_nsteps > 0) else len(raw)
+        if target_len > len(raw):
+            padded = np.full(target_len, -1, dtype=np.int32)
+            padded[:len(raw)] = raw
+            return padded
+        return raw
 
     def get_batch_global_event_ids(self, idx=None):
         if idx is None:
@@ -685,9 +730,8 @@ class TgtTracksDataset:
         selected_rows = self.tracks_struct[row_idx]
         batch_arr = np_from_structured(selected_rows)
         batch_arr = remap_event_ids_to_local(batch_arr, selected_rows['eventID'], self.batch_event_global_ids[idx], self.tgt_track_fields)
-
         if self.chopped and batch_arr.size:
-            batch_arr = chop_tracks(batch_arr, self.tgt_track_fields, precision=self.electron_sampling_resolution)
+            batch_arr, _ = chop_tracks(batch_arr, self.tgt_track_fields, precision=self.electron_sampling_resolution)
 
         if self.pad and self.max_batch_nsteps > 0 and batch_arr.shape[0] < self.max_batch_nsteps:
             batch_arr = self.pad_batch(batch_arr, self.max_batch_nsteps, idx)
