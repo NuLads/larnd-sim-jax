@@ -530,6 +530,8 @@ class ParamFitter:
                  chain_lr=3e-5,
                  chain_start_iter=0,
                  chain_update_freq=1,
+                 chain_decay_rate=1.0,
+                 chain_decay_start=None,
                  mcs_prior_weight=1.0,
                  chain_step_len=2.0,
                  chain_momentum_GeV=3.0,
@@ -550,6 +552,13 @@ class ParamFitter:
         self._chain_lr = float(chain_lr)
         self._chain_start_iter = int(chain_start_iter)
         self._chain_update_freq = max(1, int(chain_update_freq))
+        # Exponential decay of the chain-position learning rate. The chain optimizer
+        # (optax.adam) is otherwise fixed-LR, so positions never settle and sustain a
+        # position<->calibration limit cycle in the joint fit. Decaying it lets them
+        # converge. chain_decay_rate=1.0 => no decay (backward compatible).
+        self._chain_decay_rate = float(chain_decay_rate)
+        # Decay begins at chain_decay_start (defaults to when chain fitting starts).
+        self._chain_decay_start = int(chain_decay_start) if chain_decay_start is not None else int(chain_start_iter)
         self._mcs_prior_weight = float(mcs_prior_weight)
         self._chain_step_len = float(chain_step_len)
         self._chain_momentum_GeV = float(chain_momentum_GeV)
@@ -1948,16 +1957,29 @@ class GradientDescentFitter(ParamFitter):
             self._chain_cache[batch_idx] = states
         return self._chain_cache[batch_idx]
 
-    def _process_chain_grads(self, batch_idx, grads_chain_per_track):
-        """Apply one Adam step for per-track chain angles of batch_idx."""
+    def _chain_lr_scale(self, total_iter):
+        """Exponential decay factor for the chain-position learning rate.
+
+        Returns 1.0 when chain_decay_rate>=1 (no decay). Otherwise decays as
+        chain_decay_rate**(total_iter - chain_decay_start) once past the start,
+        so the fixed-LR Adam step shrinks over the run and the positions settle.
+        """
+        if self._chain_decay_rate >= 1.0:
+            return 1.0
+        t = max(0, int(total_iter) - self._chain_decay_start)
+        return float(self._chain_decay_rate ** t)
+
+    def _process_chain_grads(self, batch_idx, grads_chain_per_track, total_iter=0):
+        """Apply one (decayed) Adam step for per-track chain angles of batch_idx."""
         states = self._get_or_init_chain_state(batch_idx)
+        lr_scale = self._chain_lr_scale(total_iter)
         new_states = []
         for state, g in zip(states, grads_chain_per_track):
             if jnp.any(jnp.isnan(g)):
                 new_states.append(state)
                 continue
             updates, new_opt_state = self._chain_optimizer.update(g, state['opt_state'])
-            new_angles = state['angles'] + updates
+            new_angles = state['angles'] + lr_scale * updates
             new_states.append({'angles': new_angles, 'opt_state': new_opt_state})
         self._chain_cache[batch_idx] = new_states
 
@@ -2166,7 +2188,7 @@ class GradientDescentFitter(ParamFitter):
 
                     # Apply per-track chain angle gradient immediately after every step.
                     if _chain_active and _grads_chain is not None:
-                        self._process_chain_grads(i, _grads_chain)
+                        self._process_chain_grads(i, _grads_chain, total_iter)
                         _pos_res = self._compute_pos_residual_batch(i)
                         if _pos_res is not None:
                             self.training_history.setdefault('pos_residual_iter', []).append(_pos_res)

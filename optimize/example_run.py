@@ -144,7 +144,19 @@ def main(config):
                                 dedx_student_scale_l=config.dedx_student_scale_l,
                                 dedx_student_scale_r=config.dedx_student_scale_r,
                                 dedx_mean_constraint_weight=config.dedx_mean_constraint_weight,
-                                dedx_mean_constraint_target=config.dedx_mean_constraint_target)
+                                dedx_mean_constraint_target=config.dedx_mean_constraint_target,
+                                fit_track_positions=config.fit_track_positions,
+                                track_max_iter=config.track_max_iter,
+                                track_alignment_freq=config.track_alignment_freq,
+                                fit_chain_positions=config.fit_chain_positions,
+                                chain_lr=config.chain_lr,
+                                chain_start_iter=config.chain_start_iter,
+                                chain_update_freq=config.chain_update_freq,
+                                chain_decay_rate=config.chain_decay_rate,
+                                chain_decay_start=config.chain_decay_start,
+                                mcs_prior_weight=config.mcs_prior_weight,
+                                chain_step_len=config.chain_step_len,
+                                chain_momentum_GeV=config.chain_momentum_GeV)
     elif config.fit_type == "scan":
         param_fit = LikelihoodProfiler(relevant_params=param_list,
                                 sim_track_fields=sim_track_fields, tgt_track_fields=tgt_track_fields,
@@ -419,6 +431,30 @@ if __name__ == '__main__':
                         help="Weight of the global length-weighted mean dEdx constraint (default: 0.0, disabled)")
     parser.add_argument("--dedx_mean_constraint_target", dest="dedx_mean_constraint_target", default=1.887, type=float,
                         help="Target value for the global mean dEdx constraint in MeV/cm (default: 1.887)")
+    parser.add_argument("--fit_track_positions", "--fit-track-positions", dest="fit_track_positions", default=False, action="store_true",
+                        help="Jointly optimize local track translation and rotation (chain fit only)")
+    parser.add_argument("--track_max_iter", "--track-max-iter", dest="track_max_iter", default=20, type=int,
+                        help="Maximum L-BFGS-B iterations per local track alignment step")
+    parser.add_argument("--track_alignment_freq", "--track-alignment-freq", dest="track_alignment_freq", default=1, type=int,
+                        help="Frequency (in steps) of track alignment optimization")
+    parser.add_argument("--fit_chain_positions", "--fit-chain-positions", dest="fit_chain_positions", default=False, action="store_true",
+                        help="Jointly optimize per-track deflection chain geometry with global Ab and per-segment dEdx (chain fit only)")
+    parser.add_argument("--chain_lr", dest="chain_lr", default=3e-5, type=float,
+                        help="Learning rate for per-track chain angle Adam optimiser (default: 3e-5)")
+    parser.add_argument("--chain_start_iter", dest="chain_start_iter", default=0, type=int,
+                        help="Iteration at which to start chain position fitting (default: 0)")
+    parser.add_argument("--chain_update_freq", dest="chain_update_freq", default=1, type=int,
+                        help="Run chain gradient backward only every N steps; intermediate steps use argnums=(0,1) only (default: 1 = every step)")
+    parser.add_argument("--chain_decay_rate", dest="chain_decay_rate", default=1.0, type=float,
+                        help="Per-iteration exponential decay of the chain-position LR (default: 1.0 = no decay). <1 lets positions settle and damps the position/calibration oscillation.")
+    parser.add_argument("--chain_decay_start", dest="chain_decay_start", default=None, type=int,
+                        help="Iteration at which chain-LR decay begins (default: chain_start_iter)")
+    parser.add_argument("--mcs_prior_weight", dest="mcs_prior_weight", default=1.0, type=float,
+                        help="Weight of Gaussian MCS prior on chain deflection angles (default: 1.0)")
+    parser.add_argument("--chain_step_len", dest="chain_step_len", default=2.0, type=float,
+                        help="Target chain segment length in cm (default: 2.0)")
+    parser.add_argument("--chain_momentum_GeV", dest="chain_momentum_GeV", default=3.0, type=float,
+                        help="Assumed muon momentum in GeV/c for Highland MCS formula (default: 3.0)")
 
     try:
         args = parser.parse_args()
