@@ -154,6 +154,7 @@ def main(config):
                                 chain_update_freq=config.chain_update_freq,
                                 chain_decay_rate=config.chain_decay_rate,
                                 chain_decay_start=config.chain_decay_start,
+                                pos_residual_freq=config.pos_residual_freq,
                                 mcs_prior_weight=config.mcs_prior_weight,
                                 chain_step_len=config.chain_step_len,
                                 chain_momentum_GeV=config.chain_momentum_GeV)
@@ -449,6 +450,8 @@ if __name__ == '__main__':
                         help="Per-iteration exponential decay of the chain-position LR (default: 1.0 = no decay). <1 lets positions settle and damps the position/calibration oscillation.")
     parser.add_argument("--chain_decay_start", dest="chain_decay_start", default=None, type=int,
                         help="Iteration at which chain-LR decay begins (default: chain_start_iter)")
+    parser.add_argument("--pos_residual_freq", dest="pos_residual_freq", default=1, type=int,
+                        help="Compute the (diagnostic) chain position residual every N steps (default 1). Higher values speed up steps at no cost to the fit.")
     parser.add_argument("--mcs_prior_weight", dest="mcs_prior_weight", default=1.0, type=float,
                         help="Weight of Gaussian MCS prior on chain deflection angles (default: 1.0)")
     parser.add_argument("--chain_step_len", dest="chain_step_len", default=2.0, type=float,

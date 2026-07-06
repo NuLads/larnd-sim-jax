@@ -532,6 +532,7 @@ class ParamFitter:
                  chain_update_freq=1,
                  chain_decay_rate=1.0,
                  chain_decay_start=None,
+                 pos_residual_freq=1,
                  mcs_prior_weight=1.0,
                  chain_step_len=2.0,
                  chain_momentum_GeV=3.0,
@@ -556,6 +557,9 @@ class ParamFitter:
         # (optax.adam) is otherwise fixed-LR, so positions never settle and sustain a
         # position<->calibration limit cycle in the joint fit. Decaying it lets them
         # converge. chain_decay_rate=1.0 => no decay (backward compatible).
+        # Position-residual is a per-step DIAGNOSTIC (not used by the fit): computing it every
+        # step is costly (device<->host syncs + a per-segment Python loop). Sample it every N.
+        self._pos_residual_freq = max(1, int(pos_residual_freq))
         self._chain_decay_rate = float(chain_decay_rate)
         # Decay begins at chain_decay_start (defaults to when chain fitting starts).
         self._chain_decay_start = int(chain_decay_start) if chain_decay_start is not None else int(chain_start_iter)
@@ -2189,9 +2193,10 @@ class GradientDescentFitter(ParamFitter):
                     # Apply per-track chain angle gradient immediately after every step.
                     if _chain_active and _grads_chain is not None:
                         self._process_chain_grads(i, _grads_chain, total_iter)
-                        _pos_res = self._compute_pos_residual_batch(i)
-                        if _pos_res is not None:
-                            self.training_history.setdefault('pos_residual_iter', []).append(_pos_res)
+                        if total_iter % self._pos_residual_freq == 0:
+                            _pos_res = self._compute_pos_residual_batch(i)
+                            if _pos_res is not None:
+                                self.training_history.setdefault('pos_residual_iter', []).append(_pos_res)
 
                     # Accumulate gradients if sz_mini_bt > 1
                     if self.sz_mini_bt > 1:
