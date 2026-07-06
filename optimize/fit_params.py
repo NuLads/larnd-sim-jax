@@ -1974,17 +1974,23 @@ class GradientDescentFitter(ParamFitter):
         return float(self._chain_decay_rate ** t)
 
     def _process_chain_grads(self, batch_idx, grads_chain_per_track, total_iter=0):
-        """Apply one (decayed) Adam step for per-track chain angles of batch_idx."""
+        """Apply one (decayed) Adam step for per-track chain angles of batch_idx.
+
+        The NaN guard is done on-device with jnp.where (identical result to skipping the
+        update on NaN) instead of a Python ``if jnp.any(isnan)`` — the latter forces a
+        device->host sync on every track (~33 blocking syncs/step, a large host cost).
+        """
         states = self._get_or_init_chain_state(batch_idx)
         lr_scale = self._chain_lr_scale(total_iter)
         new_states = []
         for state, g in zip(states, grads_chain_per_track):
-            if jnp.any(jnp.isnan(g)):
-                new_states.append(state)
-                continue
-            updates, new_opt_state = self._chain_optimizer.update(g, state['opt_state'])
-            new_angles = state['angles'] + lr_scale * updates
-            new_states.append({'angles': new_angles, 'opt_state': new_opt_state})
+            bad = jnp.any(jnp.isnan(g))                       # scalar, stays on-device (no sync)
+            g_clean = jnp.where(jnp.isnan(g), 0.0, g)         # avoid poisoning Adam moments
+            updates, new_opt_state = self._chain_optimizer.update(g_clean, state['opt_state'])
+            cand_angles = state['angles'] + lr_scale * updates
+            new_angles = jnp.where(bad, state['angles'], cand_angles)
+            new_opt = jax.tree_util.tree_map(lambda o, n: jnp.where(bad, o, n), state['opt_state'], new_opt_state)
+            new_states.append({'angles': new_angles, 'opt_state': new_opt})
         self._chain_cache[batch_idx] = new_states
 
     def _compute_pos_residual_batch(self, batch_idx):

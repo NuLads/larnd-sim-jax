@@ -46,6 +46,12 @@ def main(config):
     else:
         os.environ['XLA_FLAGS'] = '--xla_gpu_deterministic_ops=true'
 
+    # Persist ALL compiled kernels to the on-disk cache. JAX's default only caches kernels
+    # that take >1 s to compile, so the many fast (~40 ms) sim kernels are never persisted and
+    # recompile on every cold start. Lowering the threshold makes the persistent cache complete,
+    # so recompilation happens only on the very first run for a given shape set.
+    jax.config.update('jax_persistent_cache_min_compile_time_secs', 0.0)
+
     logger.info(f"Jax devices: {jax.devices()}")
 
     logger.info(f"fit label: {config.out_label}")
