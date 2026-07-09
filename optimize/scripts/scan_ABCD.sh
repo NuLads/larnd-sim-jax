@@ -200,7 +200,7 @@ python3 -m optimize.example_run \
     --number_pix_neighbors ${N_NEIGH} \
     --signal_length ${SIGNAL_LENGTH} \
     --mode ${MODE} \
-    --lut_file ../Data_selection/response_44_v2a_full_tick.npz \
+    --lut_file src/larndsim/detector_properties/response_44_v2a_full_tick.npz \
     --loss_fn ${LOSS} \
     --sim_seed_strategy ${SEED_STRATEGY} \
     --clip_from_range \
