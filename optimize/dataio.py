@@ -287,7 +287,7 @@ class TracksDataset:
         nb_trajs = len(index)
 
         # inverse_idx: 1D int array of length N_rows, values in [0, nb_trajs)
-        sorted_idx = np.argsort(inverse_idx)          # indices of rows sorted by traj id (C)
+        sorted_idx = np.argsort(inverse_idx, kind='stable')          # indices of rows sorted by traj id (C)
         sorted_vals = inverse_idx[sorted_idx]         # sorted trajectory ids
 
         unique_vals, start_idx = np.unique(sorted_vals, return_index=True)
@@ -583,7 +583,7 @@ class TgtTracksDataset:
         # Keep target rows in memory once and build a fast row index by key.
         self.tracks_struct = tracks_ds
         tgt_key_ids = self._pack_evt_trk_ids(self.tracks_struct['eventID'], self.tracks_struct['trackID'])
-        self._target_sorted_row_idx = np.argsort(tgt_key_ids)
+        self._target_sorted_row_idx = np.argsort(tgt_key_ids, kind='stable')
         sorted_key_ids = tgt_key_ids[self._target_sorted_row_idx]
         self._target_unique_key_ids, self._target_unique_starts = np.unique(sorted_key_ids, return_index=True)
         self._target_unique_ends = np.append(self._target_unique_starts[1:], len(self._target_sorted_row_idx))

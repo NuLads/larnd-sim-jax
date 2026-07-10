@@ -551,6 +551,12 @@ class ParamFitter:
         self.track_alignment_freq = int(track_alignment_freq)
         self.fit_chain_positions = bool(fit_chain_positions)
         self._chain_lr = float(chain_lr)
+        # Phase 3: geometry-block optimiser. 'adam' (default) = current per-track Adam path (unchanged).
+        # 'lbfgs' = jitted L-BFGS geometry solve (calibration fixed) alternating with the calibration step.
+        self._geom_optimizer = str(getattr(config, 'geom_optimizer', 'adam') or 'adam') if config is not None else 'adam'
+        self._geom_lbfgs_steps = int(getattr(config, 'geom_lbfgs_steps', 10)) if config is not None else 10
+        self._geom_lbfgs_unique_size = int(getattr(config, 'geom_lbfgs_unique_size', 0)) if config is not None else 0
+        self._geom_vg_cache = {}
         self._chain_start_iter = int(chain_start_iter)
         self._chain_update_freq = max(1, int(chain_update_freq))
         # Exponential decay of the chain-position learning rate. The chain optimizer
@@ -1400,7 +1406,7 @@ class ParamFitter:
         with open(f'fit_result/{self.test_name}/history_iter{self.total_iter}_{self.out_label}.pkl', "wb") as f_history:
             pickle.dump(self.training_history, f_history)
 
-    def compute_loss(self, tracks, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=False, epoch=0, use_physical_params=False, log_dedx=None, parent_ids=None, chain_angles_per_track=None):
+    def compute_loss(self, tracks, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=False, epoch=0, use_physical_params=False, log_dedx=None, parent_ids=None, chain_angles_per_track=None, return_loss_closure=False, unique_size=None, roi_override=None):
         """Compute the simulation loss and (optionally) gradients.
 
         When ``log_dedx`` and ``parent_ids`` are provided the function jointly
@@ -1531,7 +1537,11 @@ class ParamFitter:
                     self._batch_chain_meta[i] = _build_chain_meta(_chain_ctxs)
                 _chain_meta = self._batch_chain_meta[i]
 
-            def loss_wrapper_combined(norm_params_input, log_dedx_in, chain_angles_pt=None):
+            def loss_wrapper_combined(norm_params_input, log_dedx_in, chain_angles_pt=None, data_over=None):
+                # data_over: optional {'tracks', 'target', 'meta'} of TRACED arrays overriding the
+                # closure-baked batch data. Passing batch data as traced args lets a single jitted
+                # program serve every batch with the same shape signature (data-as-args pattern) —
+                # without it, each batch bakes its data as XLA constants and forces a fresh compile.
                 # Map global params: unconstrained → physical
                 if self.normalization_scheme == "divide":
                     new_phys = {
@@ -1548,12 +1558,13 @@ class ParamFitter:
                 # Optionally warp track geometry using per-track chain angles.
                 # Each track's segments are repositioned by interpolating along the
                 # deflection chain's node positions.
-                t = tracks
+                t = tracks if data_over is None else data_over['tracks']
+                _meta_use = _chain_meta if data_over is None else data_over['meta']
                 _chain_thetas = None
                 _chain_phis = None
-                if chain_angles_pt is not None and _chain_meta is not None:
+                if chain_angles_pt is not None and _meta_use is not None:
                     t, _chain_thetas, _chain_phis = _chain_warp_vectorized(
-                        t, chain_angles_pt, _chain_meta, _col_map)
+                        t, chain_angles_pt, _meta_use, _col_map)
 
                 # Reconstruct per-step dEdx from per-segment log-mean.
                 # Padding rows have parent_id == -1; preserve their original track dEdx
@@ -1569,8 +1580,9 @@ class ParamFitter:
                     dedx_sample = t[:, dedx_idx]
                     valid_mask  = jnp.ones(t.shape[0], dtype=bool)
 
-                prediction = self.sim_strategy.predict(physical_params, t, self.sim_track_fields, rngkey)
-                hit_loss, hit_aux = self.loss_strategy.compute(physical_params, prediction, target_data)
+                prediction = self.sim_strategy.predict(physical_params, t, self.sim_track_fields, rngkey, unique_size=unique_size, roi_override=roi_override)
+                _target_use = target_data if data_over is None else data_over['target']
+                hit_loss, hit_aux = self.loss_strategy.compute(physical_params, prediction, _target_use)
 
                 # Read length scale factor if present, otherwise default to 1.0
                 if 'length_scale_factor' in self.sim_track_fields:
@@ -1628,9 +1640,9 @@ class ParamFitter:
                 total_loss = hit_loss + dedx_prior + dedx_barrier + dedx_mean_penalty
 
                 # Gaussian MCS prior on chain deflection angles (vectorized)
-                if chain_angles_pt is not None and _chain_meta is not None:
+                if chain_angles_pt is not None and _meta_use is not None:
                     _mcs_loss = _chain_mcs_vectorized(
-                        _chain_thetas, _chain_phis, _chain_meta, self._mcs_prior_weight)
+                        _chain_thetas, _chain_phis, _meta_use, self._mcs_prior_weight)
                     total_loss = total_loss + _mcs_loss
                 else:
                     _mcs_loss = jnp.float32(0.)
@@ -1645,6 +1657,15 @@ class ParamFitter:
 
             _chain_angles_active = (self.fit_chain_positions and chain_angles_per_track is not None)
             _dedx_active = (log_dedx is not None)
+            if return_loss_closure and _chain_angles_active:
+                # Return a pure, differentiable loss(chain_angles_pt[, norm_params])->scalar for this
+                # batch, with dEdx held fixed. norm_params is an OPTIONAL traced arg so a jitted
+                # value_and_grad uses the *current* calibration (not the compile-time value) — required
+                # for the alternating L-BFGS geometry block. Omit it to use the current self.norm_params.
+                def _chain_only_loss(chain_angles_pt, norm_params_in=None, data_over=None):
+                    _np = self.norm_params if norm_params_in is None else norm_params_in
+                    return loss_wrapper_combined(_np, log_dedx, chain_angles_pt, data_over=data_over)[0]
+                return _chain_only_loss
             if with_loss and with_grad:
                 if _chain_angles_active and _dedx_active:
                     # Joint: global params + per-seg dEdx + chain angles
@@ -2021,6 +2042,544 @@ class GradientDescentFitter(ParamFitter):
                 dists.append(float(np.linalg.norm(fitted - true)))
         return float(np.mean(dists)) if dists else None
 
+    def validate_static_unique(self, dataloader_sim, batch_idx=0, unique_size=768):
+        """Phase-0 validation: confirm static-size unique (jittable) is numerically identical to the
+        default dynamic path on a real batch, and that it jits."""
+        i = int(batch_idx)
+        tracks = jax.device_put(dataloader_sim[i].reshape(-1, len(self.sim_track_fields)))
+        gp = self.current_params
+        wfs_d, up_d = simulate_wfs(gp, self.response, tracks, self.sim_track_fields)                       # dynamic
+        wfs_s, up_s = simulate_wfs(gp, self.response, tracks, self.sim_track_fields, unique_size=unique_size)  # static
+        jfn = jax.jit(lambda t: simulate_wfs(gp, self.response, t, self.sim_track_fields, unique_size=unique_size))
+        wfs_j, up_j = jfn(tracks); jax.block_until_ready(wfs_j)                                            # jittable?
+        up_d = np.asarray(up_d); up_s = np.asarray(up_s); wfs_d = np.asarray(wfs_d); wfs_s = np.asarray(wfs_s)
+        d_map = {int(p): wfs_d[k] for k, p in enumerate(up_d) if p >= 0}
+        max_diff = 0.0; n_matched = 0; scale = float(np.max(np.abs(wfs_d))) + 1e-9
+        for k, p in enumerate(up_s):
+            if p >= 0 and int(p) in d_map:
+                max_diff = max(max_diff, float(np.max(np.abs(wfs_s[k] - d_map[int(p)])))); n_matched += 1
+        n_d = int((up_d >= 0).sum()); n_s = int((up_s >= 0).sum()); rel = max_diff/scale
+        logger.info(f"[STATIC-UNIQUE-VAL] batch {i}: default {n_d} pix | static {n_s} pix (size {unique_size}) | "
+                    f"matched {n_matched}/{n_d} | max wfs |diff| {max_diff:.3e} (rel {rel:.2e}, wfs scale {scale:.1f}) | "
+                    f"jitted: OK ({'IDENTICAL' if (n_matched == n_d and rel < 1e-4) else 'MISMATCH'})")
+        return {'n_default': n_d, 'n_static': n_s, 'matched': n_matched, 'max_diff': max_diff, 'rel': rel}
+
+    def _build_chain_geom_vg(self, batch_idx):
+        """Jitted value_and_grad of the fixed-pixel geometry loss w.r.t. per-track chain angles.
+
+        Reuses the profile_local_geometry pattern (simulate_wfs_static -> simulate_probabilistic ->
+        MSE vs target expected-ADC), but warps the tracks by the chain angles (_chain_warp_vectorized)
+        + MCS prior, instead of a rigid 6-DOF transform. No dynamic jnp.unique -> fully jittable.
+        Cached by (pixel shape, roi sizes, T, max_nc) so it recompiles only on shape change.
+        """
+        if not hasattr(self, '_chain_geom_vg_cache'):
+            self._chain_geom_vg_cache = {}
+        fixed_pixels = self._batch_fixed_pixels[batch_idx]
+        psn, pln = self._batch_padded_roi[batch_idx]
+        ctxs = self._batch_chain_contexts[batch_idx]
+        if batch_idx not in self._batch_chain_meta:
+            self._batch_chain_meta[batch_idx] = _build_chain_meta(ctxs)
+        meta = self._batch_chain_meta[batch_idx]
+        f = self.sim_track_fields
+        col_map = {'x': f.index('x'), 'y': f.index('y'), 'z': f.index('z'),
+                   'xs': f.index('x_start'), 'ys': f.index('y_start'), 'zs': f.index('z_start'),
+                   'xe': f.index('x_end'), 'ye': f.index('y_end'), 'ze': f.index('z_end'), 'dx': f.index('dx')}
+        key = (fixed_pixels.shape, int(psn), int(pln), meta['T'], meta['max_nc'])
+        if key in self._chain_geom_vg_cache:
+            return self._chain_geom_vg_cache[key]
+        response = self.response; sim_fields = self.sim_track_fields
+        mcs_w = float(self._mcs_prior_weight); _psn = int(psn); _pln = int(pln)
+
+        def _loss(chain_angles_list, tracks_, gp_, fixed_, tgt_pix_, tgt_adc_):
+            warped, thetas, phis = _chain_warp_vectorized(tracks_, chain_angles_list, meta, col_map)
+            wfs = simulate_wfs_static(gp_, response, warped, sim_fields, fixed_)
+            wfs_padded = pad_to_closest_multiple(wfs, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
+            adcs_distrib, _px, _py, tp, _ev = simulate_probabilistic(
+                gp_, wfs_padded, fixed_, padded_small_nb=_psn, padded_large_nb=_pln)
+            expected = jnp.sum(jnp.exp(tp) * adcs_distrib, axis=1)
+            idx = jnp.searchsorted(fixed_, tgt_pix_); idxs = jnp.clip(idx, 0, fixed_.shape[0]-1)
+            matched = (jnp.take(fixed_, idxs) == tgt_pix_)[:, None]
+            guess = jnp.where(matched, jnp.take(expected, idxs, axis=0), 0.0)
+            mse = jnp.mean((guess - tgt_adc_)**2)
+            mcs = _chain_mcs_vectorized(thetas, phis, meta, mcs_w)
+            return mse + mcs
+
+        vg = jax.jit(jax.value_and_grad(_loss))
+        self._chain_geom_vg_cache[key] = vg
+        return vg
+
+    def solve_chain_geometry_lbfgs(self, batch_idx, tracks, gp, max_iter=60, resid_fn=None):
+        """Optimise one batch's chain angles with scipy L-BFGS-B on the jitted geometry gradient
+        (calibration + dEdx fixed). Writes the result to _chain_cache. Returns (scipy_result, resid_hist)."""
+        from jax.flatten_util import ravel_pytree
+        vg = self._build_chain_geom_vg(batch_idx)
+        fixed_pixels = self._batch_fixed_pixels[batch_idx]
+        tgt_pix = self._batch_target_pixels[batch_idx]
+        tgt_adc = self._batch_target_expected_adc[batch_idx]
+        init_angles = [jnp.asarray(s['angles']) for s in self._get_or_init_chain_state(batch_idx)]
+        x0, unflat = ravel_pytree(init_angles); x0 = np.asarray(x0, dtype=np.float64)
+        hist = []
+        def scipy_loss(x):
+            angles = unflat(jnp.asarray(x, dtype=jnp.float32))
+            l, g = vg(angles, tracks, gp, fixed_pixels, tgt_pix, tgt_adc)
+            gflat = np.asarray(ravel_pytree(g)[0], dtype=np.float64)
+            if resid_fn is not None:
+                hist.append((float(l), resid_fn(angles)))
+            return float(l), gflat
+        res = minimize(scipy_loss, x0, jac=True, method='L-BFGS-B', options={'maxiter': max_iter})
+        final = unflat(jnp.asarray(res.x, dtype=jnp.float32))
+        self._chain_cache[batch_idx] = [{'angles': final[ti]} for ti in range(len(init_angles))]
+        return res, hist
+
+    def test_jitted_geom_lbfgs(self, dataloader_sim, target, batch_idx=0, unique_size=768, max_iter=60, out_path=None):
+        """Jitted LLHD geometry L-BFGS on one batch: the PROVEN loss (compute_loss) made jittable via
+        static-size unique, driven by scipy L-BFGS-B. Records residual convergence + timing."""
+        import time as _time, pickle as _pickle
+        from jax.flatten_util import ravel_pytree
+        self.precompute_static_pixels(dataloader_sim, target)
+        i = int(batch_idx)
+        selected = jax.device_put(dataloader_sim[i].reshape(-1, len(self.sim_track_fields)))
+        evts = self.get_batch_global_event_ids(dataloader_sim, i, selected)
+        this_tgt = jax.device_put(target[i].reshape(-1, len(self.tgt_track_fields)))
+        ref = self.get_simulated_target(this_tgt, i, evts, regen=False)
+        ctxs = self._batch_chain_contexts[i]; true_pos = self._batch_true_positions.get(i, {})
+        init_angles = [jnp.asarray(s['angles']) for s in self._get_or_init_chain_state(i)]
+        _ok = [ti for ti, ctx in enumerate(ctxs) if ctx.track_id in true_pos]
+        def _sag(ctx):
+            tr = np.asarray(true_pos[ctx.track_id]); ch = (tr[-1]-tr[0])/(np.linalg.norm(tr[-1]-tr[0])+1e-9)
+            t = tr - tr[0]; return float((np.linalg.norm(t-np.outer(t@ch, ch), axis=1)).max()*1e4)
+        sags = [_sag(ctxs[ti]) for ti in _ok]
+        def resid_fn(angles):
+            out = []
+            for ti in _ok:
+                ctx = ctxs[ti]; nc = ctx.n_chain; a = np.asarray(angles[ti]); th = a[:nc]; ph = a[nc:]
+                u = np.stack([np.sin(th)*np.cos(ph), np.sin(th)*np.sin(ph), np.cos(th)], 1); u /= (np.linalg.norm(u, axis=1, keepdims=True)+1e-12)
+                x0 = np.asarray(ctx.x0_fixed); nodes = np.concatenate([x0[None], x0[None] + ctx.step_len*np.cumsum(u, 0)], 0)
+                al = np.asarray(ctx.alpha_mid); k = np.clip(np.floor(al*nc).astype(int), 0, nc-1); fr = al*nc - k
+                fit = nodes[k] + fr[:, None]*(nodes[k+1]-nodes[k]); tr = np.asarray(true_pos[ctx.track_id]); m = min(len(fit), len(tr))
+                out.append(float(np.mean(np.linalg.norm(fit[:m]-tr[:m], axis=1))*1e4))
+            return out
+        # jittable proven LLHD loss (static unique)
+        loss_fn = self.compute_loss(selected, i, *ref, log_dedx=None, parent_ids=None,
+                                    chain_angles_per_track=init_angles, return_loss_closure=True, unique_size=int(unique_size))
+        _ = float(loss_fn(init_angles))                     # eager warm-up -> caches predict ROI counts
+        vg = jax.jit(jax.value_and_grad(loss_fn))
+        _t0 = _time.time(); jax.block_until_ready(vg(init_angles)); compile_t = _time.time() - _t0   # compile
+        x0, unflat = ravel_pytree(init_angles); x0 = np.asarray(x0, dtype=np.float64); hist = []
+        def scipy_loss(x):
+            angles = unflat(jnp.asarray(x, dtype=jnp.float32))
+            l, g = vg(angles); gflat = np.asarray(ravel_pytree(g)[0], dtype=np.float64)
+            hist.append((float(l), resid_fn(angles)))
+            return float(l), gflat
+        t0 = _time.time(); res = minimize(scipy_loss, x0, jac=True, method='L-BFGS-B', options={'maxiter': max_iter}); dt = _time.time() - t0
+        final = unflat(jnp.asarray(res.x, dtype=jnp.float32))
+        self._chain_cache[i] = [{'angles': final[ti]} for ti in range(len(init_angles))]
+        out = {'batch': i, 'sagittas_um': sags, 'hist': hist, 'solve_time_s': dt, 'compile_s': compile_t,
+               'n_iter': int(res.nit), 'n_feval': int(res.nfev), 'unique_size': int(unique_size)}
+        out_path = out_path or f'fit_result/jitted_geom_lbfgs_b{i}.pkl'
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, 'wb') as f: _pickle.dump(out, f)
+        r0 = hist[0][1] if hist else [float('nan')]; r1 = hist[-1][1] if hist else [float('nan')]
+        logger.info(f"[JITTED-GEOM-LBFGS] batch {i}: {res.nit} iters ({res.nfev} feval) solve {dt:.1f}s (compile {compile_t:.1f}s) | "
+                    f"sagittas {['%.0f'%s for s in sags]} | resid {['%.0f'%x for x in r0]}->{['%.0f'%x for x in r1]} µm. Saved {out_path}")
+        return out
+
+    def profile_geom_compile(self, dataloader_sim, target, batch_idx=0):
+        """Localise the geometry-loss compile cost: time forward vs value_and_grad compile across
+        unique_size (Nvalues = fee_paths_scaling * Npix), and report the actual active-pixel count."""
+        import time as _time
+        self.precompute_static_pixels(dataloader_sim, target)
+        i = int(batch_idx)
+        selected = jax.device_put(dataloader_sim[i].reshape(-1, len(self.sim_track_fields)))
+        evts = self.get_batch_global_event_ids(dataloader_sim, i, selected)
+        this_tgt = jax.device_put(target[i].reshape(-1, len(self.tgt_track_fields)))
+        ref = self.get_simulated_target(this_tgt, i, evts, regen=False)
+        init_angles = [jnp.asarray(s['angles']) for s in self._get_or_init_chain_state(i)]
+        _roi = self._batch_padded_roi.get(i, (256, 256))
+        _wfs, _up = simulate_wfs(self.current_params, self.response, selected, self.sim_track_fields)
+        n_active = int((np.asarray(_up) >= 0).sum())
+        try: scaling = int(self.current_params.fee_paths_scaling)
+        except Exception: scaling = -1
+        logger.info(f"[COMPILE-PROFILE] batch {i}: n_active_pixels={n_active}, fixed_pixels={int(self._batch_fixed_pixels[i].shape[0])}, fee_paths_scaling={scaling}")
+        for usize in [128, 256, 512, 1024]:
+            if usize < n_active + 8:
+                continue
+            loss_fn = self.compute_loss(selected, i, *ref, log_dedx=None, parent_ids=None,
+                                        chain_angles_per_track=init_angles, return_loss_closure=True,
+                                        unique_size=usize, roi_override=_roi)
+            jf = jax.jit(loss_fn)
+            t0 = _time.time(); jax.block_until_ready(jf(init_angles)); tf = _time.time() - t0
+            vg = jax.jit(jax.value_and_grad(loss_fn))
+            t0 = _time.time(); jax.block_until_ready(vg(init_angles)); tvg = _time.time() - t0
+            logger.info(f"[COMPILE-PROFILE] unique_size={usize} (Nvalues={scaling*usize}): forward {tf:.1f}s | value_and_grad {tvg:.1f}s | backward +{tvg-tf:.1f}s")
+        return None
+
+    _GEOM_TARGET_KEYS = ('adcs', 'pixel_x', 'pixel_y', 'pixel_z', 'ticks',
+                         'hit_prob', 'event', 'pixel_id')
+    _CHAIN_META_STATIC = ('T', 'max_nc', 'ncs_np')
+
+    def _geom_usize(self, i, tracks):
+        """Static unique-pixel size for batch i: the MEASURED unique count rounded up to a
+        128 multiple (the old 2x-fixed_pixels heuristic oversized Nvalues and caused OOM)."""
+        if self._geom_lbfgs_unique_size > 0:
+            return int(self._geom_lbfgs_unique_size)
+        if not hasattr(self, '_geom_usize_cache'):
+            self._geom_usize_cache = {}
+        if i not in self._geom_usize_cache:
+            from larndsim.sim_jax import simulate_wfs as _sim_wfs
+            _, up = _sim_wfs(self.ref_params, self.sim_strategy.response, tracks, self.sim_track_fields)
+            self._geom_usize_cache[i] = int(((int(up.shape[0]) + 127) // 128) * 128)
+        return self._geom_usize_cache[i]
+
+    def _geom_padded_target(self, ref):
+        """Pad the 8 target-ref arrays to a 128-multiple bucket so batches with similar hit
+        counts share a jit signature. Pad rows carry pixel_id = -1 and are masked out by the
+        LLHD loss (is_relevant_target_hit / pixel_match_valid)."""
+        n = int(ref[0].shape[0])
+        L = int(((n + 127) // 128) * 128)
+        out = {}
+        for k, arr in zip(self._GEOM_TARGET_KEYS, ref):
+            fill = -1 if k == 'pixel_id' else 0
+            a = np.asarray(arr)
+            if L > n:
+                a = np.pad(a, [(0, L - n)] + [(0, 0)] * (a.ndim - 1),
+                           mode='constant', constant_values=fill)
+            out[k] = jax.device_put(a)
+        return out, L
+
+    def _solve_geom_block(self, i, tracks, ref, init_angles, max_iter):
+        """Jitted L-BFGS geometry solve for batch i (dEdx fixed; calibration is a traced arg so
+        the jitted grad uses the CURRENT norm_params). Returns the solved per-track angle list.
+
+        Data-as-args: tracks, the (padded) target arrays and the chain-meta arrays are TRACED
+        arguments, so the jitted value_and_grad is cached by shape SIGNATURE, not by batch —
+        every batch with the same (usize, roi, shapes, chain structure) shares one compiled
+        program instead of paying a fresh ~170 s XLA compile per batch."""
+        from jax.flatten_util import ravel_pytree
+        usize = self._geom_usize(i, tracks)
+        _roi = self._batch_padded_roi.get(i, (256, 256))
+
+        # Chain meta: static structure (ints / python-side arrays) + traced data arrays
+        if i not in self._batch_chain_meta:
+            self._batch_chain_meta[i] = _build_chain_meta(self._batch_chain_contexts.get(i, []))
+        meta = self._batch_chain_meta[i]
+        meta_static = {k: meta[k] for k in self._CHAIN_META_STATIC}
+        meta_arrays = {k: v for k, v in meta.items() if k not in self._CHAIN_META_STATIC}
+
+        tgt, tgt_len = self._geom_padded_target(ref)
+        ncs = tuple(int(x) for x in meta['ncs_np'])
+        sig = (usize, tuple(_roi), tuple(tracks.shape), tgt_len, ncs,
+               int(meta_arrays['seg_rows'].shape[0]))
+
+        vg = self._geom_vg_cache.get(sig)
+        if vg is None:
+            loss_fn = self.compute_loss(tracks, i, *ref, log_dedx=None, parent_ids=None,
+                                        chain_angles_per_track=init_angles, return_loss_closure=True,
+                                        unique_size=usize, roi_override=_roi)
+
+            def _raw(angles, normp, tracks_in, tgt_in, meta_arr_in):
+                meta_full = dict(meta_static)
+                meta_full.update(meta_arr_in)
+                return loss_fn(angles, normp,
+                               data_over={'tracks': tracks_in, 'target': tgt_in, 'meta': meta_full})
+
+            vg = jax.jit(jax.value_and_grad(_raw, argnums=0))
+            self._geom_vg_cache[sig] = vg
+            logger.info(f"[GEOM-LBFGS] new jit signature {sig} (total {len(self._geom_vg_cache)})")
+            if len(self._geom_vg_cache) == 1:
+                # One-time numerical identity check: eager baked-closure loss vs the jitted
+                # data-as-args path must agree (padding rows are masked by the loss).
+                l_ref = float(loss_fn(init_angles, self.norm_params))
+                l_jit = float(vg(init_angles, self.norm_params, tracks, tgt, meta_arrays)[0])
+                logger.info(f"[GEOM-LBFGS] identity check: eager {l_ref:.6f} vs data-as-args "
+                            f"{l_jit:.6f} (rel {abs(l_jit-l_ref)/max(abs(l_ref),1e-9):.2e})")
+
+        x0, unflat = ravel_pytree(init_angles); x0 = np.asarray(x0, dtype=np.float64)
+        def sl(x):
+            a = unflat(jnp.asarray(x, dtype=jnp.float32))
+            l, g = vg(a, self.norm_params, tracks, tgt, meta_arrays)
+            return float(l), np.asarray(ravel_pytree(g)[0], dtype=np.float64)
+        res = minimize(sl, x0, jac=True, method='L-BFGS-B', options={'maxiter': max_iter})
+        final = unflat(jnp.asarray(res.x, dtype=jnp.float32))
+        return [final[ti] for ti in range(len(init_angles))]
+
+    def test_chain_geometry_lbfgs(self, dataloader_sim, target, batch_idx=0, max_iter=60, out_path=None):
+        """Standalone validation of the jitted-loss + scipy-L-BFGS-B chain geometry solver on one batch.
+        Records residual convergence + wall time (compare vs the eager L-BFGS benchmark)."""
+        import time as _time, pickle as _pickle
+        self.precompute_static_pixels(dataloader_sim, target)
+        i = int(batch_idx)
+        tracks = jax.device_put(dataloader_sim[i].reshape(-1, len(self.sim_track_fields)))
+        gp = self.current_params
+        ctxs = self._batch_chain_contexts[i]; true_pos = self._batch_true_positions.get(i, {})
+        _ok = [ti for ti, ctx in enumerate(ctxs) if ctx.track_id in true_pos]
+        def _sag(ctx):
+            tr = np.asarray(true_pos[ctx.track_id]); ch = (tr[-1]-tr[0])/(np.linalg.norm(tr[-1]-tr[0])+1e-9)
+            t = tr - tr[0]; return float((np.linalg.norm(t-np.outer(t@ch, ch), axis=1)).max()*1e4)
+        sags = [_sag(ctxs[ti]) for ti in _ok]
+        def resid_fn(angles):
+            out = []
+            for ti in _ok:
+                ctx = ctxs[ti]; nc = ctx.n_chain; a = np.asarray(angles[ti]); th = a[:nc]; ph = a[nc:]
+                u = np.stack([np.sin(th)*np.cos(ph), np.sin(th)*np.sin(ph), np.cos(th)], 1); u /= (np.linalg.norm(u, axis=1, keepdims=True)+1e-12)
+                x0 = np.asarray(ctx.x0_fixed); nodes = np.concatenate([x0[None], x0[None] + ctx.step_len*np.cumsum(u, 0)], 0)
+                al = np.asarray(ctx.alpha_mid); k = np.clip(np.floor(al*nc).astype(int), 0, nc-1); fr = al*nc - k
+                fit = nodes[k] + fr[:, None]*(nodes[k+1]-nodes[k]); tr = np.asarray(true_pos[ctx.track_id]); m = min(len(fit), len(tr))
+                out.append(float(np.mean(np.linalg.norm(fit[:m]-tr[:m], axis=1))*1e4))
+            return out
+        t0 = _time.time()
+        res, hist = self.solve_chain_geometry_lbfgs(i, tracks, gp, max_iter=max_iter, resid_fn=resid_fn)
+        dt = _time.time() - t0
+        out = {'batch': i, 'sagittas_um': sags, 'hist': hist, 'time_s': dt,
+               'n_iter': int(res.nit), 'n_feval': int(res.nfev), 'success': bool(res.success)}
+        out_path = out_path or f'fit_result/chain_geom_lbfgs_b{i}.pkl'
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, 'wb') as f: _pickle.dump(out, f)
+        r0 = hist[0][1] if hist else [float('nan')]; r1 = hist[-1][1] if hist else [float('nan')]
+        logger.info(f"[CHAIN-LBFGS-TEST] batch {i}: {res.nit} iters ({res.nfev} feval) in {dt:.1f}s | "
+                    f"sagittas {['%.0f'%s for s in sags]} | resid {['%.0f'%x for x in r0]}->{['%.0f'%x for x in r1]} µm. Saved {out_path}")
+        return out
+
+    def benchmark_chain_optimizers(self, dataloader_sim, target, batch_idx=0, n_steps=400, adam_lr=None, out_path=None):
+        """Benchmark chain-angle optimizers (Adam vs L-BFGS) on ONE batch, deterministically.
+
+        Position-only: calibration and dEdx are held fixed; only the chain angles move.
+        Records per-step loss, geometry residual (µm, vs true positions), and wall time for
+        both optimizers. Use sim_seed_strategy='same' so the loss is deterministic (required
+        for L-BFGS line search). Implements method #4 (second-order optimizer) for comparison.
+        """
+        import optax
+        import time as _time
+        import pickle as _pickle
+        self.precompute_static_pixels(dataloader_sim, target)
+        i = int(batch_idx)
+        tracks_np = dataloader_sim[i].reshape(-1, len(self.sim_track_fields))
+        selected_tracks_sim = jax.device_put(tracks_np)
+        evts_sim = self.get_batch_global_event_ids(dataloader_sim, i, selected_tracks_sim)
+        this_target = jax.device_put(target[i].reshape(-1, len(self.tgt_track_fields)))
+        (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks,
+         ref_hit_prob, ref_event, ref_pixel_id) = self.get_simulated_target(this_target, i, evts_sim, regen=False)
+        ctxs = self._batch_chain_contexts[i]
+        true_pos = self._batch_true_positions.get(i, {})
+        init_angles = [jnp.asarray(s['angles']) for s in self._get_or_init_chain_state(i)]
+
+        # Pure differentiable loss(chain_angles)->scalar for this batch (calib + dEdx fixed).
+        loss_fn = self.compute_loss(
+            selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks,
+            ref_hit_prob, ref_event, ref_pixel_id, log_dedx=None, parent_ids=None,
+            chain_angles_per_track=init_angles, return_loss_closure=True)
+        # Eager (like the normal fit path): the inner sim functions are already @jit'd, but
+        # the outer loss must NOT be jitted whole (the sim's jnp.unique needs a dynamic size).
+        loss_j = loss_fn
+        vg_j = jax.value_and_grad(loss_fn)
+
+        def geom_resid(angles):
+            ds = []
+            for ti, ctx in enumerate(ctxs):
+                nc = ctx.n_chain
+                a = np.asarray(angles[ti]); th = a[:nc]; ph = a[nc:]
+                u = np.stack([np.sin(th)*np.cos(ph), np.sin(th)*np.sin(ph), np.cos(th)], 1)
+                u /= (np.linalg.norm(u, axis=1, keepdims=True) + 1e-12)
+                x0 = np.asarray(ctx.x0_fixed)
+                nodes = np.concatenate([x0[None], x0[None] + ctx.step_len*np.cumsum(u, 0)], 0)
+                al = np.asarray(ctx.alpha_mid); k = np.clip(np.floor(al*nc).astype(int), 0, nc-1); fr = al*nc - k
+                fit = nodes[k] + fr[:, None]*(nodes[k+1]-nodes[k])
+                if ctx.track_id not in true_pos: continue
+                tr = np.asarray(true_pos[ctx.track_id]); m = min(len(fit), len(tr))
+                ds.append(np.mean(np.linalg.norm(fit[:m]-tr[:m], axis=1)))
+            return float(np.mean(ds))*1e4 if ds else float('nan')
+
+        # per-track residual + sagitta (to show curved-track convergence specifically)
+        _ok = [ti for ti, ctx in enumerate(ctxs) if ctx.track_id in true_pos]
+        def _sag(ctx):
+            tr = np.asarray(true_pos[ctx.track_id]); ch = (tr[-1]-tr[0])/(np.linalg.norm(tr[-1]-tr[0])+1e-9)
+            t = tr - tr[0]; return float((np.linalg.norm(t-np.outer(t@ch, ch), axis=1)).max()*1e4)
+        _sags = [_sag(ctxs[ti]) for ti in _ok]
+        def per_track_resid(angles):
+            out = []
+            for ti in _ok:
+                ctx = ctxs[ti]; nc = ctx.n_chain; a = np.asarray(angles[ti]); th = a[:nc]; ph = a[nc:]
+                u = np.stack([np.sin(th)*np.cos(ph), np.sin(th)*np.sin(ph), np.cos(th)], 1)
+                u /= (np.linalg.norm(u, axis=1, keepdims=True) + 1e-12)
+                x0 = np.asarray(ctx.x0_fixed); nodes = np.concatenate([x0[None], x0[None] + ctx.step_len*np.cumsum(u, 0)], 0)
+                al = np.asarray(ctx.alpha_mid); k = np.clip(np.floor(al*nc).astype(int), 0, nc-1); fr = al*nc - k
+                fit = nodes[k] + fr[:, None]*(nodes[k+1]-nodes[k]); tr = np.asarray(true_pos[ctx.track_id]); m = min(len(fit), len(tr))
+                out.append(float(np.mean(np.linalg.norm(fit[:m]-tr[:m], axis=1))*1e4))
+            return out
+
+        jax.block_until_ready(vg_j(init_angles))  # warm-up / compile
+        results = {'batch': i, 'per_track_sagitta_um': _sags}
+
+        # ---- Adam (current method) ----
+        lr = adam_lr if adam_lr is not None else self._chain_lr
+        adam = optax.adam(lr); params = init_angles; st = adam.init(params); hist = []; hist_pt = []
+        for step in range(n_steps):
+            t0 = _time.time()
+            loss, grad = vg_j(params)
+            upd, st = adam.update(grad, st, params)
+            params = optax.apply_updates(params, upd)
+            jax.block_until_ready(params)
+            hist.append((step, float(loss), geom_resid(params), _time.time()-t0)); hist_pt.append(per_track_resid(params))
+        results['adam'] = {'lr': float(lr), 'hist': hist, 'hist_pt': hist_pt}
+
+        # ---- L-BFGS (method #4), hand-rolled with an EAGER Armijo line search ----
+        # optax.lbfgs jit-traces the objective in its line search, which the sim's dynamic
+        # jnp.unique forbids; a plain eager L-BFGS avoids that entirely.
+        from jax.flatten_util import ravel_pytree
+        x, unflat = ravel_pytree(init_angles)
+        x = np.asarray(x, dtype=np.float64)
+        def _f(xn):
+            return float(loss_fn(unflat(jnp.asarray(xn, dtype=jnp.float32))))
+        def _fg(xn):
+            v, g = vg_j(unflat(jnp.asarray(xn, dtype=jnp.float32)))
+            return float(v), np.asarray(ravel_pytree(g)[0], dtype=np.float64)
+        m_hist = 10; s_list = []; y_list = []; rho_list = []
+        f_x, g_x = _fg(x); hist = []; hist_pt = []
+        for step in range(n_steps):
+            t0 = _time.time()
+            # two-loop recursion (use _j, not i: i is the batch index in this scope)
+            q = g_x.copy(); alpha = [0.0]*len(s_list)
+            for _j in range(len(s_list)-1, -1, -1):
+                alpha[_j] = rho_list[_j]*np.dot(s_list[_j], q); q = q - alpha[_j]*y_list[_j]
+            gamma = (np.dot(s_list[-1], y_list[-1])/np.dot(y_list[-1], y_list[-1])) if s_list else 1.0
+            r = gamma*q
+            for _j in range(len(s_list)):
+                beta = rho_list[_j]*np.dot(y_list[_j], r); r = r + s_list[_j]*(alpha[_j]-beta)
+            p = -r
+            gtp = float(np.dot(g_x, p))
+            if gtp >= 0:  # not a descent direction -> steepest descent fallback
+                p = -g_x; gtp = float(np.dot(g_x, p))
+            # Armijo backtracking
+            t = 1.0; c1 = 1e-4; x_new = x; f_new = f_x
+            for _ls in range(25):
+                x_new = x + t*p; f_new = _f(x_new)
+                if f_new <= f_x + c1*t*gtp: break
+                t *= 0.5
+            f_n, g_new = _fg(x_new)
+            s = x_new - x; yv = g_new - g_x; ys = float(np.dot(yv, s))
+            if ys > 1e-10:
+                s_list.append(s); y_list.append(yv); rho_list.append(1.0/ys)
+                if len(s_list) > m_hist:
+                    s_list.pop(0); y_list.pop(0); rho_list.pop(0)
+            x, f_x, g_x = x_new, f_n, g_new
+            _ang = unflat(jnp.asarray(x, dtype=jnp.float32))
+            hist.append((step, float(f_x), geom_resid(_ang), _time.time()-t0)); hist_pt.append(per_track_resid(_ang))
+        results['lbfgs'] = {'hist': hist, 'hist_pt': hist_pt}
+
+        results['track_sagitta'] = []
+        for ti, ctx in enumerate(ctxs):
+            if ctx.track_id in true_pos:
+                tr = np.asarray(true_pos[ctx.track_id]); chord = tr[-1]-tr[0]
+                ch = chord/(np.linalg.norm(chord)+1e-9); t = tr - tr[0]
+                results['track_sagitta'].append((ti, float(np.linalg.norm(t-np.outer(t@ch, ch), axis=1).max()*1e4), int(ctx.n_chain)))
+
+        out_path = out_path or f'fit_result/chain_opt_bench_b{i}.pkl'
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, 'wb') as f:
+            _pickle.dump(results, f)
+        a_t = sum(h[3] for h in results['adam']['hist']); l_t = sum(h[3] for h in results['lbfgs']['hist'])
+        logger.info(f"[BENCH] batch {i}: Adam resid {results['adam']['hist'][0][2]:.0f}->{results['adam']['hist'][-1][2]:.0f}µm in {a_t:.1f}s | "
+                    f"L-BFGS resid {results['lbfgs']['hist'][0][2]:.0f}->{results['lbfgs']['hist'][-1][2]:.0f}µm in {l_t:.1f}s. Saved {out_path}")
+        return results
+
+    def _lbfgs_minimize(self, loss_fn, init_pytree, max_steps=80, grad_tol=1e-4,
+                        plateau_tol=1e-6, plateau_k=8, resid_fn=None):
+        """Eager L-BFGS (two-loop recursion + Armijo backtracking) with early stopping.
+        Returns (final_pytree, per-step history, n_steps). No jit (sim uses dynamic jnp.unique)."""
+        import time as _time
+        from jax.flatten_util import ravel_pytree
+        vg = jax.value_and_grad(loss_fn)
+        x, unflat = ravel_pytree(init_pytree); x = np.asarray(x, dtype=np.float64)
+        def _f(xn):  return float(loss_fn(unflat(jnp.asarray(xn, dtype=jnp.float32))))
+        def _fg(xn):
+            v, g = vg(unflat(jnp.asarray(xn, dtype=jnp.float32)))
+            return float(v), np.asarray(ravel_pytree(g)[0], dtype=np.float64)
+        m = 10; s_list = []; y_list = []; rho_list = []; hist = []
+        f_x, g_x = _fg(x); f_prev = f_x; n_plat = 0
+        for step in range(max_steps):
+            t0 = _time.time()
+            if float(np.linalg.norm(g_x)) < grad_tol: break
+            q = g_x.copy(); alpha = [0.0]*len(s_list)
+            for i in range(len(s_list)-1, -1, -1):
+                alpha[i] = rho_list[i]*np.dot(s_list[i], q); q = q - alpha[i]*y_list[i]
+            gamma = (np.dot(s_list[-1], y_list[-1])/np.dot(y_list[-1], y_list[-1])) if s_list else 1.0
+            r = gamma*q
+            for i in range(len(s_list)):
+                beta = rho_list[i]*np.dot(y_list[i], r); r = r + s_list[i]*(alpha[i]-beta)
+            p = -r; gtp = float(np.dot(g_x, p))
+            if gtp >= 0: p = -g_x; gtp = float(np.dot(g_x, p))
+            t = 1.0; c1 = 1e-4; x_new = x; f_new = f_x
+            for _ls in range(25):
+                x_new = x + t*p; f_new = _f(x_new)
+                if f_new <= f_x + c1*t*gtp: break
+                t *= 0.5
+            f_n, g_new = _fg(x_new); s = x_new - x; yv = g_new - g_x; ys = float(np.dot(yv, s))
+            if ys > 1e-10:
+                s_list.append(s); y_list.append(yv); rho_list.append(1.0/ys)
+                if len(s_list) > m: s_list.pop(0); y_list.pop(0); rho_list.pop(0)
+            x, f_x, g_x = x_new, f_n, g_new
+            rr = resid_fn(unflat(jnp.asarray(x, dtype=jnp.float32))) if resid_fn else float('nan')
+            hist.append((step, float(f_x), rr, _time.time()-t0))
+            n_plat = n_plat + 1 if abs(f_prev - f_x) < plateau_tol*max(1.0, abs(f_prev)) else 0
+            f_prev = f_x
+            if n_plat >= plateau_k: break
+        return unflat(jnp.asarray(x, dtype=jnp.float32)), hist, len(hist)
+
+    def run_lbfgs_position_fit(self, dataloader_sim, target, max_steps=80, out_path=None):
+        """End-to-end position-only geometry fit with L-BFGS + early stopping (one pass over
+        batches, calibration fixed). Reports total time and geometry residual vs Adam."""
+        import time as _time, pickle as _pickle
+        self.precompute_static_pixels(dataloader_sim, target)
+        def batch_resid(i, angles_list):
+            ds = []
+            ctxs = self._batch_chain_contexts[i]; tp = self._batch_true_positions.get(i, {})
+            for ti, ctx in enumerate(ctxs):
+                nc = ctx.n_chain; a = np.asarray(angles_list[ti]); th = a[:nc]; ph = a[nc:]
+                u = np.stack([np.sin(th)*np.cos(ph), np.sin(th)*np.sin(ph), np.cos(th)], 1)
+                u /= (np.linalg.norm(u, axis=1, keepdims=True) + 1e-12)
+                x0 = np.asarray(ctx.x0_fixed); nodes = np.concatenate([x0[None], x0[None] + ctx.step_len*np.cumsum(u, 0)], 0)
+                al = np.asarray(ctx.alpha_mid); k = np.clip(np.floor(al*nc).astype(int), 0, nc-1); fr = al*nc - k
+                fit = nodes[k] + fr[:, None]*(nodes[k+1]-nodes[k])
+                if ctx.track_id not in tp: continue
+                tr = np.asarray(tp[ctx.track_id]); m = min(len(fit), len(tr))
+                ds.append((np.mean(np.linalg.norm(fit[:m]-tr[:m], axis=1)), (np.linalg.norm((tr[:m]-tr[0])-np.outer((tr[:m]-tr[0])@((tr[-1]-tr[0])/(np.linalg.norm(tr[-1]-tr[0])+1e-9)), (tr[-1]-tr[0])/(np.linalg.norm(tr[-1]-tr[0])+1e-9)), axis=1)).max()))
+            return ds
+        t0_all = _time.time(); per_batch = []; init_ds = []; final_ds = []
+        for i in range(len(dataloader_sim)):
+            if i not in self._batch_chain_contexts: continue
+            selected = jax.device_put(dataloader_sim[i].reshape(-1, len(self.sim_track_fields)))
+            evts = self.get_batch_global_event_ids(dataloader_sim, i, selected)
+            this_tgt = jax.device_put(target[i].reshape(-1, len(self.tgt_track_fields)))
+            ref = self.get_simulated_target(this_tgt, i, evts, regen=False)
+            init_angles = [jnp.asarray(s['angles']) for s in self._get_or_init_chain_state(i)]
+            loss_fn = self.compute_loss(selected, i, *ref, log_dedx=None, parent_ids=None,
+                                        chain_angles_per_track=init_angles, return_loss_closure=True)
+            final_angles, hist, nst = self._lbfgs_minimize(loss_fn, init_angles, max_steps=max_steps)
+            self._chain_cache[i] = [{'angles': final_angles[ti]} for ti in range(len(init_angles))]
+            fd = [(d[0]*1e4, d[1]*1e4) for d in batch_resid(i, final_angles)]
+            final_ds.extend(fd)
+            per_batch.append((i, nst, sum(h[3] for h in hist)))
+            logger.info(f"[LBFGS-FIT] batch {i}: {nst} steps, {sum(h[3] for h in hist):.1f}s")
+            # incremental save (robust to timeout)
+            _ip = out_path or 'fit_result/lbfgs_position_fit.pkl'
+            os.makedirs(os.path.dirname(_ip), exist_ok=True)
+            _R = np.array([d[0] for d in final_ds]); _S = np.array([d[1] for d in final_ds]); _c = _S > 500
+            with open(_ip, 'wb') as _pf:
+                _pickle.dump({'total_time': _time.time()-t0_all, 'per_batch': per_batch, 'partial': True,
+                              'median': float(np.median(_R)), 'curved': float(_R[_c].mean()) if _c.any() else 0.0,
+                              'straight': float(_R[~_c].mean()), 'n_tracks': int(len(_R))}, _pf)
+        total_t = _time.time() - t0_all
+        R = np.array([d[0] for d in final_ds]); S = np.array([d[1] for d in final_ds]); c = S > 500
+        out = {'total_time': total_t, 'per_batch': per_batch,
+               'median': float(np.median(R)), 'curved': float(R[c].mean()) if c.any() else 0.0,
+               'straight': float(R[~c].mean()), 'n_tracks': int(len(R))}
+        out_path = out_path or 'fit_result/lbfgs_position_fit.pkl'
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, 'wb') as f: _pickle.dump(out, f)
+        logger.info(f"[LBFGS-FIT] DONE {out['n_tracks']} tracks in {total_t:.0f}s | median={out['median']:.0f}µm "
+                    f"curved={out['curved']:.0f}µm straight={out['straight']:.0f}µm. Saved {out_path}")
+        return out
+
     def fit(self, dataloader_sim, target, epochs=300, iterations=None, save_freq=10, print_freq=1):
 
         self.prepare_fit()
@@ -2196,13 +2755,26 @@ class GradientDescentFitter(ParamFitter):
                     if _grads_dedx is not None and _log_dedx is not None and not _dedx_frozen:
                         self._process_dedx_grads(i, _grads_dedx, _log_dedx)
 
-                    # Apply per-track chain angle gradient immediately after every step.
+                    # Geometry block: per-track chain-angle update. Default = Adam (unchanged path);
+                    # 'lbfgs' = jitted L-BFGS geometry solve (calibration held at current, as a traced
+                    # arg) alternating with the calibration gradient step applied below.
                     if _chain_active and _grads_chain is not None:
-                        self._process_chain_grads(i, _grads_chain, total_iter)
+                        if self._geom_optimizer == 'lbfgs':
+                            _ref = (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id)
+                            _init = [s['angles'] for s in self._chain_cache[i]]
+                            _new = self._solve_geom_block(i, selected_tracks_sim, _ref, _init, self._geom_lbfgs_steps)
+                            self._chain_cache[i] = [{'angles': a} for a in _new]
+                        else:
+                            self._process_chain_grads(i, _grads_chain, total_iter)
                         if total_iter % self._pos_residual_freq == 0:
                             _pos_res = self._compute_pos_residual_batch(i)
                             if _pos_res is not None:
                                 self.training_history.setdefault('pos_residual_iter', []).append(_pos_res)
+                        # env-gated: snapshot this batch's chain angles for oscillation viz
+                        if os.environ.get('LARND_SNAPSHOT'):
+                            self.training_history.setdefault('chain_snapshots', []).append(
+                                (int(total_iter), int(i),
+                                 [np.asarray(_s['angles']).tolist() for _s in self._chain_cache[i]]))
 
                     # Accumulate gradients if sz_mini_bt > 1
                     if self.sz_mini_bt > 1:
@@ -2652,3 +3224,460 @@ class HessianCalculator(ParamFitter):
 
         if os.path.exists(self.target_dir):
             shutil.rmtree(self.target_dir, ignore_errors=True)
+
+
+class GaussNewtonCalibFitter(GradientDescentFitter):
+    """Full-batch damped Newton / Levenberg-Marquardt on the global calibration params.
+
+    Prototype to test whether a curvature-aware step beats Adam on the (small, ill-conditioned)
+    5-parameter calibration block. Intended for ground-truth tracks + calibration-only fitting
+    (no dEdx, no chain positions), so the only unknowns are the 5 global params.
+
+    Each iteration accumulates loss, gradient g and Hessian H over ALL batches at the current
+    normalized params, then takes a damped step  (H + lambda*diag(H)) dtheta = -g  with
+    Marquardt-style adaptive damping (backtracking on the full-batch loss). Because the Hessian
+    may be indefinite far from the optimum (non-smooth argsort/cummax/erf in the FEE), the
+    diagonal LM damping keeps the solve well-posed.
+    """
+
+    def __init__(self, gn_max_iter=40, gn_lambda0=1e-2, gn_lambda_up=4.0,
+                 gn_lambda_down=3.0, gn_tol=1e-7, gn_max_backtrack=8,
+                 gn_curvature='exact', gn_validate=False, gn_degeneracy=False,
+                 gn_warmup_iters=0, **kwargs):
+        super().__init__(**kwargs)
+        self.gn_max_iter = gn_max_iter
+        self.gn_lambda0 = gn_lambda0
+        self.gn_lambda_up = gn_lambda_up
+        self.gn_lambda_down = gn_lambda_down
+        self.gn_tol = gn_tol
+        self.gn_max_backtrack = gn_max_backtrack
+        # 'exact'  -> full Hessian via jacfwd(jacrev) over the norm_params pytree (2nd-order graph)
+        # 'ggn'    -> Fisher/Generalized-Gauss-Newton via first-order Jacobians of the
+        #             (log-intensity, expected-charge) output fields; PSD by construction.
+        self.gn_curvature = gn_curvature
+        self.gn_validate = gn_validate
+        self.gn_degeneracy = gn_degeneracy
+        self.gn_warmup_iters = int(gn_warmup_iters)
+        self._fisher_cache = {}
+
+    def _preload(self, dataloader_sim, target):
+        cache = []
+        for i in range(len(dataloader_sim)):
+            st = jax.device_put(dataloader_sim[i].reshape(-1, len(self.sim_track_fields)))
+            self.validate_track_batch_event_ids(st, self.sim_track_fields, f"sim batch {i}")
+            evts = self.get_batch_global_event_ids(dataloader_sim, i, st)
+            tt = jax.device_put(target[i].reshape(-1, len(self.tgt_track_fields)))
+            self.validate_track_batch_event_ids(tt, self.tgt_track_fields, f"target batch {i}")
+            ref = self.get_simulated_target(tt, i, evts, regen=False)
+            cache.append((i, st, ref))
+        return cache
+
+    def _full_batch_loss(self, cache):
+        tot = 0.0
+        for (i, st, ref) in cache:
+            lv, _, _, _, _, _, _ = self.compute_loss(
+                st, i, *ref, with_loss=True, with_grad=False)
+            tot += float(lv)
+        return tot
+
+    def _x5(self):
+        return jnp.array([float(getattr(self.norm_params, k)) for k in self.relevant_params_list],
+                         dtype=jnp.float32)
+
+    def _get_fisher_fn(self, i, tracks):
+        """Build (and cache) a jitted Fisher/GGN function for batch i.
+
+        The llhd loss is a marked Poisson point process:
+            NLL = sum_cells exp(z) - sum_obs z  (+ Gaussian charge marks)
+        with z = log-intensity field (prediction['hit_prob']). Its Fisher information is
+            F = sum_c exp(z_c) J_z[c] J_z[c]^T + sum_c exp(z_c)/sigma^2 J_q[c] J_q[c]^T
+        where J_z = d z/d theta, J_q = d qhat/d theta (qhat = adc2charge(adcs_distrib)).
+        Only FIRST-order Jacobians are needed (5 forward-mode passes on a 5-vector),
+        the result is PSD by construction, and the graph compiles like a gradient
+        rather than a Hessian.
+        """
+        rl = self.relevant_params_list
+        n = len(rl)
+        sigma = self.loss_strategy.sigma_charge / 1000.0
+        roi = self._roi_padded_cache.get((i, tracks.shape[0]))
+        if roi is None:
+            raise RuntimeError(f"ROI cache empty for batch {i}; run compute_loss once first")
+        # Use the running global-max ROI so all batches share the same static ROI sizes
+        # (mirrors compute_loss), minimising the number of distinct jit signatures.
+        if hasattr(self, '_roi_global_max'):
+            gs, gl = self._roi_global_max
+            roi = (max(roi[0], gs), max(roi[1], gl))
+
+        # Static-size unique (jittable): measure the true unique-pixel count eagerly once,
+        # then round up to a 128 multiple. Calibration params don't change the track
+        # geometry, so the count is stable across iterations.
+        from larndsim.sim_jax import simulate_wfs as _sim_wfs
+        _, _up = _sim_wfs(self.ref_params, self.sim_strategy.response, tracks, self.sim_track_fields)
+        usize = int(((int(_up.shape[0]) + 127) // 128) * 128)
+
+        # Data-as-args: `tracks` is a TRACED argument, so every batch with the same
+        # (usize, roi, tracks.shape) signature shares ONE compiled executable. dataio
+        # pads all batches to a global max shape, so this collapses the per-batch
+        # compile storm (32 x ~155s) to one compile per unique-pixel bucket (~2).
+        cache_key = (usize, roi, tuple(tracks.shape))
+        if cache_key in self._fisher_cache:
+            return self._fisher_cache[cache_key]
+
+        def to_phys(x5):
+            upd = {k: x5[j] for j, k in enumerate(rl)}
+            norm = self.norm_params.replace(**upd)
+            if self.normalization_scheme == "divide":
+                new_phys = {k: getattr(norm, k) * getattr(self.params_normalization, k) for k in rl}
+            else:
+                new_phys = {k: map_norm_to_phys(getattr(norm, k), k, scheme=self.normalization_scheme,
+                                                scale=self._norm_scale_for_scheme()) for k in rl}
+            return self.ref_params.replace(**new_phys)
+
+        def fields_fn(x5, tracks_in):
+            phys = to_phys(x5)
+            pred = self.sim_strategy.predict(phys, tracks_in, self.sim_track_fields, None,
+                                             unique_size=usize, roi_override=roi)
+            z = pred['hit_prob']
+            qhat = adc2charge(pred['adcs_distrib'], phys)
+            return z, qhat
+
+        def fisher(x5, tracks_in):
+            z, _ = fields_fn(x5, tracks_in)
+            Jz, Jq = jax.jacfwd(fields_fn, argnums=0)(x5, tracks_in)
+            w = jnp.exp(jax.lax.stop_gradient(z)).reshape(-1)
+            Jz2 = Jz.reshape(-1, n)
+            Jq2 = Jq.reshape(-1, n)
+            F = Jz2.T @ (w[:, None] * Jz2) + Jq2.T @ ((w / sigma**2)[:, None] * Jq2)
+            return F
+
+        fn = jax.jit(fisher)
+        self._fisher_cache[cache_key] = fn
+        return fn
+
+    def _full_batch_lgh(self, cache):
+        rl = self.relevant_params_list
+        n = len(rl)
+        tot = 0.0
+        g = np.zeros(n)
+        H = np.zeros((n, n))
+        use_ggn = (self.gn_curvature == 'ggn')
+        for (i, st, ref) in cache:
+            lv, grads, _, _, _, hess, _ = self.compute_loss(
+                st, i, *ref, with_loss=True, with_grad=True, with_hess=not use_ggn)
+            tot += float(lv)
+            g += np.array([float(getattr(grads, k)) for k in rl])
+            if use_ggn:
+                H += np.asarray(self._get_fisher_fn(i, st)(self._x5(), st))
+            else:
+                H += np.array([[float(getattr(getattr(hess, ka), kb)) for kb in rl] for ka in rl])
+        return tot, g, H
+
+    def _validate_fisher(self, cache):
+        """Compare exact Hessian vs Fisher/GGN (accumulated over ALL batches) at the current
+        params, with per-batch timings measured on batch 0."""
+        from time import time as _t
+        rl = self.relevant_params_list
+        n = len(rl)
+        H = np.zeros((n, n)); F = np.zeros((n, n)); g = np.zeros(n)
+        tH = tF_compile = tF = 0.0
+        tot_loss = 0.0
+        for bidx, (i, st, ref) in enumerate(cache):
+            t0 = _t()
+            lv, grads, _, _, _, hess, _ = self.compute_loss(
+                st, i, *ref, with_loss=True, with_grad=True, with_hess=True)
+            if bidx == 0:
+                tH = _t() - t0
+            tot_loss += float(lv)
+            H += np.array([[float(getattr(getattr(hess, ka), kb)) for kb in rl] for ka in rl])
+            g += np.array([float(getattr(grads, k)) for k in rl])
+
+            fn = self._get_fisher_fn(i, st)
+            t0 = _t()
+            Fb = np.asarray(fn(self._x5(), st))    # includes compile on first call
+            if bidx == 0:
+                tF_compile = _t() - t0
+                t0 = _t()
+                Fb = np.asarray(fn(self._x5(), st))  # cached execution
+                tF = _t() - t0
+            F += Fb
+        logger.info(f"[GN-VALIDATE] accumulated over {len(cache)} batches; full-batch loss {tot_loss:.2f}")
+
+        Hs = 0.5 * (H + H.T)
+        wH = np.linalg.eigvalsh(Hs)
+        wF = np.linalg.eigvalsh(F)
+        lam = 1e-2
+        dH = -np.linalg.solve(Hs + lam * np.diag(np.abs(np.diag(Hs))), g)
+        dF = -np.linalg.solve(F + lam * np.diag(np.abs(np.diag(F))), g)
+        cos = float(dH @ dF / (np.linalg.norm(dH) * np.linalg.norm(dF) + 1e-30))
+
+        logger.info(f"[GN-VALIDATE] params: {rl}")
+        logger.info(f"[GN-VALIDATE] exact-H time {tH:.1f}s | fisher compile+run {tF_compile:.1f}s, cached run {tF:.1f}s")
+        logger.info(f"[GN-VALIDATE] eig(H): {np.array2string(wH, precision=3)}")
+        logger.info(f"[GN-VALIDATE] eig(F): {np.array2string(wF, precision=3)}")
+        logger.info(f"[GN-VALIDATE] neg eig H: {int((wH<0).sum())}, neg eig F: {int((wF<0).sum())} (F must be 0)")
+        logger.info(f"[GN-VALIDATE] rel Frobenius |H-F|/|H|: {np.linalg.norm(Hs-F)/np.linalg.norm(Hs):.3f}")
+        logger.info(f"[GN-VALIDATE] LM-step cosine(H-step, F-step): {cos:.4f}")
+        logger.info(f"[GN-VALIDATE] H diag: {np.array2string(np.diag(Hs), precision=3)}")
+        logger.info(f"[GN-VALIDATE] F diag: {np.array2string(np.diag(F), precision=3)}")
+
+        # Parameter covariance from the local curvature: cov = H^-1 (norm space),
+        # converted to relative physical errors via d(phys)/d(norm) at the current point.
+        try:
+            cov = np.linalg.inv(Hs + 1e-9 * np.eye(len(rl)) * np.abs(np.diag(Hs)).max())
+            eps = 1e-4
+            x0 = np.array([float(getattr(self.norm_params, k)) for k in rl])
+            dphys = np.zeros(len(rl))
+            for j, k in enumerate(rl):
+                p0 = float(map_norm_to_phys(x0[j] - eps, k, scheme=self.normalization_scheme,
+                                            scale=self._norm_scale_for_scheme()))
+                p1 = float(map_norm_to_phys(x0[j] + eps, k, scheme=self.normalization_scheme,
+                                            scale=self._norm_scale_for_scheme()))
+                dphys[j] = (p1 - p0) / (2 * eps)
+            sig_norm = np.sqrt(np.maximum(np.diag(cov), 0.0))
+            phys_now = np.array([float(getattr(self.current_params, k)) for k in rl])
+            rel_sig = np.abs(sig_norm * dphys / np.where(phys_now != 0, phys_now, 1.0)) * 100
+            corr = cov / np.outer(np.sqrt(np.abs(np.diag(cov))) + 1e-30,
+                                  np.sqrt(np.abs(np.diag(cov))) + 1e-30)
+            logger.info(f"[GN-VALIDATE] H^-1 relative sigma [%]: "
+                        + "  ".join(f"{k}={rel_sig[j]:.2f}" for j, k in enumerate(rl)))
+            logger.info(f"[GN-VALIDATE] H^-1 correlation matrix:\n{np.array2string(corr, precision=2)}")
+        except np.linalg.LinAlgError:
+            logger.info("[GN-VALIDATE] H not invertible; no covariance")
+        return H, F, g
+
+    def _log_iter(self, loss, g):
+        rl = self.relevant_params_list
+        self.training_history['losses_iter'].append(float(loss))
+        for j, k in enumerate(rl):
+            val = float(getattr(self.current_params, k))
+            self.training_history[k].append(val)
+            self.training_history[k + '_iter'].append(val)
+            self.training_history[k + '_grad'].append(float(g[j]))
+            if len(self.training_history[k + '_target']) == 0:
+                self.training_history[k + '_target'].append(float(getattr(self.target_params, k)))
+
+    def degeneracy_study(self, cache):
+        """Direct evidence for/against the lifetime-long_diff degeneracy valley.
+
+        (A) loss along the straight (norm-space) path truth -> GN garden-path endpoint:
+            flat loss + huge param change = long shallow valley.
+        (C) 2D loss grid in (lifetime, long_diff) with other params at truth: a bent
+            trough demonstrates the curvature that makes Newton steps overshoot.
+        (D) exact Hessian at truth AND at the endpoint: rotation of the flat eigenvector
+            between the two points is a second, independent curvature measure.
+        Results are dumped to fit_result/<test_name>/degeneracy_<label>.npz.
+        """
+        rl = self.relevant_params_list
+        truth = {k: float(getattr(self.target_params, k)) for k in rl}
+        # GN garden-path endpoint (32-batch run, job 31145475), pulled slightly inside
+        # the sigmoid bounds so the norm-space mapping stays finite.
+        endpoint = {'Ab': 0.7644, 'eField': 0.5008, 'tran_diff': 5.21e-06,
+                    'long_diff': 1.05e-06, 'lifetime': 5950.0}
+        endpoint = {k: endpoint.get(k, truth[k]) for k in rl}
+
+        def to_norm(vals):
+            return {k: float(map_phys_to_norm(v, k, scheme=self.normalization_scheme,
+                                              scale=self._norm_scale_for_scheme()))
+                    for k, v in vals.items()}
+
+        def set_norm(nvals):
+            self.norm_params = self.norm_params.replace(
+                **{k: jnp.array(v, dtype=jnp.float32) for k, v in nvals.items()})
+            self.update_params()
+
+        def full_H():
+            n = len(rl)
+            H = np.zeros((n, n)); g = np.zeros(n)
+            for (i, st, ref) in cache:
+                _, grads, _, _, _, hess, _ = self.compute_loss(
+                    st, i, *ref, with_loss=True, with_grad=True, with_hess=True)
+                H += np.array([[float(getattr(getattr(hess, ka), kb)) for kb in rl] for ka in rl])
+                g += np.array([float(getattr(grads, k)) for k in rl])
+            return H, g
+
+        n_t, n_e = to_norm(truth), to_norm(endpoint)
+
+        # (A) line scan
+        ts = np.linspace(0.0, 1.0, 25)
+        line = np.zeros(len(ts))
+        for j, t in enumerate(ts):
+            set_norm({k: (1 - t) * n_t[k] + t * n_e[k] for k in rl})
+            line[j] = self._full_batch_loss(cache)
+            logger.info(f"[DEGEN] line t={t:.3f} loss={line[j]:.2f} "
+                        f"lifetime={float(getattr(self.current_params,'lifetime')):.0f} "
+                        f"long_diff={float(getattr(self.current_params,'long_diff')):.3e}")
+
+        # (D) Hessians at the two ends
+        set_norm(n_t); H_t, g_t = full_H()
+        set_norm(n_e); H_e, g_e = full_H()
+        for tag, Hx in [('truth', H_t), ('endpoint', H_e)]:
+            w, V = np.linalg.eigh(0.5 * (Hx + Hx.T))
+            comp = ", ".join(f"{rl[k]}:{V[:,0][k]:+.2f}" for k in np.argsort(-np.abs(V[:, 0])))
+            logger.info(f"[DEGEN] H@{tag}: eig={np.array2string(w, precision=3)} flat-vec: {comp}")
+
+        # (C) 2D grid (lifetime x long_diff), others at truth
+        lifs = np.linspace(600.0, 5800.0, 15)
+        lds = np.linspace(1.2e-6, 9.5e-6, 15)
+        grid = np.zeros((len(lifs), len(lds)))
+        for a, lt in enumerate(lifs):
+            for b, ld in enumerate(lds):
+                v = dict(truth); v['lifetime'] = float(lt); v['long_diff'] = float(ld)
+                set_norm(to_norm(v))
+                grid[a, b] = self._full_batch_loss(cache)
+            logger.info(f"[DEGEN] grid row {a+1}/{len(lifs)} (lifetime={lt:.0f}) done; "
+                        f"min={grid[a].min():.2f}")
+
+        out = f'fit_result/{self.test_name}/degeneracy_{self.out_label}.npz'
+        np.savez(out, ts=ts, line=line, lifs=lifs, lds=lds, grid=grid,
+                 H_truth=H_t, H_end=H_e, g_truth=g_t, g_end=g_e,
+                 truth=np.array([truth[k] for k in rl]),
+                 endpoint=np.array([endpoint[k] for k in rl]),
+                 params=np.array(rl, dtype=object))
+        logger.info(f"[DEGEN] saved {out}")
+
+    def fit(self, dataloader_sim, target, **kwargs):
+        self.prepare_fit()
+        logger.info("Gauss-Newton / Levenberg-Marquardt calibration fitter.")
+        logger.warning(f"Arguments {kwargs} are ignored in this mode.")
+        self.ref_params = self.current_params
+        rl = self.relevant_params_list
+
+        cache = self._preload(dataloader_sim, target)
+        lam = float(self.gn_lambda0)
+
+        if getattr(self, 'gn_degeneracy', False):
+            self.degeneracy_study(cache)
+            return
+
+        if self.gn_curvature == 'ggn' or self.gn_validate:
+            # Pre-scan all batches once (plain loss evals) so the ROI cache and its
+            # global max are FINAL before any Fisher fn is jitted — otherwise the
+            # growing global max would spawn extra jit signatures on iteration 1.
+            self._full_batch_loss(cache)
+
+        if self.gn_validate:
+            self._validate_fisher(cache)
+            return
+
+        if self.gn_warmup_iters > 0:
+            # Hybrid mode: alternate short Adam warmups with GN takeover attempts, so GN is
+            # used "as much as possible" — GN converges in O(10) full-batch iterations once
+            # past the initialization plateau, but stalls ON the plateau (measured: it takes
+            # near-loss-neutral steps toward the sigmoid bounds there). Adam crosses the
+            # plateau; GN finishes the job. The fallback loop self-discovers the earliest
+            # viable switch point.
+            max_cycles = 4
+            for cycle in range(max_cycles):
+                self._run_adam_warmup(cache, self.gn_warmup_iters)
+                status = self._run_gn_loop(cache)
+                logger.info(f"GN hybrid cycle {cycle}: gn status = {status} "
+                            f"(total warmup {self.gn_warmup_iters * (cycle + 1)} Adam iters)")
+                if status == 'converged':
+                    break
+        else:
+            self._run_gn_loop(cache)
+
+        with open(f'fit_result/{self.test_name}/history_iter{self.total_iter}_{self.out_label}.pkl', "wb") as fh:
+            pickle.dump(self.training_history, fh)
+        if os.path.exists(self.target_dir):
+            shutil.rmtree(self.target_dir, ignore_errors=True)
+
+    def _run_adam_warmup(self, cache, n_iters):
+        """Per-batch Adam warmup on the 5 calibration params (mirrors the production chain
+        fitter's optimizer: grad-clip + Adam with warmup-exponential-decay schedule)."""
+        import optax
+        rl = self.relevant_params_list
+        if not hasattr(self, '_warm_opt'):
+            sched = optax.warmup_exponential_decay_schedule(
+                init_value=0.0, peak_value=0.1,
+                warmup_steps=min(500, n_iters), transition_steps=1, decay_rate=0.999)
+            self._warm_opt = optax.chain(optax.clip_by_global_norm(100.0), optax.adam(sched))
+            self._warm_state = self._warm_opt.init(
+                extract_relevant_params(self.norm_params, rl))
+            self._warm_iter = 0
+        for _ in range(n_iters):
+            (i, st, ref) = cache[self._warm_iter % len(cache)]
+            lv, grads, _, _, _, _, _ = self.compute_loss(
+                st, i, *ref, with_loss=True, with_grad=True)
+            rg = extract_relevant_params(grads, rl)
+            if any(jnp.isnan(leaf).any() for leaf in jax.tree_util.tree_leaves(rg)):
+                logger.warning("Adam warmup: NaN gradients, skipping step")
+                self._warm_iter += 1
+                continue
+            upd, self._warm_state = self._warm_opt.update(rg, self._warm_state)
+            self.apply_updates('norm_params', upd)
+            self.update_params()
+            self._warm_iter += 1
+            if self._warm_iter % 100 == 0:
+                logger.info(f"[WARMUP] iter {self._warm_iter}: batch loss {float(lv):.2f}  "
+                            + "  ".join(f"{k}={float(getattr(self.current_params,k)):.4g}" for k in rl))
+
+    def _run_gn_loop(self, cache):
+        """Damped-Newton/LM loop. Returns 'converged' (|step| < tol), 'stalled' (no decrease
+        after backtracking), 'saturated' (a param ran to its sigmoid bound — the plateau
+        signature; hand back to Adam), or 'budget' (gn_max_iter exhausted)."""
+        rl = self.relevant_params_list
+        lam = float(self.gn_lambda0)
+        loss, g, H = self._full_batch_lgh(cache)
+        self._log_iter(loss, g)
+        logger.info(f"GN init: loss {loss:.6f}  |g| {np.linalg.norm(g):.3e}  curvature={self.gn_curvature}")
+
+        for it in range(self.gn_max_iter):
+            Hs = 0.5 * (H + H.T)
+            dscale = np.abs(np.diag(Hs))
+            # Floor the Marquardt scaling: directions with ~zero curvature (e.g. a param
+            # saturating its sigmoid bound) must still be damped, otherwise the solve
+            # shoots unbounded steps along the flat direction.
+            dfloor = 1e-6 * max(dscale.max(), 1.0)
+            dscale = np.maximum(dscale, dfloor)
+
+            accepted = False
+            step = np.zeros(len(rl))
+            for _bt in range(self.gn_max_backtrack):
+                A = Hs + lam * np.diag(dscale)
+                try:
+                    step = -np.linalg.solve(A, g)
+                except np.linalg.LinAlgError:
+                    lam *= self.gn_lambda_up
+                    continue
+                saved = self.norm_params
+                self.apply_updates('norm_params',
+                                   {k: jnp.array(step[j], dtype=jnp.float32) for j, k in enumerate(rl)})
+                self.update_params()
+                new_loss = self._full_batch_loss(cache)
+                if np.isfinite(new_loss) and new_loss < loss:
+                    accepted = True
+                    lam = max(lam / self.gn_lambda_down, 1e-12)
+                    break
+                # reject: revert and increase damping
+                self.norm_params = saved
+                self.update_params()
+                lam *= self.gn_lambda_up
+
+            if not accepted:
+                logger.info(f"GN iter {it}: no decrease after backtracking (lambda {lam:.2e}); stopping.")
+                return 'stalled'
+
+            loss, g, H = self._full_batch_lgh(cache)
+            self._log_iter(loss, g)
+            snorm = float(np.linalg.norm(step))
+            logger.info(f"GN iter {it}: loss {loss:.6f}  lambda {lam:.2e}  |step| {snorm:.3e}  "
+                        + "  ".join(f"{k}={float(getattr(self.current_params,k)):.4g}" for k in rl))
+
+            self.total_iter = getattr(self, 'total_iter', 0) + 1
+            with open(f'fit_result/{self.test_name}/history_iter{self.total_iter}_{self.out_label}.pkl', "wb") as fh:
+                pickle.dump(self.training_history, fh)
+
+            # Saturation guard: a calibration param driven into its sigmoid bound is the
+            # plateau-wandering signature (measured in the degeneracy study) — GN is taking
+            # near-loss-neutral steps along a flat direction, not converging. Hand back to Adam.
+            sat = max(abs(float(getattr(self.norm_params, k))) for k in rl)
+            if sat > 3.5:
+                logger.info(f"GN iter {it}: norm-space saturation {sat:.2f} > 3.5 (param at bound); "
+                            f"handing back to Adam.")
+                return 'saturated'
+
+            if snorm < self.gn_tol:
+                logger.info(f"GN converged at iter {it} (|step| {snorm:.2e} < {self.gn_tol:.1e}).")
+                return 'converged'
+        return 'budget'

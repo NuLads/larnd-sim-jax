@@ -74,12 +74,23 @@ class LUTProbabilisticSimulation(SimulationStrategy):
         self.padded_large_nb = None
         self._cached_Npix = None
 
-    def predict(self, params, tracks, fields, rngkey):
-        
-        wfs, unique_pixels = simulate_wfs(params, self.response, tracks, fields)
+    def predict(self, params, tracks, fields, rngkey, unique_size=None, roi_override=None):
+        # unique_size: static-size unique -> makes the whole predict jittable (for the L-BFGS
+        # geometry block). roi_override=(small, large): use these fixed ROI counts and SKIP the
+        # dynamic get_roi_counts/int() block (which is not jittable) — required under jit.
+        wfs, unique_pixels = simulate_wfs(params, self.response, tracks, fields, unique_size=unique_size)
 
         unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=True)
         wfs = pad_to_closest_multiple(wfs, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
+
+        if roi_override is not None:
+            padded_small_nb, padded_large_nb = int(roi_override[0]), int(roi_override[1])
+            adcs_distrib, pixel_x, pixel_y, ticks_prob, event = simulate_probabilistic(
+                params, wfs, unique_pixels, padded_small_nb=padded_small_nb, padded_large_nb=padded_large_nb)
+            _, _, pixel_plane, _ = id2pixel(params, unique_pixels)
+            return {'adcs_distrib': adcs_distrib, 'hit_prob': ticks_prob, 'pixel_x': pixel_x,
+                    'pixel_y': pixel_y, 'pixel_plane': pixel_plane, 'event': event,
+                    'unique_pixels': unique_pixels, 'hit_pixels': unique_pixels, 'wfs': wfs}
 
         padded_small_nb = getattr(self, 'padded_small_nb', None)
         padded_large_nb = getattr(self, 'padded_large_nb', None)
@@ -87,8 +98,14 @@ class LUTProbabilisticSimulation(SimulationStrategy):
 
         if padded_small_nb is None or padded_large_nb is None or cached_Npix != wfs.shape[0]:
             nb_small, nb_large = get_roi_counts(params, wfs)
-            padded_small_nb = int(((int(nb_small) + 127) // 128) * 128)
-            padded_large_nb = int(((int(nb_large) + 127) // 128) * 128)
+            new_small = int(((int(nb_small) + 127) // 128) * 128)
+            new_large = int(((int(nb_large) + 127) // 128) * 128)
+            # Never decrease below the running max so all batches converge to the
+            # same (padded_small_nb, padded_large_nb) pair per Npix level, keeping
+            # the total number of JIT signatures at most equal to the number of
+            # unique pixel-count levels and preventing per-epoch recompilation.
+            padded_small_nb = max(padded_small_nb or 0, new_small)
+            padded_large_nb = max(padded_large_nb or 0, new_large)
             self.padded_small_nb = padded_small_nb
             self.padded_large_nb = padded_large_nb
             self._cached_Npix = wfs.shape[0]
@@ -149,8 +166,10 @@ class LUTProbabilisticSamplingSimulation(SimulationStrategy):
 
         if padded_small_nb is None or padded_large_nb is None or cached_Npix != wfs.shape[0]:
             nb_small, nb_large = get_roi_counts(params, wfs)
-            padded_small_nb = int(((int(nb_small) + 127) // 128) * 128)
-            padded_large_nb = int(((int(nb_large) + 127) // 128) * 128)
+            new_small = int(((int(nb_small) + 127) // 128) * 128)
+            new_large = int(((int(nb_large) + 127) // 128) * 128)
+            padded_small_nb = max(padded_small_nb or 0, new_small)
+            padded_large_nb = max(padded_large_nb or 0, new_large)
             self.padded_small_nb = padded_small_nb
             self.padded_large_nb = padded_large_nb
             self._cached_Npix = wfs.shape[0]

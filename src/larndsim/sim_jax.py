@@ -756,9 +756,15 @@ def fee_sim_from_split(params, padded_small_nb, padded_large_nb, wfs, mask_small
 
     return charge_distrib, ticks_distrib
 
-def simulate_wfs(params, response_template, tracks, fields):
+def simulate_wfs(params, response_template, tracks, fields, unique_size=None):
     """
     Simulates the signal from the drifted electrons and returns waveforms and unique pixel identifiers.
+
+    unique_size: if None (default), the number of unique pixels is dynamic (padded to a 128-multiple)
+    — the original behaviour, used everywhere. If an int is given, jnp.unique uses a STATIC output size
+    (fill_value=-1), which makes the whole function jittable (exact pixel contents, fixed array size).
+    Downstream masking ignores the -1 fill, so the result is identical to the dynamic path whenever
+    unique_size >= (number of active pixels + 1).
     
     This function performs the complete drift simulation pipeline: simulating electron drift,
     accumulating signals on pixels, and generating the corresponding waveforms.
@@ -784,15 +790,19 @@ def simulate_wfs(params, response_template, tracks, fields):
     ################################################
 
     #Sorting the pixels and getting the unique ones
-    unique_pixels = jnp.unique(main_pixels.ravel())
-    unique_pixels = jnp.append(unique_pixels, -1)
-    
-    unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=False)
+    if unique_size is None:
+        unique_pixels = jnp.unique(main_pixels.ravel())
+        unique_pixels = jnp.append(unique_pixels, -1)
+        unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=False)
+    else:
+        # static output size -> jittable (contents exact, padded to unique_size with -1)
+        unique_pixels = jnp.unique(main_pixels.ravel(), size=int(unique_size), fill_value=-1)
     unique_pixels = jnp.sort(unique_pixels)
     pix_renumbering_neigh= jnp.searchsorted(unique_pixels, pIDs_neigh.ravel(), method='sort')
 
     mask = (pix_renumbering_neigh < unique_pixels.size) & (unique_pixels[pix_renumbering_neigh] == pIDs_neigh.ravel())
-    pix_renumbering_neigh = pix_renumbering_neigh.at[~mask].set(0) #ASSUMES THAT THERE IS ALWAYS A -1 PIXID
+    # jnp.where (not boolean-index .at[~mask].set) so the function is jittable; numerically identical.
+    pix_renumbering_neigh = jnp.where(mask, pix_renumbering_neigh, 0) #ASSUMES THAT THERE IS ALWAYS A -1 PIXID
     # mask_indices = jnp.nonzero(mask)[0]
     # padded_size = pad_size(mask_indices.shape[0], "pix_renumbering", 0.2)
     # mask_indices = jnp.pad(mask_indices, (0, padded_mask - mask_indices.shape[0]), mode='constant', constant_values=-1)

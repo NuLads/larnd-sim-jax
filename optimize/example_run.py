@@ -11,7 +11,7 @@ import json
 import cProfile
 import jax
 
-from .fit_params import GradientDescentFitter, LikelihoodProfiler, MinuitFitter, HessianCalculator
+from .fit_params import GradientDescentFitter, LikelihoodProfiler, MinuitFitter, HessianCalculator, GaussNewtonCalibFitter
 from .dataio import TgtTracksDataset, TracksDataset, DataLoader
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,10 @@ def main(config):
     if config.resume_from is not None and config.fit_type != "chain":
         raise ValueError("--resume_from is only supported for fit_type=chain")
 
-    if iterations is not None:
+    if iterations is not None and config.fit_type != "gn_calib":
+        # For per-batch optimizers, loading more batches than iterations is wasted.
+        # gn_calib is FULL-batch (every iteration consumes all batches), so the cap
+        # must not apply — otherwise iterations silently shrinks the dataset.
         if max_nbatch is None or iterations < max_nbatch or max_nbatch <= 0:
             max_nbatch = iterations
 
@@ -164,6 +167,35 @@ def main(config):
                                 mcs_prior_weight=config.mcs_prior_weight,
                                 chain_step_len=config.chain_step_len,
                                 chain_momentum_GeV=config.chain_momentum_GeV)
+    elif config.fit_type == "gn_calib":
+        param_fit = GaussNewtonCalibFitter(relevant_params=param_list,
+                                sim_track_fields=sim_track_fields, tgt_track_fields=tgt_track_fields,
+                                detector_props=config.detector_props, pixel_layouts=config.pixel_layouts,
+                                lr=config.lr, readout_noise_target=(not config.no_noise) and (not config.no_noise_target),
+                                readout_noise_guess=(not config.no_noise) and (not config.no_noise_guess),
+                                out_label=config.out_label, test_name=config.test_name,
+                                max_clip_norm_val=config.max_clip_norm_val, clip_from_range=config.clip_from_range,
+                                optimizer_fn=config.optimizer_fn,
+                                lr_scheduler=config.lr_scheduler, lr_kw=config.lr_kw,
+                                loss_fn=config.loss_fn, loss_fn_kw=config.loss_fn_kw, shift_no_fit=config.shift_no_fit,
+                                set_target_vals=config.set_target_vals, set_init_params=config.set_init_params, vary_init=config.vary_init,
+                                config = config, epoch_size=len(tracks_dataloader_sim), keep_in_memory=config.keep_in_memory,
+                                diffusion_in_current_sim=config.diffusion_in_current_sim,
+                                mc_diff=config.mc_diff,
+                                adc_norm=config.chamfer_adc_norm, match_z=config.chamfer_match_z,
+                                sim_seed_strategy=config.sim_seed_strategy, target_seed=config.seed, target_fixed_range = config.fixed_range, read_target=config.read_target,
+                                probabilistic_sim=config.probabilistic_sim,
+                                probabilistic_sampling_sim=config.probabilistic_sampling_sim,
+                                probabilistic_sampling_target=config.probabilistic_sampling_target,
+                                normalization_scheme=config.normalization_scheme,
+                                normalization_scale_sigmoid=config.normalization_scale_sigmoid,
+                                normalization_scale_exp_log=config.normalization_scale_exp_log,
+                                gn_max_iter=(config.iterations if config.iterations is not None else 40),
+                                gn_curvature=config.gn_curvature,
+                                gn_validate=config.gn_validate,
+                                gn_degeneracy=config.gn_degeneracy,
+                                gn_warmup_iters=config.gn_warmup_iters)
+
     elif config.fit_type == "scan":
         param_fit = LikelihoodProfiler(relevant_params=param_list,
                                 sim_track_fields=sim_track_fields, tgt_track_fields=tgt_track_fields,
@@ -252,6 +284,39 @@ def main(config):
             jax.profiler.start_trace(profile_dir)
             trace_started = True
         jax.profiler.save_device_memory_profile("memory.prof")
+
+    if getattr(config, 'benchmark_chain_opt', -1) is not None and config.benchmark_chain_opt >= 0:
+        _tgt = config.input_file_tgt if config.read_target else tracks_dataloader_target
+        param_fit.benchmark_chain_optimizers(tracks_dataloader_sim, _tgt,
+                                             batch_idx=config.benchmark_chain_opt,
+                                             n_steps=(iterations or 400))
+        return 0, 'chain-optimizer benchmark done'
+
+    if getattr(config, 'lbfgs_position_fit', False):
+        _tgt = config.input_file_tgt if config.read_target else tracks_dataloader_target
+        param_fit.run_lbfgs_position_fit(tracks_dataloader_sim, _tgt,
+                                         max_steps=(iterations or 80))
+        return 0, 'lbfgs position fit done'
+
+    if getattr(config, 'profile_geom_compile', -1) is not None and config.profile_geom_compile >= 0:
+        _tgt = config.input_file_tgt if config.read_target else tracks_dataloader_target
+        param_fit.profile_geom_compile(tracks_dataloader_sim, _tgt, batch_idx=config.profile_geom_compile)
+        return 0, 'compile profile done'
+
+    if getattr(config, 'test_jitted_geom', -1) is not None and config.test_jitted_geom >= 0:
+        _tgt = config.input_file_tgt if config.read_target else tracks_dataloader_target
+        param_fit.test_jitted_geom_lbfgs(tracks_dataloader_sim, _tgt, batch_idx=config.test_jitted_geom, max_iter=(iterations or 60))
+        return 0, 'jitted geom lbfgs done'
+
+    if getattr(config, 'validate_static_unique', -1) is not None and config.validate_static_unique >= 0:
+        param_fit.validate_static_unique(tracks_dataloader_sim, batch_idx=config.validate_static_unique)
+        return 0, 'static-unique validation done'
+
+    if getattr(config, 'test_chain_lbfgs', -1) is not None and config.test_chain_lbfgs >= 0:
+        _tgt = config.input_file_tgt if config.read_target else tracks_dataloader_target
+        param_fit.test_chain_geometry_lbfgs(tracks_dataloader_sim, _tgt,
+                                            batch_idx=config.test_chain_lbfgs, max_iter=(iterations or 60))
+        return 0, 'chain-geometry L-BFGS test done'
 
     if config.read_target:
         param_fit.fit(tracks_dataloader_sim, config.input_file_tgt, epochs=config.epochs, iterations=iterations, save_freq=config.save_freq)
@@ -366,7 +431,15 @@ if __name__ == '__main__':
     parser.add_argument('--non_deterministic', default=False, action="store_true", help='Make the computation slightly non-deterministic for faster computation')
     parser.add_argument('--debug_nans', default=False, action="store_true", help='Debug NaNs (much slower)')
     parser.add_argument('--cpu_only', default=False, action="store_true", help='Run on CPU only')
-    parser.add_argument('--fit_type', type=str, choices=['chain', 'scan', 'minuit','hess'], required=True)
+    parser.add_argument('--fit_type', type=str, choices=['chain', 'scan', 'minuit','hess','gn_calib'], required=True)
+    parser.add_argument('--gn_curvature', type=str, choices=['exact', 'ggn'], default='exact',
+                        help='Curvature model for gn_calib: exact Hessian (2nd-order) or Fisher/GGN (1st-order, PSD)')
+    parser.add_argument('--gn_validate', default=False, action='store_true',
+                        help='gn_calib: only compare exact Hessian vs Fisher/GGN on batch 0, then exit')
+    parser.add_argument('--gn_degeneracy', default=False, action='store_true',
+                        help='gn_calib: run the degeneracy-valley study (line scan, 2D grid, Hessian rotation), then exit')
+    parser.add_argument('--gn_warmup_iters', default=0, type=int,
+                        help='gn_calib hybrid mode: per-batch Adam warmup iterations before each GN takeover attempt; GN falls back to Adam when it stalls or saturates (0 = pure GN)')
     parser.add_argument('--minimizer_strategy', type=int, choices=[0, 1, 2], default=1, help='Minimizer strategy for Minuit')
     parser.add_argument('--minimizer_tol', type=float, default=1e-4, help='Minimizer tolerance for Minuit')
     parser.add_argument('--separate_fits', default=False, action="store_true", help='Separate fits for each batch')
@@ -464,6 +537,24 @@ if __name__ == '__main__':
                         help="Target chain segment length in cm (default: 2.0)")
     parser.add_argument("--chain_momentum_GeV", dest="chain_momentum_GeV", default=3.0, type=float,
                         help="Assumed muon momentum in GeV/c for Highland MCS formula (default: 3.0)")
+    parser.add_argument("--benchmark_chain_opt", dest="benchmark_chain_opt", default=-1, type=int,
+                        help="If >=0, benchmark chain optimizers (Adam vs L-BFGS) on this batch index instead of fitting.")
+    parser.add_argument("--lbfgs_position_fit", dest="lbfgs_position_fit", action="store_true",
+                        help="Run end-to-end position-only geometry fit with L-BFGS + early stopping instead of fitting.")
+    parser.add_argument("--geom_optimizer", dest="geom_optimizer", default="adam", type=str,
+                        help="Geometry-block optimiser: 'adam' (default, unchanged) or 'lbfgs' (jitted L-BFGS geometry solve).")
+    parser.add_argument("--geom_lbfgs_steps", dest="geom_lbfgs_steps", default=10, type=int,
+                        help="Max L-BFGS iterations per geometry solve (geom_optimizer=lbfgs).")
+    parser.add_argument("--geom_lbfgs_unique_size", dest="geom_lbfgs_unique_size", default=0, type=int,
+                        help="Static unique-pixel size for the jitted geometry loss (0 = auto from batch).")
+    parser.add_argument("--profile_geom_compile", dest="profile_geom_compile", default=-1, type=int,
+                        help="If >=0, profile geometry-loss compile time vs unique_size on this batch.")
+    parser.add_argument("--test_jitted_geom", dest="test_jitted_geom", default=-1, type=int,
+                        help="If >=0, run the jitted LLHD geometry L-BFGS on this batch index.")
+    parser.add_argument("--validate_static_unique", dest="validate_static_unique", default=-1, type=int,
+                        help="If >=0, validate static-size unique (numerical identity + jittable) on this batch.")
+    parser.add_argument("--test_chain_lbfgs", dest="test_chain_lbfgs", default=-1, type=int,
+                        help="If >=0, validate the jitted chain-geometry L-BFGS solver on this batch index.")
 
     try:
         args = parser.parse_args()
