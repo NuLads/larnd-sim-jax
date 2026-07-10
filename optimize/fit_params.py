@@ -3622,6 +3622,7 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         self._log_iter(loss, g)
         logger.info(f"GN init: loss {loss:.6f}  |g| {np.linalg.norm(g):.3e}  curvature={self.gn_curvature}")
 
+        last_snorm = np.inf
         for it in range(self.gn_max_iter):
             Hs = 0.5 * (H + H.T)
             dscale = np.abs(np.diag(Hs))
@@ -3655,12 +3656,21 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
                 lam *= self.gn_lambda_up
 
             if not accepted:
+                # At the float32 loss floor LM can no longer find a decrease even though the
+                # solve has converged (measured: last accepted |step| ~1e-5 at the stationary
+                # point vs ~1e-1 when genuinely stuck on the init plateau). Classify by the
+                # last accepted step size so the hybrid driver doesn't waste fallback cycles.
+                if last_snorm < 1e-2:
+                    logger.info(f"GN iter {it}: no decrease after backtracking with tiny last step "
+                                f"(|step| {last_snorm:.2e}) — converged at the numerical floor.")
+                    return 'converged'
                 logger.info(f"GN iter {it}: no decrease after backtracking (lambda {lam:.2e}); stopping.")
                 return 'stalled'
 
             loss, g, H = self._full_batch_lgh(cache)
             self._log_iter(loss, g)
             snorm = float(np.linalg.norm(step))
+            last_snorm = snorm
             logger.info(f"GN iter {it}: loss {loss:.6f}  lambda {lam:.2e}  |step| {snorm:.3e}  "
                         + "  ".join(f"{k}={float(getattr(self.current_params,k)):.4g}" for k in rl))
 
