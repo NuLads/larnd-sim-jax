@@ -1708,6 +1708,16 @@ class ParamFitter:
                     )(self.norm_params, log_dedx, None)
                     grads_chain_per_track = None
 
+            if with_hess:
+                # Hessian w.r.t. the GLOBAL norm params only, with the per-segment dEdx and
+                # chain angles held FIXED — the nuisance-frozen curvature needed for the GN
+                # calibration polish on a joint-fit checkpoint.
+                def _np_only(np_):
+                    return loss_wrapper_combined(
+                        np_, log_dedx if _dedx_active else None,
+                        chain_angles_per_track if _chain_angles_active else None)
+                hess, aux_hess = jax.jacfwd(jax.jacrev(_np_only, has_aux=True), has_aux=True)(self.norm_params)
+
         else:
             def loss_wrapper(norm_params_input):
                 # Map from unconstrained space to physical space internally
@@ -3243,7 +3253,7 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
     def __init__(self, gn_max_iter=40, gn_lambda0=1e-2, gn_lambda_up=4.0,
                  gn_lambda_down=3.0, gn_tol=1e-7, gn_max_backtrack=8,
                  gn_curvature='exact', gn_validate=False, gn_degeneracy=False,
-                 gn_warmup_iters=0, **kwargs):
+                 gn_warmup_iters=0, gn_resume_joint=None, **kwargs):
         super().__init__(**kwargs)
         self.gn_max_iter = gn_max_iter
         self.gn_lambda0 = gn_lambda0
@@ -3258,6 +3268,7 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         self.gn_validate = gn_validate
         self.gn_degeneracy = gn_degeneracy
         self.gn_warmup_iters = int(gn_warmup_iters)
+        self.gn_resume_joint = gn_resume_joint
         self._fisher_cache = {}
 
     def _preload(self, dataloader_sim, target):
@@ -3272,11 +3283,60 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
             cache.append((i, st, ref))
         return cache
 
+    def _load_joint_checkpoint(self, path, dataloader_sim, target):
+        """Restore a joint-fit (calibration + dEdx + chain positions) checkpoint and freeze
+        its nuisances: per-segment log-dEdx and per-track chain angles become FIXED inputs
+        to the loss, so GN polishes ONLY the 5 calibration params against the same
+        objective the joint fit optimized. Chain contexts are rebuilt deterministically
+        from the input data (the checkpoint stores them only partially)."""
+        with open(path, 'rb') as f:
+            h = pickle.load(f)
+        self.norm_params = restore_param_state(self.ref_params, h['norm_params_state'])
+        self.update_params()
+
+        if self.fit_chain_positions:
+            self.precompute_static_pixels(dataloader_sim, target)
+
+        dedx = h.get('dedx_cache') or {}
+        chain = h.get('chain_cache') or {}
+        pids = h.get('batch_parent_ids') or {}
+        self._joint_fixed = {}
+        for i in sorted(set(list(dedx.keys()) + list(chain.keys()))):
+            ld = jnp.asarray(dedx[i]['log_dedx']) if i in dedx else None
+            pi = jnp.asarray(np.asarray(pids[i]), dtype=jnp.int32) if i in pids else None
+            an = [jnp.asarray(s['angles']) for s in chain[i]] if i in chain else None
+            # cross-check restored angles against rebuilt chain contexts
+            if an is not None and i in self._batch_chain_contexts:
+                ncs = [int(c.n_chain) for c in self._batch_chain_contexts[i]]
+                got = [int(a.shape[0]) for a in an]
+                if [2 * n for n in ncs] != got:
+                    raise ValueError(f"batch {i}: checkpoint chain angles {got} do not match "
+                                     f"rebuilt contexts {[2*n for n in ncs]} — input data/config mismatch")
+            self._joint_fixed[i] = (ld, pi, an)
+        logger.info(f"[GN-JOINT] restored {path}: calibration params + dEdx for {len(dedx)} "
+                    f"batches + chain angles for {len(chain)} batches (all frozen)")
+        logger.info("[GN-JOINT] calibration at checkpoint: "
+                    + "  ".join(f"{k}={float(getattr(self.current_params,k)):.5g}" for k in self.relevant_params_list))
+
+    def _nuis(self, i):
+        """Frozen nuisances (log_dedx, parent_ids, chain angles) for batch i, if resuming
+        from a joint checkpoint; empty otherwise."""
+        if not hasattr(self, '_joint_fixed'):
+            return {}
+        ld, pi, an = self._joint_fixed.get(i, (None, None, None))
+        out = {}
+        if ld is not None and pi is not None:
+            out['log_dedx'] = ld
+            out['parent_ids'] = pi
+        if an is not None:
+            out['chain_angles_per_track'] = an
+        return out
+
     def _full_batch_loss(self, cache):
         tot = 0.0
         for (i, st, ref) in cache:
             lv, _, _, _, _, _, _ = self.compute_loss(
-                st, i, *ref, with_loss=True, with_grad=False)
+                st, i, *ref, with_loss=True, with_grad=False, **self._nuis(i))
             tot += float(lv)
         return tot
 
@@ -3363,7 +3423,8 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         use_ggn = (self.gn_curvature == 'ggn')
         for (i, st, ref) in cache:
             lv, grads, _, _, _, hess, _ = self.compute_loss(
-                st, i, *ref, with_loss=True, with_grad=True, with_hess=not use_ggn)
+                st, i, *ref, with_loss=True, with_grad=True, with_hess=not use_ggn,
+                **self._nuis(i))
             tot += float(lv)
             g += np.array([float(getattr(grads, k)) for k in rl])
             if use_ggn:
@@ -3542,6 +3603,13 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         self.ref_params = self.current_params
         rl = self.relevant_params_list
 
+        if self.gn_resume_joint:
+            if self.gn_curvature == 'ggn':
+                logger.warning("[GN-JOINT] Fisher/GGN curvature does not include the frozen "
+                               "nuisance terms; forcing exact Hessian for the joint polish.")
+                self.gn_curvature = 'exact'
+            self._load_joint_checkpoint(self.gn_resume_joint, dataloader_sim, target)
+
         cache = self._preload(dataloader_sim, target)
         lam = float(self.gn_lambda0)
 
@@ -3577,10 +3645,42 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         else:
             self._run_gn_loop(cache)
 
+        if self.gn_resume_joint:
+            self._report_covariance(cache)
+
         with open(f'fit_result/{self.test_name}/history_iter{self.total_iter}_{self.out_label}.pkl', "wb") as fh:
             pickle.dump(self.training_history, fh)
         if os.path.exists(self.target_dir):
             shutil.rmtree(self.target_dir, ignore_errors=True)
+
+    def _report_covariance(self, cache):
+        """H^-1 parameter errors at the current point (nuisances frozen if resuming)."""
+        rl = self.relevant_params_list
+        _, g, H = self._full_batch_lgh(cache)
+        Hs = 0.5 * (H + H.T)
+        w = np.linalg.eigvalsh(Hs)
+        try:
+            cov = np.linalg.inv(Hs + 1e-9 * np.abs(w).max() * np.eye(len(rl)))
+        except np.linalg.LinAlgError:
+            logger.info("[GN-COV] Hessian not invertible; no covariance")
+            return
+        eps = 1e-4
+        x0 = np.array([float(getattr(self.norm_params, k)) for k in rl])
+        rel = np.zeros(len(rl))
+        for j, k in enumerate(rl):
+            p0 = float(map_norm_to_phys(x0[j] - eps, k, scheme=self.normalization_scheme,
+                                        scale=self._norm_scale_for_scheme()))
+            p1 = float(map_norm_to_phys(x0[j] + eps, k, scheme=self.normalization_scheme,
+                                        scale=self._norm_scale_for_scheme()))
+            dphys = (p1 - p0) / (2 * eps)
+            phys = float(getattr(self.current_params, k))
+            sig = np.sqrt(max(cov[j, j], 0.0))
+            rel[j] = abs(sig * dphys / (phys if phys != 0 else 1.0)) * 100
+        logger.info(f"[GN-COV] eig(H): {np.array2string(w, precision=3)}")
+        logger.info("[GN-COV] conditional relative sigma [%] (nuisances frozen): "
+                    + "  ".join(f"{k}={rel[j]:.2f}" for j, k in enumerate(rl)))
+        self.training_history['gn_cov_rel_sigma_pct'] = {k: float(rel[j]) for j, k in enumerate(rl)}
+        self.training_history['gn_hessian_final'] = Hs.tolist()
 
     def _run_adam_warmup(self, cache, n_iters):
         """Per-batch Adam warmup on the 5 calibration params (mirrors the production chain

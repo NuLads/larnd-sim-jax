@@ -194,7 +194,29 @@ def main(config):
                                 gn_curvature=config.gn_curvature,
                                 gn_validate=config.gn_validate,
                                 gn_degeneracy=config.gn_degeneracy,
-                                gn_warmup_iters=config.gn_warmup_iters)
+                                gn_warmup_iters=config.gn_warmup_iters,
+                                gn_resume_joint=config.gn_resume_joint,
+                                fit_dedx=config.fit_dedx, dedx_prior_weight=config.dedx_prior_weight, dedx_lr=config.dedx_lr,
+                                dedx_start_iter=config.dedx_start_iter, dedx_freeze_iter=config.dedx_freeze_iter,
+                                dedx_student_loc=config.dedx_student_loc,
+                                dedx_soft_barrier_threshold=config.dedx_soft_barrier_threshold,
+                                dedx_soft_barrier_weight=config.dedx_soft_barrier_weight,
+                                dedx_use_split_t=config.dedx_use_split_t,
+                                dedx_student_nu_l=config.dedx_student_nu_l,
+                                dedx_student_nu_r=config.dedx_student_nu_r,
+                                dedx_student_scale_l=config.dedx_student_scale_l,
+                                dedx_student_scale_r=config.dedx_student_scale_r,
+                                dedx_mean_constraint_weight=config.dedx_mean_constraint_weight,
+                                dedx_mean_constraint_target=config.dedx_mean_constraint_target,
+                                fit_chain_positions=config.fit_chain_positions,
+                                chain_lr=config.chain_lr,
+                                chain_start_iter=config.chain_start_iter,
+                                chain_update_freq=config.chain_update_freq,
+                                chain_decay_rate=config.chain_decay_rate,
+                                chain_decay_start=config.chain_decay_start,
+                                mcs_prior_weight=config.mcs_prior_weight,
+                                chain_step_len=config.chain_step_len,
+                                chain_momentum_GeV=config.chain_momentum_GeV)
 
     elif config.fit_type == "scan":
         param_fit = LikelihoodProfiler(relevant_params=param_list,
@@ -440,6 +462,8 @@ if __name__ == '__main__':
                         help='gn_calib: run the degeneracy-valley study (line scan, 2D grid, Hessian rotation), then exit')
     parser.add_argument('--gn_warmup_iters', default=0, type=int,
                         help='gn_calib hybrid mode: per-batch Adam warmup iterations before each GN takeover attempt; GN falls back to Adam when it stalls or saturates (0 = pure GN)')
+    parser.add_argument('--gn_resume_joint', default=None, type=str,
+                        help='gn_calib: joint-fit checkpoint pkl; freeze its fitted dEdx + chain angles and GN-polish only the 5 calibration params (conditional covariance reported)')
     parser.add_argument('--minimizer_strategy', type=int, choices=[0, 1, 2], default=1, help='Minimizer strategy for Minuit')
     parser.add_argument('--minimizer_tol', type=float, default=1e-4, help='Minimizer tolerance for Minuit')
     parser.add_argument('--separate_fits', default=False, action="store_true", help='Separate fits for each batch')
