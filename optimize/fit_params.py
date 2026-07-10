@@ -3600,7 +3600,11 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         self.prepare_fit()
         logger.info("Gauss-Newton / Levenberg-Marquardt calibration fitter.")
         logger.warning(f"Arguments {kwargs} are ignored in this mode.")
-        self.ref_params = self.current_params
+        # NOTE: do NOT overwrite self.ref_params with current_params here. ref_params
+        # deliberately keeps the readout-noise fields intact (the marginalized FEE model
+        # requires sigma > 0 even under --no-noise, which only strips current/norm copies
+        # for the TARGET realization); clobbering it caused 1/sigma=1/0 at trace time.
+        # The 5 fitted params are fully overwritten through the norm mapping anyway.
         rl = self.relevant_params_list
 
         if self.gn_resume_joint:
