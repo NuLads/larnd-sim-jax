@@ -1520,6 +1520,8 @@ class ParamFitter:
 
             # Pre-resolve field indices for chain warping (used when fit_chain_positions=True)
             _chain_ctxs = self._batch_chain_contexts.get(i, []) if self.fit_chain_positions else []
+            _chain_meta = None   # must always be bound: loss_wrapper_combined reads it
+            _col_map = None      # unconditionally (dEdx-without-chain fits crashed otherwise)
             if self.fit_chain_positions and chain_angles_per_track is not None:
                 _x_idx  = self.sim_track_fields.index('x')
                 _y_idx  = self.sim_track_fields.index('y')
