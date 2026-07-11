@@ -154,6 +154,7 @@ def main(config):
                                 dedx_student_scale_r=config.dedx_student_scale_r,
                                 dedx_mean_constraint_weight=config.dedx_mean_constraint_weight,
                                 dedx_mean_constraint_target=config.dedx_mean_constraint_target,
+                                dedx_drift_profile_weight=config.dedx_drift_profile_weight,
                                 fit_track_positions=config.fit_track_positions,
                                 track_max_iter=config.track_max_iter,
                                 track_alignment_freq=config.track_alignment_freq,
@@ -208,6 +209,7 @@ def main(config):
                                 dedx_student_scale_r=config.dedx_student_scale_r,
                                 dedx_mean_constraint_weight=config.dedx_mean_constraint_weight,
                                 dedx_mean_constraint_target=config.dedx_mean_constraint_target,
+                                dedx_drift_profile_weight=config.dedx_drift_profile_weight,
                                 fit_chain_positions=config.fit_chain_positions,
                                 chain_lr=config.chain_lr,
                                 chain_start_iter=config.chain_start_iter,
@@ -462,6 +464,8 @@ if __name__ == '__main__':
                         help='gn_calib: run the degeneracy-valley study (line scan, 2D grid, Hessian rotation), then exit')
     parser.add_argument('--gn_warmup_iters', default=0, type=int,
                         help='gn_calib hybrid mode: per-batch Adam warmup iterations before each GN takeover attempt; GN falls back to Adam when it stalls or saturates (0 = pure GN)')
+    parser.add_argument('--dedx_drift_profile_weight', default=0.0, type=float,
+                        help='Weight of the drift-profile penalty on per-segment dEdx: penalizes the WLS trend of log(dEdx) vs |z| (the dEdx<->lifetime degenerate mode). 0 = off')
     parser.add_argument('--gn_resume_joint', default=None, type=str,
                         help='gn_calib: joint-fit checkpoint pkl; freeze its fitted dEdx + chain angles and GN-polish only the 5 calibration params (conditional covariance reported)')
     parser.add_argument('--minimizer_strategy', type=int, choices=[0, 1, 2], default=1, help='Minimizer strategy for Minuit')

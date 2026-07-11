@@ -523,6 +523,7 @@ class ParamFitter:
                  dedx_student_scale_r=None,
                  dedx_mean_constraint_weight=0.0,
                  dedx_mean_constraint_target=1.887,
+                 dedx_drift_profile_weight=0.0,
                  fit_track_positions=False,
                  track_max_iter=20,
                  track_alignment_freq=1,
@@ -634,6 +635,7 @@ class ParamFitter:
         self.dedx_soft_barrier_weight = float(dedx_soft_barrier_weight)
         self.dedx_mean_constraint_weight = float(dedx_mean_constraint_weight)
         self.dedx_mean_constraint_target = float(dedx_mean_constraint_target)
+        self.dedx_drift_profile_weight = float(dedx_drift_profile_weight)
         self.shuffle_seed = shuffle_seed
         self.sim_track_fields = sim_track_fields
         self.tgt_track_fields = tgt_track_fields
@@ -1639,7 +1641,27 @@ class ParamFitter:
 
                 dedx_mean_penalty = self.dedx_mean_constraint_weight * jnp.square(mean_dedx - scaled_mean_target)
 
-                total_loss = hit_loss + dedx_prior + dedx_barrier + dedx_mean_penalty
+                # Drift-profile penalty: per-segment dEdx must be UNCORRELATED with the drift
+                # coordinate. Landau fluctuations are drift-independent; only lifetime
+                # attenuation produces a drift-monotone (to leading order linear) profile, so
+                # a linear trend of log(dEdx) vs |z| is exactly the dEdx<->lifetime degenerate
+                # mode (measured: 400cm ceiling lifetime +18.5% with fitted dEdx vs -1.5% with
+                # true dEdx). Penalize the dimensionless dx-weighted WLS trend (slope * sigma_z)^2.
+                dedx_drift_penalty = jnp.float32(0.)
+                if self.dedx_drift_profile_weight > 0 and log_dedx_in is not None:
+                    _zc = jnp.abs(t[:, self.sim_track_fields.index('z')])
+                    _w = dx_weights * segment_valid
+                    _W = jnp.sum(_w) + 1e-9
+                    _y = jnp.log(jnp.maximum(dedx_sample, 1e-3))
+                    _zb = jnp.sum(_w * _zc) / _W
+                    _yb = jnp.sum(_w * _y) / _W
+                    _cov = jnp.sum(_w * (_zc - _zb) * (_y - _yb)) / _W
+                    _var = jnp.sum(_w * (_zc - _zb) ** 2) / _W + 1e-9
+                    # slope * sigma_z = fractional log-dEdx change across one sigma of drift
+                    _trend = _cov / jnp.sqrt(_var)
+                    dedx_drift_penalty = self.dedx_drift_profile_weight * jnp.square(_trend)
+
+                total_loss = hit_loss + dedx_prior + dedx_barrier + dedx_mean_penalty + dedx_drift_penalty
 
                 # Gaussian MCS prior on chain deflection angles (vectorized)
                 if chain_angles_pt is not None and _meta_use is not None:
@@ -1653,6 +1675,7 @@ class ParamFitter:
                 aux_out['dedx_prior'] = dedx_prior
                 aux_out['dedx_barrier'] = dedx_barrier
                 aux_out['dedx_mean_penalty'] = dedx_mean_penalty
+                aux_out['dedx_drift_penalty'] = dedx_drift_penalty
                 aux_out['mean_dedx'] = mean_dedx
                 aux_out['mcs_prior'] = _mcs_loss
                 return total_loss, aux_out

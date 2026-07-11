@@ -32,6 +32,7 @@ LR_SCHEDULER=warmup_exponential_decay_schedule
 
 # dEdx settings (identical across modes)
 DEDX_PRIOR_WEIGHT=0.5
+DEDX_DRIFT_PROFILE_WEIGHT=${SCIDPW:-0.0}
 DEDX_LR=1e-2
 DEDX_START_ITER=0
 DEDX_FREEZE_ITER=$((ITERATIONS+200))
@@ -119,6 +120,7 @@ python3 -m optimize.example_run \
     --dedx_soft_barrier_threshold 8.5 \
     --dedx_soft_barrier_weight 1.0 \
     --dedx_mean_constraint_weight 100000.0 \
+    --dedx_drift_profile_weight ${DEDX_DRIFT_PROFILE_WEIGHT} \
     ${CHAIN_FLAG} \
     --chain_lr ${CHAIN_LR} \
     --chain_start_iter ${CHAIN_START_ITER} \
