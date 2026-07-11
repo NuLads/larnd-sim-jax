@@ -3660,13 +3660,16 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
     def _report_covariance(self, cache):
         """H^-1 parameter errors at the current point (nuisances frozen if resuming)."""
         rl = self.relevant_params_list
-        _, g, H = self._full_batch_lgh(cache)
-        Hs = 0.5 * (H + H.T)
-        w = np.linalg.eigvalsh(Hs)
         try:
+            _, g, H = self._full_batch_lgh(cache)
+            Hs = 0.5 * (H + H.T)
+            if not np.all(np.isfinite(Hs)):
+                logger.info("[GN-COV] non-finite Hessian entries (saturated point?); no covariance")
+                return
+            w = np.linalg.eigvalsh(Hs)
             cov = np.linalg.inv(Hs + 1e-9 * np.abs(w).max() * np.eye(len(rl)))
-        except np.linalg.LinAlgError:
-            logger.info("[GN-COV] Hessian not invertible; no covariance")
+        except np.linalg.LinAlgError as e:
+            logger.info(f"[GN-COV] covariance failed ({e}); skipping")
             return
         eps = 1e-4
         x0 = np.array([float(getattr(self.norm_params, k)) for k in rl])
@@ -3722,6 +3725,7 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         signature; hand back to Adam), or 'budget' (gn_max_iter exhausted)."""
         rl = self.relevant_params_list
         lam = float(self.gn_lambda0)
+        entry_norm_params = self.norm_params   # for do-no-harm revert on saturation
         loss, g, H = self._full_batch_lgh(cache)
         self._log_iter(loss, g)
         logger.info(f"GN init: loss {loss:.6f}  |g| {np.linalg.norm(g):.3e}  curvature={self.gn_curvature}")
@@ -3787,8 +3791,15 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
             # near-loss-neutral steps along a flat direction, not converging. Hand back to Adam.
             sat = max(abs(float(getattr(self.norm_params, k))) for k in rl)
             if sat > 3.5:
+                # Do-no-harm: REVERT to the loop-entry params. Leaving the params pinned at a
+                # sigmoid bound shipped a +140% long_diff in the truth-free polish (seed 1) —
+                # the conditional minimum given imperfect nuisances can genuinely lie at/beyond
+                # the bounds, and in that case the entry point (Adam endpoint) is the safer
+                # estimate than the bound.
                 logger.info(f"GN iter {it}: norm-space saturation {sat:.2f} > 3.5 (param at bound); "
-                            f"handing back to Adam.")
+                            f"REVERTING to loop-entry params and handing back to Adam.")
+                self.norm_params = entry_norm_params
+                self.update_params()
                 return 'saturated'
 
             if snorm < self.gn_tol:
