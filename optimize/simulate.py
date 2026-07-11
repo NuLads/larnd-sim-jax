@@ -12,7 +12,12 @@ import traceback
 if '--gpu' not in sys.argv:
     os.environ['JAX_PLATFORMS'] = 'cpu'
 
-from larndsim.consts_jax import build_params_class, load_detector_properties, load_lut
+from larndsim.consts_jax import (
+    build_params_class,
+    load_detector_properties,
+    load_lut,
+    apply_diffusion_link,
+)
 from larndsim.sim_jax import simulate_stochastic, simulate_parametrized, simulate_probabilistic, simulate_wfs
 from larndsim.losses_jax import get_hits_space_coords
 from larndsim.detsim_jax import validate_event_ids_for_packing, validate_local_event_ids, id2pixel, get_hit_z
@@ -108,6 +113,14 @@ def main(config):
 
 
     ref_params = ref_params.replace(**{k: getattr(config, k) for k in params_to_apply}, time_window=config.signal_length)
+
+    if config.link_diffusion:
+        ref_params = apply_diffusion_link(ref_params, anchor='long_diff')
+        logger.info(
+            "Diffusion link enabled: long_diff=%s, tran_diff=%s",
+            float(ref_params.long_diff),
+            float(ref_params.tran_diff),
+        )
 
     if not config.noise:
         ref_params = ref_params.replace(RESET_NOISE_CHARGE=0, UNCORRELATED_NOISE_CHARGE=0)
@@ -265,6 +278,8 @@ if __name__ == '__main__':
     parser.add_argument('--chop', action='store_true', default=False, help='Enable segment chopping in data loading (default: disabled)')
     parser.add_argument('--probabilistic_sim', '--probabilistic-sim', default=False, action='store_true',
                         help='Use probabilistic sim: output full ADC/tick distribution per pixel (LUT mode only).')
+    parser.add_argument('--link_diffusion', action='store_true', default=False,
+                        help='Link long_diff and tran_diff using mobility/field transport relation (default: off).')
 
     try:
         args = parser.parse_args()

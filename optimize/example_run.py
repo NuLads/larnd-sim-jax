@@ -41,14 +41,19 @@ def main(config):
     else:
         jax.config.update("jax_debug_nans", False)
 
-    if config.non_deterministic:
-        os.environ['XLA_FLAGS'] = '--xla_gpu_deterministic_ops=false'
-    else:
-        os.environ['XLA_FLAGS'] = '--xla_gpu_deterministic_ops=true'
+    # Append rather than overwrite so XLA_FLAGS set in the environment
+    # (e.g. --xla_gpu_autotune_level=0 to skip the autotune step) survives.
+    _existing_xla = os.environ.get('XLA_FLAGS', '')
+    _det = '--xla_gpu_deterministic_ops=false' if config.non_deterministic else '--xla_gpu_deterministic_ops=true'
+    os.environ['XLA_FLAGS'] = f"{_existing_xla} {_det}".strip()
 
     logger.info(f"Jax devices: {jax.devices()}")
 
     logger.info(f"fit label: {config.out_label}")
+    logger.info(
+        "Diffusion link: enabled=%s",
+        bool(getattr(config, "link_diffusion", False)),
+    )
 
     if config.lut_file == "" and config.mode == 'lut':
         return 1, 'Error: LUT file is required for mode "lut"'
@@ -337,6 +342,8 @@ if __name__ == '__main__':
     parser.add_argument('--live_selection', default=False, action="store_true", help='Whether to run live selection or not')
     parser.add_argument('--read_target', default=False, action="store_true", help='read data(-like) target')
     parser.add_argument('--probabilistic_sim', '--probabilistic-sim', default=False, action="store_true", help='Use probabilistic sim')
+    parser.add_argument('--link_diffusion', default=False, action='store_true',
+                        help='Link long_diff and tran_diff using mobility/field transport relation (default: off).')
     parser.add_argument('--shuffle_bt', default=False, action="store_true", help='shuffle the batch order within an epoch')
     parser.add_argument('--sz_mini_bt', type=int, default=1, help='Number of mini-batch for one update')
     parser.add_argument('--normalization_scheme', type=str, default='sigmoid', choices=['sigmoid', 'exp_log', 'divide'],
@@ -360,8 +367,15 @@ if __name__ == '__main__':
         retval, status_message = main(args)
     except Exception as e:
         print(traceback.format_exc(), file=sys.stderr)
+        tb = traceback.format_exc()
+        if "DNN library initialization failed" in tb:
+            status_message = (
+                "Error: Fitting failed due to GPU DNN/CuDNN initialization. "
+                "Use --cpu_only or upgrade runtime CuDNN to match JAX build requirements."
+            )
+        else:
+            status_message = 'Error: Fitting failed.'
         retval = 1
-        status_message = 'Error: Fitting failed.'
 
     logger.info(status_message)
     exit(retval)

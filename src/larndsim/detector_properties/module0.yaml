@@ -17,7 +17,7 @@ Ab: 0.8
 kb: 0.0486 
 
 long_diff: 4.0e-6  # cm * cm / us
-tran_diff: 8.8e-6  # cm * cm / us
+tran_diff: 8.0e-6  # cm * cm / us
 
 DISCRIMINATION_THRESHOLD: 5000
 V_CM: 284.27734375
