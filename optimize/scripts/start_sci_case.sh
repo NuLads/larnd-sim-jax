@@ -37,11 +37,11 @@ DEDX_START_ITER=0
 DEDX_FREEZE_ITER=$((ITERATIONS+200))
 
 # Chain position settings (only used when SCIMODE=full)
-CHAIN_LR=1e-4
+CHAIN_LR=${SCICLR:-1e-4}
 CHAIN_START_ITER=0
 CHAIN_UPDATE_FREQ=1
 MCS_PRIOR_WEIGHT=0.5
-CHAIN_STEP_LEN=2.0
+CHAIN_STEP_LEN=${SCISTEP:-2.0}
 CHAIN_MOMENTUM_GEV=3.0
 
 INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/diffsim_input/true_through_muon_edep_10cm_vol1cm.h5
