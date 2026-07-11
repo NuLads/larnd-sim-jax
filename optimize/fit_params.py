@@ -3802,6 +3802,10 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
                             f"REVERTING to loop-entry params and handing back to Adam.")
                 self.norm_params = entry_norm_params
                 self.update_params()
+                # Log the reverted state so the history's LAST entry reflects the actual
+                # final params (otherwise analyses reading [-1] see the saturated values).
+                loss_r, g_r, _ = self._full_batch_lgh(cache)
+                self._log_iter(loss_r, g_r)
                 return 'saturated'
 
             if snorm < self.gn_tol:
