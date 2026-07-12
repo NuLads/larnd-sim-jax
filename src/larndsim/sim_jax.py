@@ -13,7 +13,7 @@ from larndsim.quenching_jax import quench
 from larndsim.drifting_jax import drift
 from larndsim.fee_jax import get_adc_values, digitize, get_adc_values_average_noise_vmap
 from optimize.dataio import chop_tracks
-from larndsim.consts_jax import get_vdrift
+from larndsim.consts_jax import get_vdrift, get_vdrift_placement
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -138,11 +138,39 @@ def simulate_drift(params, tracks, fields, rngkey):
 
     return electrons, pIDs
 
+
+def _stretch_response_template(response_template, r):
+    """Resample the response template along its time axis by the stretch factor r = v(E)/v_ref
+    (Keys/Catmull-Rom cubic, anchored at the template END = the arrival sample; exact identity at
+    r = 1), with amplitude x 1/r for charge conservation. Used by drift-coordinate mode: on the
+    u-grid the (time-domain) induced-current template appears stretched by r.
+    """
+    Nt = response_template.shape[-1]
+    j = jnp.arange(Nt).astype(jnp.float32)
+    pos = (Nt - 1) - (Nt - 1 - j) / r
+    fl = jnp.floor(pos)
+    fr = pos - fl
+    taps = jnp.clip(fl.astype(int)[:, None] + jnp.array([-1, 0, 1, 2])[None, :], 0, Nt - 1)
+    w = jnp.stack([-0.5 * fr ** 3 + fr ** 2 - 0.5 * fr,
+                   1.5 * fr ** 3 - 2.5 * fr ** 2 + 1.0,
+                   -1.5 * fr ** 3 + 2.0 * fr ** 2 + 0.5 * fr,
+                   0.5 * fr ** 3 - 0.5 * fr ** 2], axis=-1)
+    out = jnp.zeros_like(response_template)
+    for k in range(4):
+        out = out + jnp.take(response_template, taps[:, k], axis=-1) * w[:, k]
+    return out / r
+
+
 @jit
 def simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_template, 
                              nelectrons, long_diff, currents_idx, nelectrons_neigh, 
                              pix_renumbering_neigh, t0_neigh, currents_idx_neigh):
     
+    if params.drift_coordinate_mode:
+        # u = z grid: deposits are already indexed by drift distance (see get_vdrift_placement);
+        # the time-domain response template appears stretched by r = v(E)/v_ref on the u-grid.
+        response_template = _stretch_response_template(
+            response_template, get_vdrift(params) / params.u_grid_vdrift)
     Npixels = unique_pixels.shape[0]
     Nticks = int(params.time_interval[1] / params.t_sampling) + 1
     Ntemplates, Nx, Ny, Nt = response_template.shape
@@ -416,11 +444,11 @@ def simulate_drift_new(params, tracks, fields):
     nelectrons = (tran_diff_weights * n_electrons_base[:, None, None]).reshape(-1)
 
     z_cathode = jnp.take(params.tpc_borders, main_electrons[:, pixel_plane_idx].astype(int), axis=0)[..., 2, 1]
-    t0 = (jnp.abs(main_electrons[:, z_idx] - z_cathode)) / get_vdrift(params) #Getting t0 as the equivalent time to cathode
+    t0 = (jnp.abs(main_electrons[:, z_idx] - z_cathode)) / get_vdrift_placement(params) #Getting t0 as the equivalent time to cathode (u-grid units in drift-coordinate mode)
     t0_after_diff = jnp.broadcast_to(t0[:, None, None], shape_2d).reshape(-1) # More efficient than ones * t0
 
     #Need to convert long_diff into a tick number
-    long_diff = main_electrons[:, long_diff_idx] / get_vdrift(params) / params.t_sampling
+    long_diff = main_electrons[:, long_diff_idx] / get_vdrift_placement(params) / params.t_sampling
     long_diff = jnp.broadcast_to(long_diff[:, None, None], shape_2d).reshape(-1) # More efficient broadcasting
 
 

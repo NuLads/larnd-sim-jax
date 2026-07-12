@@ -401,6 +401,13 @@ class Params_template:
     nb_tran_diff_bins: int = struct.field(pytree_node=False, default=5)
     hit_prob_threshold: float = struct.field(pytree_node=False, default=1e-5)  # Threshold for hit probability
     tran_diff_bin_edges: jax.Array = struct.field(pytree_node=False, default=None) # Bin edges for transverse diffusion
+    # --- drift-coordinate (u = z grid) mode: samples the waveforms on a grid fixed in drift
+    # distance instead of time, so eField no longer sweeps the pulse against the sampling grid.
+    # Fixes the eField Hessian pathology of the differentiable surrogate (validated: |H/C_true|
+    # 7300x -> ~1 for charge, 33x -> ~1 for tick, with the nominal forward bit-identical).
+    # Opt-in and default-off: enable via enable_drift_coordinate_mode(params).
+    drift_coordinate_mode: bool = struct.field(pytree_node=False, default=False)
+    u_grid_vdrift: float = struct.field(pytree_node=False, default=0.0)  # fixed u-grid unit [cm/us]
 
 def build_params_class(params_with_grad):
     """
@@ -457,6 +464,38 @@ def get_vdrift(params):
     mu = num / denom * temp_corr / 1000 #* V / kV
 
     return mu*params.eField
+
+def get_vdrift_placement(params):
+    """Drift velocity used for PULSE PLACEMENT (time-axis position of deposits).
+
+    In drift-coordinate mode this is the FIXED u-grid unit (a constant, no parameter
+    dependence), so deposits are indexed by drift distance and eField cannot sweep the
+    pulse across the sampling grid. Physics uses of v_drift (lifetime, diffusion widths
+    in drifting_jax) are unaffected and keep the full eField dependence.
+    """
+    if params.drift_coordinate_mode:
+        return params.u_grid_vdrift
+    return get_vdrift(params)
+
+
+def get_tick_time_scale(params):
+    """Conversion divisor from the sim's tick outputs to TIME ticks.
+
+    In drift-coordinate mode the FEE tick outputs are u-ticks; the physical time tick is
+    tick_u / get_tick_time_scale(params) (an analytic, smooth function of eField). In the
+    default mode this is 1.
+    """
+    if params.drift_coordinate_mode:
+        return get_vdrift(params) / params.u_grid_vdrift
+    return 1.0
+
+
+def enable_drift_coordinate_mode(params):
+    """Return a copy of params with drift-coordinate mode enabled, with the u-grid unit
+    frozen at the CURRENT drift velocity (so at the current eField the u-grid and t-grid
+    coincide exactly and the forward simulation is unchanged)."""
+    return params.replace(drift_coordinate_mode=True, u_grid_vdrift=float(get_vdrift(params)))
+
     #return params.eField
 
 
