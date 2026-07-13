@@ -479,15 +479,29 @@ def get_vdrift_placement(params):
 
 
 def get_tick_time_scale(params):
-    """Conversion divisor from the sim's tick outputs to TIME ticks.
-
-    In drift-coordinate mode the FEE tick outputs are u-ticks; the physical time tick is
-    tick_u / get_tick_time_scale(params) (an analytic, smooth function of eField). In the
-    default mode this is 1.
-    """
+    """DEPRECATED for tick conversion — rescales the whole index including the grid-construction
+    offset and therefore inverts the trend; use u_ticks_to_time_ticks instead. Kept for the smooth
+    r factor it exposes."""
     if params.drift_coordinate_mode:
         return get_vdrift(params) / params.u_grid_vdrift
     return 1.0
+
+
+def u_ticks_to_time_ticks(params, ticks, template_nt):
+    """Convert drift-coordinate-mode FEE tick outputs to the t-grid tick convention.
+
+    The waveform index convention is tick = (Nt - 1) - drift_ticks (template-end anchored, with
+    Nt the response-template length), so only the DRIFT part of the index scales with
+    r = v(E)/v_ref: tick_t = (Nt - 1) - ((Nt - 1) - tick_u) / r. With the real-time (fractional)
+    FEE windows, the in-pulse crossing lag and the window arithmetic map exactly under this
+    transformation, so the converted ticks match the default-mode ticks. Identity when the mode
+    is off.
+    """
+    if params.drift_coordinate_mode:
+        r = get_vdrift(params) / params.u_grid_vdrift
+        c0 = template_nt - 1.0
+        return c0 - (c0 - ticks) / r
+    return ticks
 
 
 def enable_drift_coordinate_mode(params):

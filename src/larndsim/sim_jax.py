@@ -140,25 +140,32 @@ def simulate_drift(params, tracks, fields, rngkey):
 
 
 def _stretch_response_template(response_template, r):
-    """Resample the response template along its time axis by the stretch factor r = v(E)/v_ref
-    (Keys/Catmull-Rom cubic, anchored at the template END = the arrival sample; exact identity at
-    r = 1), with amplitude x 1/r for charge conservation. Used by drift-coordinate mode: on the
-    u-grid the (time-domain) induced-current template appears stretched by r.
+    """CONSERVATIVE (integral) resample of the response template onto the u-grid, stretch factor
+    r = v(E)/v_ref, anchored at the template end (the arrival sample; exact identity at r = 1).
+
+    Instead of point-sampling the current (which carries an r-dependent quadrature error on the
+    sharply peaked induction pulse), the CUMULATIVE template is Keys-interpolated at the stretched
+    bin EDGES and differenced: the charge deposited in every u-bin is then exact by telescoping —
+    for bipolar induction rows too — and no explicit 1/r amplitude factor is needed (the edge
+    spacing carries it).
     """
     Nt = response_template.shape[-1]
-    j = jnp.arange(Nt).astype(jnp.float32)
-    pos = (Nt - 1) - (Nt - 1 - j) / r
+    C = jnp.concatenate([jnp.zeros(response_template.shape[:-1] + (1,), response_template.dtype),
+                         jnp.cumsum(response_template, axis=-1)], axis=-1)      # edges 0..Nt
+    e = jnp.arange(Nt + 1).astype(jnp.float32)
+    pos = Nt - (Nt - e) / r                                                     # end-anchored edge map
+    pos = jnp.clip(pos, 0.0, float(Nt))
     fl = jnp.floor(pos)
     fr = pos - fl
-    taps = jnp.clip(fl.astype(int)[:, None] + jnp.array([-1, 0, 1, 2])[None, :], 0, Nt - 1)
+    taps = jnp.clip(fl.astype(int)[:, None] + jnp.array([-1, 0, 1, 2])[None, :], 0, Nt)
     w = jnp.stack([-0.5 * fr ** 3 + fr ** 2 - 0.5 * fr,
                    1.5 * fr ** 3 - 2.5 * fr ** 2 + 1.0,
                    -1.5 * fr ** 3 + 2.0 * fr ** 2 + 0.5 * fr,
                    0.5 * fr ** 3 - 0.5 * fr ** 2], axis=-1)
-    out = jnp.zeros_like(response_template)
+    Ci = jnp.zeros(response_template.shape[:-1] + (Nt + 1,), response_template.dtype)
     for k in range(4):
-        out = out + jnp.take(response_template, taps[:, k], axis=-1) * w[:, k]
-    return out / r
+        Ci = Ci + jnp.take(C, taps[:, k], axis=-1) * w[:, k]
+    return Ci[..., 1:] - Ci[..., :-1]
 
 
 @jit
@@ -448,7 +455,7 @@ def simulate_drift_new(params, tracks, fields):
     t0_after_diff = jnp.broadcast_to(t0[:, None, None], shape_2d).reshape(-1) # More efficient than ones * t0
 
     #Need to convert long_diff into a tick number
-    long_diff = main_electrons[:, long_diff_idx] / get_vdrift_placement(params) / params.t_sampling
+    long_diff = main_electrons[:, long_diff_idx] / get_vdrift(params) / params.t_sampling  # physical time-width (row selection); placement stays on the u-grid
     long_diff = jnp.broadcast_to(long_diff[:, None, None], shape_2d).reshape(-1) # More efficient broadcasting
 
 
