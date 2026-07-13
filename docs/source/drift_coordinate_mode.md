@@ -47,9 +47,13 @@ At the reference field (`r = 1`) the forward simulation is **bit-identical** to 
 ## Scope and caveats
 
 - Implemented for the `simulate_wfs` → average-noise FEE path (the differentiable surrogate).
-- The FEE clock windows (ADC hold/dead time) are kept **integer in u-ticks**, i.e. electronics
-  windows scale with `1/r` in real time (≤ a few % over ±10 % eField). Making them fractional was
-  prototyped and measured to change little; revisit only if a fine-grid reference study demands it.
+- The FEE clock windows (ADC hold/dead time) are **fixed in REAL time** (fractional in u-ticks:
+  `interval * r`, Keys-cubic interpolation of the cumulative charge at the window edges, hoisted out
+  of the hit scan so the cost matches the integer-window step). This matters: keeping the windows
+  integer in u-ticks would make their real-time duration scale as `1/r`, producing a spurious
+  **wrong-sign** eField charge trend (~−2 % per +10 % eField instead of the physical +1–5 % from
+  recombination + lifetime). The real-time windows restore the physical trend on every validated
+  event while keeping the corrected Hessian.
 - The eField dependence of observables flows exclusively through amplitudes (recombination,
   lifetime, diffusion), one smooth template resample, and the analytic tick conversion — which is
   what makes the eField Jacobian *and* Hessian correct.

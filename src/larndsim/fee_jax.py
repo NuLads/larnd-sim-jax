@@ -331,6 +331,70 @@ def get_adc_values(params, pixels_signals, noise_rng_key):
 #     # return (charges_new, new_prob), (charge_avg_across, tick_avg, no_hit_prob_across, prob_distrib_across)
 
 
+def _keys_interp(arr, pos):
+    """Keys/Catmull-Rom cubic interpolation of arr (..., Nticks) at fractional positions pos (M,).
+    Exact at integer positions; weights sum to 1 (so it commutes with per-path constant offsets)."""
+    Nticks = arr.shape[-1]
+    fl = jnp.floor(pos)
+    f = pos - fl
+    taps = jnp.clip(fl.astype(int)[:, None] + jnp.array([-1, 0, 1, 2])[None, :], 0, Nticks - 1)
+    w = jnp.stack([-0.5 * f ** 3 + f ** 2 - 0.5 * f,
+                   1.5 * f ** 3 - 2.5 * f ** 2 + 1.0,
+                   -1.5 * f ** 3 + 2.0 * f ** 2 + 0.5 * f,
+                   0.5 * f ** 3 - 0.5 * f ** 2], axis=-1)
+    return jnp.sum(arr[..., taps] * w, axis=-1)
+
+
+def _find_one_hit_step_frac(q_sum, qs_w, qs_w1, qmax, mf_fhe, prev_charges, previous_log_prob,
+                            sigma, threshold, Nvalues):
+    """Drift-coordinate-mode step with FRACTIONAL window edges (real-time-fixed electronics clocks).
+
+    All fractional-position gathers are hoisted out of the scan: because interpolation weights sum
+    to 1 and cummax commutes with constant offsets, interp(q_sum - c, pos) = interp(q_sum, pos) - c,
+    so the per-call precomputations qs_w = interp(q_sum, wpos), qs_w1 = interp(q_sum, wpos+1),
+    qmax = cummax(q_sum), mf_fhe = interp(cummax_rev(q_sum), fhe) suffice, and the step body is
+    gather-free (same asymptotic cost as the integer-window step).
+    """
+    z_scale = 1.0 / sigma
+    c = prev_charges[..., None]
+
+    q_max_future = qmax - c                          # cummax(q_sum - c) = cummax(q_sum) - c
+    log_guess = log_diff_ndtr(
+        (q_max_future[..., 1:] - threshold) * z_scale,
+        (q_max_future[..., :-1] - threshold) * z_scale
+    )
+
+    log_prob_event = log_diff_ndtr(
+        (qs_w - c - threshold) * z_scale,            # interp(q_sum - c, wpos) = qs_w - c
+        (q_sum[..., :-1] - c - threshold) * z_scale
+    )
+    log_prob_event = jnp.minimum(log_prob_event, log_guess)
+    log_prob_event = _soft_max(log_prob_event, -1000.0, sharpness=1.0)
+
+    esperance_value = qs_w + threshold - 0.5 * (q_sum[..., 1:] + q_sum[..., :-1])
+    log_prob_event = _soft_where(
+        esperance_value - threshold, log_prob_event, -1000.0, sharpness=10.0
+    )
+
+    log_prob_distrib = log_prob_event + previous_log_prob[:, None]
+    log_total_hit_dist_tick = jax.nn.logsumexp(log_prob_distrib, axis=0)
+    log_total_dist_tick = jax.nn.logsumexp(log_guess + previous_log_prob[:, None], axis=0)
+
+    next_q_sum = qs_w1 - c
+    log_future_hit_prob = jss.log_ndtr(
+        ((mf_fhe - c) - next_q_sum - threshold) * z_scale
+    )
+    log_selection_prob = log_guess + log_future_hit_prob + previous_log_prob[:, None]
+    log_total_sel_prob_tick = jax.nn.logsumexp(log_selection_prob, axis=0)
+
+    _, top_k_ticks = lax.top_k(log_total_sel_prob_tick, k=Nvalues)
+    top_k_ticks = lax.stop_gradient(top_k_ticks)
+    new_log_prob = log_total_dist_tick[top_k_ticks]
+    charges_new = qs_w1[top_k_ticks]                 # q_sum at (fractional) window-end + 1
+
+    return (charges_new, new_log_prob), (log_total_hit_dist_tick, esperance_value)
+
+
 def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, threshold, interval, Nvalues):
     Nticks = q_sum.shape[0]
     z_scale = 1.0 / sigma
@@ -402,6 +466,24 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9):
     # --- Pre-calculate q_sum for all pixels ---
     q = wfs * params.t_sampling
     q_sum_all = q.cumsum(axis=-1)
+
+    if params.drift_coordinate_mode:
+        # Drift-coordinate mode: the electronics clocks are fixed in REAL time, so on the u-grid the
+        # ADC/dead-time window spans interval * r u-ticks (fractional), r = v(E)/v_ref. All
+        # fractional-position interpolations are hoisted out of the scan (see _find_one_hit_step_frac).
+        from larndsim.consts_jax import get_vdrift as _gv
+        r = _gv(params) / params.u_grid_vdrift
+        interval_u = interval * r
+        wpos = jnp.clip(jnp.arange(Nticks - 1).astype(jnp.float32) + interval_u + 1.0, 0.0, Nticks - 1.0)
+        fhe = jnp.clip(wpos + interval_u + 1.0, 0.0, Nticks - 1.0)
+        qs_w_all = _keys_interp(q_sum_all, wpos)
+        qs_w1_all = _keys_interp(q_sum_all, jnp.clip(wpos + 1.0, 0.0, Nticks - 1.0))
+        qmax_all = lax.cummax(q_sum_all, axis=1)
+        mf_fhe_all = _keys_interp(lax.cummax(q_sum_all, axis=1, reverse=True), fhe)
+        vmapped_step_fun_frac = vmap(
+            _find_one_hit_step_frac,
+            in_axes=(0, 0, 0, 0, 0, 0, 0, None, None, None)
+        )
     
 
     def global_scan_fun(carry, _):
@@ -416,10 +498,16 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9):
             """The expensive vmapped computation, only run when globally active."""
             charges, probs, _ = operand
             # Run one hit-finding step for all pixels in parallel
-            (new_charges, new_probs), (prob_dist, charge_dist) = vmapped_step_fun(
-                q_sum_all, charges, probs, params.RESET_NOISE_CHARGE, params.DISCRIMINATION_THRESHOLD, interval, 
-                Nvalues
-            )
+            if params.drift_coordinate_mode:
+                (new_charges, new_probs), (prob_dist, charge_dist) = vmapped_step_fun_frac(
+                    q_sum_all, qs_w_all, qs_w1_all, qmax_all, mf_fhe_all, charges, probs,
+                    params.RESET_NOISE_CHARGE, params.DISCRIMINATION_THRESHOLD, Nvalues
+                )
+            else:
+                (new_charges, new_probs), (prob_dist, charge_dist) = vmapped_step_fun(
+                    q_sum_all, charges, probs, params.RESET_NOISE_CHARGE, params.DISCRIMINATION_THRESHOLD, interval, 
+                    Nvalues
+                )
             # LogSumExp gives the log of the total probability
             total_prob_per_pixel = jax.nn.logsumexp(new_probs, axis=1)
             new_active = jnp.any(total_prob_per_pixel > jnp.log(stop_threshold))
