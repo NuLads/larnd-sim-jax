@@ -210,6 +210,130 @@ def _chain_mcs_vectorized(thetas, phis, meta, mcs_weight):
     return mcs_weight * mcs / max(1, T)
 
 
+# ── Spline (low-order transverse-displacement) chain basis ───────────────────
+# Alternative to the tangent-angle chain: the track shape is a smooth transverse
+# displacement field d(alpha) along a fixed nominal (straight linear-guess) axis,
+# expanded in K sine modes  d(alpha) = sum_m beta_m sin(m*pi*alpha). This is the
+# Karhunen-Loeve basis of the MCS (Brownian-bridge) process: endpoints are anchored
+# (sin=0 at alpha=0,1), the number of parameters (2K) is fixed regardless of track
+# length, and the data-term Jacobian d x_k / d beta = B(alpha_k) is a small, well
+# conditioned design matrix (no cumsum lever-arm -> conditioning independent of length).
+# dx / dE are held at nominal (the transverse warp changes WHERE charge lands, not how
+# much), matching the fixed-step-length invariant the angle basis had.
+
+def _dir_from_angles(theta, phi):
+    st = np.sin(theta)
+    return np.array([st * np.cos(phi), st * np.sin(phi), np.cos(theta)], dtype=np.float32)
+
+
+def _transverse_frame(u0):
+    """Two orthonormal vectors spanning the plane perpendicular to unit vector u0."""
+    ref = np.array([0., 0., 1.], np.float32)
+    if abs(float(np.dot(u0, ref))) > 0.9:
+        ref = np.array([1., 0., 0.], np.float32)
+    e1 = np.cross(u0, ref); e1 /= (np.linalg.norm(e1) + 1e-12)
+    e2 = np.cross(u0, e1);  e2 /= (np.linalg.norm(e2) + 1e-12)
+    return e1.astype(np.float32), e2.astype(np.float32)
+
+
+def _spline_K(total_len, knot_cm):
+    return int(np.clip(round(total_len / knot_cm), 3, 12))
+
+
+def _build_chain_meta_spline(ctxs, knot_cm):
+    """Spline analogue of _build_chain_meta: precompute nominal nodes, the sine design
+    matrix at node alphas, and the transverse frame per track (all static)."""
+    if not ctxs:
+        return None
+    T = len(ctxs)
+    ncs = [int(c.n_chain) for c in ctxs]
+    Ks = [_spline_K(c.total_len, knot_cm) for c in ctxs]
+    max_nc, max_K = max(ncs), max(Ks)
+    nominal_p = np.zeros((T, max_nc + 1, 3), np.float32)
+    B_p = np.zeros((T, max_nc + 1, max_K), np.float32)
+    e1s, e2s = [], []
+    seg_rows, seg_track, seg_am, seg_as, seg_ae = [], [], [], [], []
+    for ti, c in enumerate(ctxs):
+        nc, K = ncs[ti], Ks[ti]
+        u0 = _dir_from_angles(c.theta0_i, c.phi0_i)
+        e1, e2 = _transverse_frame(u0)
+        e1s.append(e1); e2s.append(e2)
+        ks = np.arange(nc + 1)
+        alpha = ks / nc
+        nominal_p[ti, :nc + 1] = c.x0_fixed[None, :] + (ks[:, None] * c.step_len) * u0[None, :]
+        B_p[ti, :nc + 1, :K] = np.sin(np.outer(alpha, np.pi * np.arange(1, K + 1))).astype(np.float32)
+        idxs = np.asarray(c.idxs)
+        seg_rows.append(idxs); seg_track.append(np.full(idxs.shape[0], ti, np.int32))
+        seg_am.append(np.asarray(c.alpha_mid)); seg_as.append(np.asarray(c.alpha_start)); seg_ae.append(np.asarray(c.alpha_end))
+    return {
+        'basis': 'spline', 'T': T, 'max_nc': max_nc, 'max_K': max_K,
+        'ncs_np': np.asarray(ncs, np.int32), 'ncs': jnp.asarray(np.asarray(ncs, np.int32)),
+        'Ks_np': np.asarray(Ks, np.int32),
+        'nominal': jnp.asarray(nominal_p), 'Bmat': jnp.asarray(B_p),
+        'e1': jnp.asarray(np.stack(e1s)), 'e2': jnp.asarray(np.stack(e2s)),
+        'step': jnp.asarray(np.asarray([float(c.step_len) for c in ctxs], np.float32)),
+        'sigma': jnp.asarray(np.asarray([float(c.sigma_mcs) for c in ctxs], np.float32)),
+        'seg_rows': jnp.asarray(np.concatenate(seg_rows).astype(np.int32)),
+        'seg_track': jnp.asarray(np.concatenate(seg_track)),
+        'seg_am': jnp.asarray(np.concatenate(seg_am).astype(np.float32)),
+        'seg_as': jnp.asarray(np.concatenate(seg_as).astype(np.float32)),
+        'seg_ae': jnp.asarray(np.concatenate(seg_ae).astype(np.float32)),
+    }
+
+
+def _chain_warp_spline(t, coeffs_pt, meta, col_map):
+    """Warp via smooth transverse displacement. coeffs_pt[ti] is a flat (2K,) vector
+    [beta_e1 (K), beta_e2 (K)]. dx is FROZEN (not written) -> energy decoupled."""
+    T, max_nc, max_K = meta['T'], meta['max_nc'], meta['max_K']
+    Ks_np = meta['Ks_np']
+    b1_rows, b2_rows = [], []
+    for ti in range(T):
+        c = coeffs_pt[ti]
+        K = int(Ks_np[ti])
+        b1, b2 = c[:K], c[K:2 * K]
+        pad = max_K - K
+        if pad > 0:
+            b1 = jnp.concatenate([b1, jnp.zeros(pad, c.dtype)])
+            b2 = jnp.concatenate([b2, jnp.zeros(pad, c.dtype)])
+        b1_rows.append(b1); b2_rows.append(b2)
+    B1, B2 = jnp.stack(b1_rows), jnp.stack(b2_rows)          # (T, max_K)
+    d1 = jnp.einsum('tnk,tk->tn', meta['Bmat'], B1)          # (T, max_nc+1) displacement along e1
+    d2 = jnp.einsum('tnk,tk->tn', meta['Bmat'], B2)
+    nodes = (meta['nominal']
+             + d1[..., None] * meta['e1'][:, None, :]
+             + d2[..., None] * meta['e2'][:, None, :])       # (T, max_nc+1, 3)
+    seg_track = meta['seg_track']
+    nc_s = meta['ncs'][seg_track]
+
+    def _interp(alpha):
+        k = jnp.clip(jnp.floor(alpha * nc_s).astype(jnp.int32), 0, nc_s - 1)
+        frac = alpha * nc_s - k
+        p0 = nodes[seg_track, k]
+        p1 = nodes[seg_track, k + 1]
+        return p0 + frac[:, None] * (p1 - p0)
+
+    nm, ns, ne = _interp(meta['seg_am']), _interp(meta['seg_as']), _interp(meta['seg_ae'])
+    r = meta['seg_rows']
+    for col, arr in [('x', nm[:, 0]), ('y', nm[:, 1]), ('z', nm[:, 2]),
+                     ('xs', ns[:, 0]), ('ys', ns[:, 1]), ('zs', ns[:, 2]),
+                     ('xe', ne[:, 0]), ('ye', ne[:, 1]), ('ze', ne[:, 2])]:
+        t = t.at[r, col_map[col]].set(arr)
+    disp = jnp.stack([d1, d2], axis=-1)                      # (T, max_nc+1, 2) for the MCS prior
+    return t, disp
+
+
+def _chain_mcs_spline(disp, meta, mcs_weight):
+    """MCS prior in displacement basis: penalize the discrete curvature (second difference)
+    of the transverse displacement, = the per-node deflection angle ~ |Delta^2 d| / step_len."""
+    T, max_nc, ncs = meta['T'], meta['max_nc'], meta['ncs']
+    d2 = disp[:, 2:, :] - 2.0 * disp[:, 1:-1, :] + disp[:, :-2, :]   # (T, max_nc-1, 2)
+    j = jnp.arange(max_nc - 1)
+    mask = (j[None, :] < (ncs[:, None] - 1)).astype(disp.dtype)
+    ang2 = jnp.sum(d2 ** 2, axis=-1) / (meta['step'][:, None] ** 2)
+    mcs = jnp.sum(mask * ang2 / (2.0 * (meta['sigma'][:, None] ** 2)))
+    return mcs_weight * mcs / max(1, T)
+
+
 class _ChainTrackCtx:
     """Per-track deflection chain context (precomputed at batch init)."""
     __slots__ = ('track_id', 'idxs', 'n_fine', 'n_chain', 'step_len', 'total_len',
@@ -537,6 +661,7 @@ class ParamFitter:
                  mcs_prior_weight=1.0,
                  chain_step_len=2.0,
                  chain_momentum_GeV=3.0,
+                 chain_basis='angle', chain_spline_knot_cm=40.0,
                  config = {}):
 
         self.read_target = read_target
@@ -573,6 +698,8 @@ class ParamFitter:
         self._mcs_prior_weight = float(mcs_prior_weight)
         self._chain_step_len = float(chain_step_len)
         self._chain_momentum_GeV = float(chain_momentum_GeV)
+        self._chain_basis = str(chain_basis)              # 'angle' | 'spline'
+        self._chain_spline_knot_cm = float(chain_spline_knot_cm)
         self._batch_chain_contexts: dict = {}
         self._batch_chain_meta: dict = {}   # cached vectorized-warp metadata per batch
         self._batch_fixed_pixels = {}
@@ -1538,7 +1665,10 @@ class ParamFitter:
                             'xs': _xs_idx, 'ys': _ys_idx, 'zs': _zs_idx,
                             'xe': _xe_idx, 'ye': _ye_idx, 'ze': _ze_idx, 'dx': dx_idx}
                 if i not in self._batch_chain_meta:
-                    self._batch_chain_meta[i] = _build_chain_meta(_chain_ctxs)
+                    if self._chain_basis == 'spline':
+                        self._batch_chain_meta[i] = _build_chain_meta_spline(_chain_ctxs, self._chain_spline_knot_cm)
+                    else:
+                        self._batch_chain_meta[i] = _build_chain_meta(_chain_ctxs)
                 _chain_meta = self._batch_chain_meta[i]
 
             def loss_wrapper_combined(norm_params_input, log_dedx_in, chain_angles_pt=None, data_over=None):
@@ -1566,9 +1696,13 @@ class ParamFitter:
                 _meta_use = _chain_meta if data_over is None else data_over['meta']
                 _chain_thetas = None
                 _chain_phis = None
+                _chain_warp_aux = None
                 if chain_angles_pt is not None and _meta_use is not None:
-                    t, _chain_thetas, _chain_phis = _chain_warp_vectorized(
-                        t, chain_angles_pt, _meta_use, _col_map)
+                    if _meta_use.get('basis') == 'spline':
+                        t, _chain_warp_aux = _chain_warp_spline(t, chain_angles_pt, _meta_use, _col_map)
+                    else:
+                        t, _chain_thetas, _chain_phis = _chain_warp_vectorized(
+                            t, chain_angles_pt, _meta_use, _col_map)
 
                 # Reconstruct per-step dEdx from per-segment log-mean.
                 # Padding rows have parent_id == -1; preserve their original track dEdx
@@ -1665,8 +1799,11 @@ class ParamFitter:
 
                 # Gaussian MCS prior on chain deflection angles (vectorized)
                 if chain_angles_pt is not None and _meta_use is not None:
-                    _mcs_loss = _chain_mcs_vectorized(
-                        _chain_thetas, _chain_phis, _meta_use, self._mcs_prior_weight)
+                    if _meta_use.get('basis') == 'spline':
+                        _mcs_loss = _chain_mcs_spline(_chain_warp_aux, _meta_use, self._mcs_prior_weight)
+                    else:
+                        _mcs_loss = _chain_mcs_vectorized(
+                            _chain_thetas, _chain_phis, _meta_use, self._mcs_prior_weight)
                     total_loss = total_loss + _mcs_loss
                 else:
                     _mcs_loss = jnp.float32(0.)
@@ -2007,13 +2144,18 @@ class GradientDescentFitter(ParamFitter):
             ctxs = self._batch_chain_contexts.get(batch_idx, [])
             states = []
             for ctx in ctxs:
-                n_c = ctx.n_chain
-                angles = np.empty(2 * n_c, dtype=np.float32)
-                angles[:n_c] = ctx.theta0_i   # all segments start aligned with initial direction
-                angles[n_c:] = ctx.phi0_i
-                angles_jax = jnp.array(angles)
-                opt_state = self._chain_optimizer.init(angles_jax)
-                states.append({'angles': angles_jax, 'opt_state': opt_state})
+                if self._chain_basis == 'spline':
+                    # 2K spline coefficients, initialised to zero = nominal (linear-guess) track
+                    K = _spline_K(ctx.total_len, self._chain_spline_knot_cm)
+                    params = jnp.zeros(2 * K, dtype=jnp.float32)
+                else:
+                    n_c = ctx.n_chain
+                    angles = np.empty(2 * n_c, dtype=np.float32)
+                    angles[:n_c] = ctx.theta0_i   # all segments start aligned with initial direction
+                    angles[n_c:] = ctx.phi0_i
+                    params = jnp.array(angles)
+                opt_state = self._chain_optimizer.init(params)
+                states.append({'angles': params, 'opt_state': opt_state})
             self._chain_cache[batch_idx] = states
         return self._chain_cache[batch_idx]
 
@@ -2061,14 +2203,22 @@ class GradientDescentFitter(ParamFitter):
             true_pts = track_pos_dict.get(ctx.track_id)
             if true_pts is None:
                 continue
-            angles  = np.asarray(state['angles'])
-            _nc     = ctx.n_chain
-            thetas  = jnp.array(angles[:_nc])
-            phis    = jnp.array(angles[_nc:])
-            pos_nodes, _ = _absolute_chain_forward(
-                jnp.array(ctx.x0_fixed), thetas, phis, ctx.step_len)
-            pos_nodes = np.asarray(pos_nodes)
+            params = np.asarray(state['angles'])
             nc = ctx.n_chain
+            if self._chain_basis == 'spline':
+                K = _spline_K(ctx.total_len, self._chain_spline_knot_cm)
+                u0 = _dir_from_angles(ctx.theta0_i, ctx.phi0_i)
+                e1, e2 = _transverse_frame(u0)
+                ks = np.arange(nc + 1)
+                B = np.sin(np.outer(ks / nc, np.pi * np.arange(1, K + 1)))
+                d1 = B @ params[:K]; d2 = B @ params[K:2 * K]
+                nominal = ctx.x0_fixed[None, :] + (ks[:, None] * ctx.step_len) * u0[None, :]
+                pos_nodes = nominal + d1[:, None] * e1[None, :] + d2[:, None] * e2[None, :]
+            else:
+                thetas = jnp.array(params[:nc]); phis = jnp.array(params[nc:])
+                pos_nodes, _ = _absolute_chain_forward(
+                    jnp.array(ctx.x0_fixed), thetas, phis, ctx.step_len)
+                pos_nodes = np.asarray(pos_nodes)
             for j, alpha in enumerate(ctx.alpha_mid):
                 k = int(np.clip(int(np.floor(alpha * nc)), 0, nc - 1))
                 frac = float(alpha * nc - k)

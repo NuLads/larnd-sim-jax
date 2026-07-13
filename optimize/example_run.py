@@ -167,7 +167,8 @@ def main(config):
                                 pos_residual_freq=config.pos_residual_freq,
                                 mcs_prior_weight=config.mcs_prior_weight,
                                 chain_step_len=config.chain_step_len,
-                                chain_momentum_GeV=config.chain_momentum_GeV)
+                                chain_momentum_GeV=config.chain_momentum_GeV,
+                                chain_basis=config.chain_basis, chain_spline_knot_cm=config.chain_spline_knot_cm)
     elif config.fit_type == "gn_calib":
         param_fit = GaussNewtonCalibFitter(relevant_params=param_list,
                                 sim_track_fields=sim_track_fields, tgt_track_fields=tgt_track_fields,
@@ -218,7 +219,8 @@ def main(config):
                                 chain_decay_start=config.chain_decay_start,
                                 mcs_prior_weight=config.mcs_prior_weight,
                                 chain_step_len=config.chain_step_len,
-                                chain_momentum_GeV=config.chain_momentum_GeV)
+                                chain_momentum_GeV=config.chain_momentum_GeV,
+                                chain_basis=config.chain_basis, chain_spline_knot_cm=config.chain_spline_knot_cm)
 
     elif config.fit_type == "scan":
         param_fit = LikelihoodProfiler(relevant_params=param_list,
@@ -466,6 +468,10 @@ if __name__ == '__main__':
                         help='gn_calib hybrid mode: per-batch Adam warmup iterations before each GN takeover attempt; GN falls back to Adam when it stalls or saturates (0 = pure GN)')
     parser.add_argument('--dedx_drift_profile_weight', default=0.0, type=float,
                         help='Weight of the drift-profile penalty on per-segment dEdx: penalizes the WLS trend of log(dEdx) vs |z| (the dEdx<->lifetime degenerate mode). 0 = off')
+    parser.add_argument('--chain_basis', type=str, choices=['angle','spline'], default='angle',
+                        help='Track-shape parametrization for --fit_chain_positions: tangent angles (cumsum) or smooth transverse-displacement sine spline (length-independent conditioning)')
+    parser.add_argument('--chain_spline_knot_cm', type=float, default=40.0,
+                        help='Spline mode spacing: K = clip(round(total_len/this),3,12) sine modes per track')
     parser.add_argument('--gn_resume_joint', default=None, type=str,
                         help='gn_calib: joint-fit checkpoint pkl; freeze its fitted dEdx + chain angles and GN-polish only the 5 calibration params (conditional covariance reported)')
     parser.add_argument('--minimizer_strategy', type=int, choices=[0, 1, 2], default=1, help='Minimizer strategy for Minuit')
