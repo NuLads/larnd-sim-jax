@@ -536,6 +536,99 @@ def _log_diff_ndtr_pre(a, b, la, lb, min_log_prob=-18.42):
     return jnp.where(a > b, log_prob, min_log_prob)
 
 
+def _keys_interp(arr, pos):
+    """Keys/Catmull-Rom cubic interpolation of arr (..., Nticks) at fractional positions pos (M,).
+    Exact at integer positions; weights sum to 1 (so it commutes with per-path constant offsets)."""
+    Nticks = arr.shape[-1]
+    fl = jnp.floor(pos)
+    f = pos - fl
+    taps = jnp.clip(fl.astype(int)[:, None] + jnp.array([-1, 0, 1, 2])[None, :], 0, Nticks - 1)
+    w = jnp.stack([-0.5 * f ** 3 + f ** 2 - 0.5 * f,
+                   1.5 * f ** 3 - 2.5 * f ** 2 + 1.0,
+                   -1.5 * f ** 3 + 2.0 * f ** 2 + 0.5 * f,
+                   0.5 * f ** 3 - 0.5 * f ** 2], axis=-1)
+    return jnp.sum(arr[..., taps] * w, axis=-1)
+
+
+def _drift_mode_fee_precompute(params, q_sum_all, interval):
+    """Drift-coordinate mode: the electronics clocks are fixed in REAL time, so on the u-grid the ADC/dead-time
+    window spans interval * r u-ticks (fractional), r = v(E)/v_ref. All fractional-position interpolations are
+    hoisted out of the beam-search scan (see _find_one_hit_step_frac). At r = 1 every position is an integer and
+    the interpolations are exact gathers, i.e. the integer-window step's q_sum[shifted_ticks] etc."""
+    from larndsim.consts_jax import get_vdrift as _gv
+    Nticks = q_sum_all.shape[-1]
+    r = _gv(params) / params.u_grid_vdrift
+    interval_u = interval * r
+    wpos = jnp.clip(jnp.arange(Nticks - 1).astype(jnp.float32) + interval_u + 1.0, 0.0, Nticks - 1.0)
+    fhe = jnp.clip(wpos + interval_u + 1.0, 0.0, Nticks - 1.0)
+    qs_w_all = _keys_interp(q_sum_all, wpos)
+    qs_w1_all = _keys_interp(q_sum_all, jnp.clip(wpos + 1.0, 0.0, Nticks - 1.0))
+    qmax_all = lax.cummax(q_sum_all, axis=1)
+    mf_fhe_all = _keys_interp(lax.cummax(q_sum_all, axis=1, reverse=True), fhe)
+    return qs_w_all, qs_w1_all, qmax_all, mf_fhe_all
+
+
+def _find_one_hit_step_frac(q_sum, qs_w, qs_w1, qmax, mf_fhe, prev_charges, previous_log_prob,
+                            sigma, sigma_uncorr, threshold, Nvalues, min_log_prob,
+                            excess_offset=0.0, smooth_sigma_scale=1.0):
+    """Drift-coordinate-mode step with FRACTIONAL window edges (real-time-fixed electronics clocks).
+
+    Same physics as _find_one_hit_step (min_log_prob floors, jnp.where in log_diff_ndtr, unified Gaussian
+    acceptance over the uncorrelated noise) with the integer-window gathers replaced by the hoisted fractional
+    ones: because interpolation weights sum to 1 and cummax commutes with constant offsets,
+    interp(q_sum - c, pos) = interp(q_sum, pos) - c, so qs_w = interp(q_sum, wpos), qs_w1 = interp(q_sum, wpos+1),
+    qmax = cummax(q_sum), mf_fhe = interp(cummax_rev(q_sum), fhe) suffice and the step body is gather-free.
+    Mirrors the LARND_FEE_FAST=0 expressions of _find_one_hit_step term by term (no custom_jvp fast path).
+    """
+    z_scale = 1.0 / sigma
+    c = prev_charges[..., None]
+
+    # 1. Log-probability of a hit starting
+    q_max_future = qmax - c                          # cummax(q_sum - c) = cummax(q_sum) - c
+    log_guess = log_diff_ndtr(
+        (q_max_future[..., 1:] - threshold) * z_scale,
+        (q_max_future[..., :-1] - threshold) * z_scale,
+        min_log_prob=min_log_prob
+    )
+
+    # 2. Log-probability of a hit being collected in the (fractional) shifted window
+    log_prob_event = log_diff_ndtr(
+        (qs_w - c - threshold) * z_scale,            # interp(q_sum - c, wpos) = qs_w - c
+        (q_sum[..., :-1] - c - threshold) * z_scale,
+        min_log_prob=min_log_prob
+    )
+    log_prob_event = jnp.minimum(log_prob_event, log_guess)
+    log_prob_event = _soft_max(log_prob_event, min_log_prob, sharpness=1.0)
+
+    esperance_value = qs_w + threshold - 0.5 * (q_sum[..., 1:] + q_sum[..., :-1])
+
+    # Unified Gaussian acceptance correction (same as _find_one_hit_step)
+    safe_sigma_uncorr = jnp.maximum(sigma_uncorr * smooth_sigma_scale, 1.0)
+    log_accept = jss.log_ndtr((esperance_value - threshold + excess_offset) / safe_sigma_uncorr)
+    log_prob_event = log_prob_event + log_accept
+
+    # 3. Aggregate Results
+    log_prob_distrib = log_prob_event + previous_log_prob[:, None]
+    log_total_hit_dist_tick = jax.nn.logsumexp(log_prob_distrib, axis=0)
+    log_total_dist_tick = jax.nn.logsumexp(log_guess + previous_log_prob[:, None], axis=0)
+
+    # 4. Path Selection
+    next_q_sum = qs_w1 - c
+    log_future_hit_prob = jss.log_ndtr(
+        ((mf_fhe - c) - next_q_sum - threshold) * z_scale
+    )
+    log_selection_prob = log_guess + log_future_hit_prob + previous_log_prob[:, None]
+    log_total_sel_prob_tick = jax.nn.logsumexp(log_selection_prob, axis=0)
+
+    # 5. Construct State for Next Iteration (stop_gradient on discrete indices)
+    _, top_k_ticks = lax.top_k(log_total_sel_prob_tick, k=Nvalues)
+    top_k_ticks = lax.stop_gradient(top_k_ticks)
+    new_log_prob = log_total_dist_tick[top_k_ticks]
+    charges_new = qs_w1[top_k_ticks]                 # q_sum at (fractional) window-end + 1
+
+    return (charges_new, new_log_prob), (log_total_hit_dist_tick, esperance_value)
+
+
 def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_uncorr,
                        threshold, interval, Nvalues, min_log_prob,
                        excess_offset=0.0, smooth_sigma_scale=1.0, n_paths=None):
@@ -629,6 +722,15 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
     # --- Pre-calculate q_sum for all pixels ---
     q = wfs * params.t_sampling
     q_sum_all = q.cumsum(axis=-1)
+
+    if params.drift_coordinate_mode:
+        # Drift-coordinate mode: fractional (real-time-fixed) FEE windows, see _drift_mode_fee_precompute.
+        # The LARND_FEE_PEEL0 / LARND_FEE_PIXEL_STOP=2 paths below hard-code integer windows and are bypassed.
+        qs_w_all, qs_w1_all, qmax_all, mf_fhe_all = _drift_mode_fee_precompute(params, q_sum_all, interval)
+        vmapped_step_fun_frac = vmap(
+            _find_one_hit_step_frac,
+            in_axes=(0, 0, 0, 0, 0, 0, 0) + (None,) * 7
+        )
     
 
     def global_scan_fun(carry, _):
@@ -643,13 +745,21 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
             """The expensive vmapped computation, only run when globally active."""
             charges, probs, _ = operand
             # Run one hit-finding step for all pixels in parallel
-            (new_charges, new_probs), (prob_dist, charge_dist) = vmapped_step_fun(
-                q_sum_all, charges, probs,
-                params.RESET_NOISE_CHARGE, params.UNCORRELATED_NOISE_CHARGE,
-                params.DISCRIMINATION_THRESHOLD, interval,
-                Nvalues, min_log_prob,
-                params.excess_offset, params.smooth_sigma_scale
-            )
+            if params.drift_coordinate_mode:
+                (new_charges, new_probs), (prob_dist, charge_dist) = vmapped_step_fun_frac(
+                    q_sum_all, qs_w_all, qs_w1_all, qmax_all, mf_fhe_all, charges, probs,
+                    params.RESET_NOISE_CHARGE, params.UNCORRELATED_NOISE_CHARGE,
+                    params.DISCRIMINATION_THRESHOLD, Nvalues, min_log_prob,
+                    params.excess_offset, params.smooth_sigma_scale
+                )
+            else:
+                (new_charges, new_probs), (prob_dist, charge_dist) = vmapped_step_fun(
+                    q_sum_all, charges, probs,
+                    params.RESET_NOISE_CHARGE, params.UNCORRELATED_NOISE_CHARGE,
+                    params.DISCRIMINATION_THRESHOLD, interval,
+                    Nvalues, min_log_prob,
+                    params.excess_offset, params.smooth_sigma_scale
+                )
             if _FEE_PIXEL_STOP:
                 # per-pixel stop, emulation (=1: everything computed, then selected; see LARND_FEE_PIXEL_STOP)
                 alive = jax.nn.logsumexp(probs, axis=1) > jnp.log(stop_threshold) - _FEE_STOP_MARGIN
@@ -746,7 +856,7 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
     
     init_loop = (initial_charges, initial_log_probs, initial_active)
 
-    if _FEE_PEEL0 and params.MAX_ADC_VALUES > 1:
+    if _FEE_PEEL0 and params.MAX_ADC_VALUES > 1 and not params.drift_coordinate_mode:
         # Step 0 peeled out of the scan (LARND_FEE_PEEL0): it is always active (initial_active = True), and its 100 beam
         # paths all start at charge 0, so the per-path work is done once per pixel (n_paths, see _find_one_hit_step).
         vstep0 = vmap(partial(_find_one_hit_step, n_paths=Nvalues),
@@ -773,7 +883,7 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
                                          jnp.arange(1, params.MAX_ADC_VALUES))
         log_prob_distrib = jnp.concatenate([prob0[None], lp_rest], axis=0)
         charge_distrib = jnp.concatenate([charge0[None], ch_rest], axis=0)
-    elif _FEE_PIXEL_STOP == '2':
+    elif _FEE_PIXEL_STOP == '2' and not params.drift_coordinate_mode:
         _, (log_prob_distrib, charge_distrib) = lax.scan(
             pixel_scan_fun, (initial_charges, initial_log_probs, jnp.ones((Npix,), dtype=bool), initial_active),
             jnp.arange(0, params.MAX_ADC_VALUES))
@@ -1021,7 +1131,9 @@ def get_adc_values_average_noise_chunked(params, wfs, chunk_size=128):
     wfs_padded = jnp.pad(wfs, ((0, pad_len - Npix), (0, 0)), mode='constant', constant_values=0.0)
     
     num_chunks = pad_len // chunk_size
-    if _FEE_PIXEL_STOP == '3':
+    # drift-coordinate mode: _fee_global_pixel_stop uses the integer-window step; the per-chunk path below runs the
+    # fractional-window step (with the =1 per-pixel-stop emulation, same semantics).
+    if _FEE_PIXEL_STOP == '3' and not params.drift_coordinate_mode:
         log_prob_dist, charge_dist = _fee_global_pixel_stop(params, wfs_padded, chunk_size)
         return log_prob_dist[:Npix], charge_dist[:Npix]
     wfs_chunks = wfs_padded.reshape(num_chunks, chunk_size, Nticks)
