@@ -26,7 +26,7 @@ INPUT_FILE_SIM=/sdf/group/neutrino/pgranger/lads-data/linear_guess_segments.h5
 SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax/larndsim-jax_main.sif
 JAX_CACHE_DIR=/sdf/group/neutrino/pgranger/.jax_cache
 
-LABEL=posb_${BASIS}_len${LEN}_clr${CLR}_mcs${MCS}_knot${KNOT}_geom${GEOM}
+LABEL=posb_${BASIS}_len${LEN}_clr${CLR}_mcs${MCS}_knot${KNOT}_geom${GEOM}${TAG:-}
 TEST_NAME=pos_basis
 mkdir -p /sdf/group/neutrino/pgranger/larnd-sim-jax/logs/pos_basis
 
