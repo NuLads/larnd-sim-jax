@@ -2314,35 +2314,31 @@ class GradientDescentFitter(ParamFitter):
         # GLOBAL geometry spec, precomputed ONCE from all batch contexts (available after
         # precompute_static_pixels) so batch 0 already uses the final shape -> one shared compile
         # (a running max would keep growing across varied batches and recompile through epoch 1).
-        # Size-BUCKET the padding by track-count: a 1-track batch pads to its small bucket, not
-        # the global max, so it doesn't pay the big-batch execution cost. ~2-3 buckets (compiles)
-        # instead of 1, but each batch executes near its own size. Buckets computed once.
-        def _tbucket(T):
-            for b in (1, 2, 4, 8, 16, 32, 64):
-                if T <= b:
-                    return b
-            return 128
+        # SINGLE global-max shape = fewest compile signatures. Compile (~4min) dominates, so
+        # minimising distinct shapes beats per-batch sizing (bucketing measured WORSE: more
+        # compiles). All geometry dims + usize + nhits precomputed from contexts/pixel-counts so
+        # batch 0 already uses the final shape -> ideally ONE shared compile for the whole run.
         if not hasattr(self, '_ggn_geom'):
-            buckets = {}
+            Tm = ncm = Km = Nm = rs = rl = usg0 = 0
             for i, ctxs in self._batch_chain_contexts.items():
                 if not ctxs:
                     continue
-                b = _tbucket(len(ctxs))
-                d = buckets.setdefault(b, dict(T=b, nc=0, K=0, Nseg=0, rs=0, rl=0, us=0))
-                d['nc'] = max(d['nc'], max(int(c.n_chain) for c in ctxs))
-                d['K'] = max(d['K'], max(_spline_K(c.total_len, self._chain_spline_knot_cm) for c in ctxs))
-                d['Nseg'] = max(d['Nseg'], sum(int(np.asarray(c.idxs).shape[0]) for c in ctxs))
-                r = self._batch_padded_roi.get(i, (256, 256)); d['rs'] = max(d['rs'], int(r[0])); d['rl'] = max(d['rl'], int(r[1]))
+                Tm = max(Tm, len(ctxs)); ncm = max(ncm, max(int(c.n_chain) for c in ctxs))
+                Km = max(Km, max(_spline_K(c.total_len, self._chain_spline_knot_cm) for c in ctxs))
+                Nm = max(Nm, sum(int(np.asarray(c.idxs).shape[0]) for c in ctxs))
+                r = self._batch_padded_roi.get(i, (256, 256)); rs = max(rs, int(r[0])); rl = max(rl, int(r[1]))
                 fp = self._batch_fixed_pixels.get(i)
                 if fp is not None:
-                    d['us'] = max(d['us'], int(fp.shape[0]))
-            for b, d in buckets.items():
-                d['usg'] = int(((d['us'] + 256 + 127) // 128) * 128) if d['us'] else 768
-            self._ggn_geom = buckets
-        gs = self._ggn_geom[_tbucket(meta['T'])]
+                    usg0 = max(usg0, int(fp.shape[0]))
+                tp = self._batch_target_pixels.get(i)          # proxy upper-bound for target hits
+                if tp is not None:
+                    Nm = Nm  # (Nseg already covers sim segments)
+            usg = int(((usg0 + 256 + 127) // 128) * 128) if usg0 else 768
+            self._ggn_geom = dict(T=Tm, nc=ncm, K=Km, Nseg=Nm, rs=rs, rl=rl, usg=usg)
+        gs = self._ggn_geom
         Tm, ncm, Km, Nm, roig, usg = gs['T'], gs['nc'], gs['K'], gs['Nseg'], (gs['rs'], gs['rl']), gs['usg']
-        # nhits (256-mult) still per-batch: round + running-max (few bucketed values, stabilises fast)
-        nhits = int(((int(np.asarray(ref[0]).shape[0]) + 255) // 256) * 256)
+        # nhits: coarse 512-bucket + running-max -> few distinct values (usually 1-2 compiles total)
+        nhits = int(((int(np.asarray(ref[0]).shape[0]) + 511) // 512) * 512)
         if not hasattr(self, '_ggn_rmax'):
             self._ggn_rmax = dict(nh=0)
         self._ggn_rmax['nh'] = max(self._ggn_rmax['nh'], nhits)
@@ -2401,15 +2397,11 @@ class GradientDescentFitter(ParamFitter):
             dx, _ = jax.scipy.sparse.linalg.cg(A, -gflat, tol=1e-4, maxiter=_cg_maxiter)
             return dx
 
-        key = (Tm, ncm, Km, Nm, usg, roig, nhm)          # one per size-bucket (nhm stabilises fast)
+        key = (Tm, ncm, Km, Nm, usg, roig, nhm)          # constant once nhits settles -> one compile
         if not hasattr(self, '_ggn_shared_fns'):
             self._ggn_shared_fns = {}
         if key not in self._ggn_shared_fns:
-            # keep one compiled program per (bucket, nhits); drop entries whose nhm is stale for
-            # this bucket so memory stays bounded (~1 per bucket once nhits settles).
-            for kk in [k for k in self._ggn_shared_fns if k[:6] == key[:6]]:
-                del self._ggn_shared_fns[kk]
-            self._ggn_shared_fns[key] = (jax.jit(jax.value_and_grad(f)), jax.jit(cg_step))
+            self._ggn_shared_fns = {key: (jax.jit(jax.value_and_grad(f)), jax.jit(cg_step))}  # drop stale
         _vg, _cg = self._ggn_shared_fns[key]
 
         x = jnp.asarray(flat0, dtype=jnp.float32)
