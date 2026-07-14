@@ -2257,6 +2257,100 @@ class GradientDescentFitter(ParamFitter):
         self._chain_cache[batch_idx] = [{'angles': new_coeffs[ti]} for ti in range(len(coeffs))]
         return loss
 
+    def _chain_col_map(self):
+        fld = self.sim_track_fields
+        return {'x': fld.index('x'), 'y': fld.index('y'), 'z': fld.index('z'),
+                'xs': fld.index('x_start'), 'ys': fld.index('y_start'), 'zs': fld.index('z_start'),
+                'xe': fld.index('x_end'), 'ye': fld.index('y_end'), 'ze': fld.index('z_end'),
+                'dx': fld.index('dx')}
+
+    def _solve_chain_ggn(self, batch_idx, tracks, ref, log_dedx, parent_ids, max_iter=6):
+        """FIRST-ORDER Gauss-Newton (Fisher/GGN) solve on the spline chain coefficients.
+
+        The llhd loss is a marked Poisson point process, so its Fisher is
+            F = sum_c exp(z_c) Jz[c] Jz[c]^T  +  sum_c exp(z_c)/sigma^2 Jq[c] Jq[c]^T
+        with z = log-intensity field, q = expected charge, Jz/Jq = d(field)/d(coeffs).
+        Only FIRST-order jacfwd is needed (n forward passes, no 2nd-order tape) -> compiles
+        like a gradient and is ~5-25x cheaper than the exact-Hessian HVP version. The MCS
+        prior (quadratic in coeffs) adds a small analytic Hessian. PSD by construction.
+        Spline basis only. dEdx + calibration held fixed."""
+        from jax.flatten_util import ravel_pytree
+        from larndsim.sim_jax import simulate_wfs as _sim_wfs
+        states = self._get_or_init_chain_state(batch_idx)
+        coeffs = [s['angles'] for s in states]
+        meta = self._batch_chain_meta.get(batch_idx)
+        if meta is None or meta.get('basis') != 'spline':
+            # fall back to exact-Hessian solve if not spline
+            return self._solve_chain_gn(batch_idx, tracks, ref, log_dedx, parent_ids, max_iter)
+        col_map = self._chain_col_map()
+        phys = self.current_params
+        sigma = self.loss_strategy.sigma_charge / 1000.0
+        _, _up = _sim_wfs(self.ref_params, self.sim_strategy.response, tracks, self.sim_track_fields)
+        usize = int(((int(_up.shape[0]) + 127) // 128) * 128)
+        roi = self._batch_padded_roi.get(batch_idx, (256, 256))
+        dedx_idx = self.sim_track_fields.index('dEdx'); dE_idx = self.sim_track_fields.index('dE')
+        dx_idx = self.sim_track_fields.index('dx')
+
+        flat0, unflat = ravel_pytree(coeffs)
+        n = int(flat0.shape[0])
+
+        def fields(xflat):
+            cl = unflat(xflat)
+            t, _ = _chain_warp_spline(tracks, cl, meta, col_map)
+            if log_dedx is not None and parent_ids is not None:
+                safe = jnp.clip(parent_ids, 0, log_dedx.shape[0] - 1)
+                dd = jnp.where(parent_ids >= 0, jnp.maximum(jnp.exp(jnp.take(log_dedx, safe)), 1e-3), t[:, dedx_idx])
+                t = t.at[:, dedx_idx].set(dd)
+                t = t.at[:, dE_idx].set(dd * t[:, dx_idx])
+            pred = self.sim_strategy.predict(phys, t, self.sim_track_fields, None,
+                                             unique_size=usize, roi_override=roi)
+            return pred['hit_prob'], adc2charge(pred['adcs_distrib'], phys)
+
+        def fisher(xflat):
+            z, _ = fields(xflat)
+            Jz, Jq = jax.jacfwd(fields)(xflat)
+            w = jnp.exp(jax.lax.stop_gradient(z)).reshape(-1)
+            Jz2 = Jz.reshape(-1, n); Jq2 = Jq.reshape(-1, n)
+            return Jz2.T @ (w[:, None] * Jz2) + Jq2.T @ ((w / sigma ** 2)[:, None] * Jq2)
+
+        # full-loss value+grad (data + MCS prior) via the existing closure
+        loss_fn = self.compute_loss(tracks, batch_idx, *ref, log_dedx=log_dedx, parent_ids=parent_ids,
+                                    chain_angles_per_track=coeffs, return_loss_closure=True,
+                                    unique_size=usize, roi_override=roi)
+        def f(xflat):
+            return loss_fn(unflat(xflat))
+
+        key = (batch_idx, n, 'ggn')
+        if not hasattr(self, '_chain_ggn_fns'):
+            self._chain_ggn_fns = {}
+        if key not in self._chain_ggn_fns:
+            self._chain_ggn_fns[key] = (jax.jit(jax.value_and_grad(f)), jax.jit(fisher))
+        _vg, _fish = self._chain_ggn_fns[key]
+
+        x = jnp.asarray(flat0, dtype=jnp.float32)
+        loss, g = _vg(x); loss = float(loss); g = np.asarray(g)
+        lam = 1e-3
+        for it in range(max_iter):
+            F = np.asarray(_fish(x))
+            dsc = np.maximum(np.abs(np.diag(F)), 1e-9 * max(np.abs(np.diag(F)).max(), 1.0))
+            accepted = False
+            for _bt in range(6):
+                try:
+                    step = -np.linalg.solve(F + lam * np.diag(dsc), g)
+                except np.linalg.LinAlgError:
+                    lam *= 4.0; continue
+                xt = x + jnp.asarray(step, dtype=jnp.float32)
+                lt, gt = _vg(xt); lt = float(lt)
+                if np.isfinite(lt) and lt < loss:
+                    x, loss, g = xt, lt, np.asarray(gt); lam = max(lam / 3.0, 1e-9); accepted = True
+                    break
+                lam *= 4.0
+            if not accepted or np.linalg.norm(step) < 1e-6:
+                break
+        nc2 = unflat(x)
+        self._chain_cache[batch_idx] = [{'angles': nc2[ti]} for ti in range(len(coeffs))]
+        return loss
+
     def _compute_pos_residual_batch(self, batch_idx):
         """Mean 3D distance (cm) between current fitted chain positions and true target positions."""
         ctxs           = self._batch_chain_contexts.get(batch_idx, [])
@@ -3015,11 +3109,13 @@ class GradientDescentFitter(ParamFitter):
                             _init = [s['angles'] for s in self._chain_cache[i]]
                             _new = self._solve_geom_block(i, selected_tracks_sim, _ref, _init, self._geom_lbfgs_steps)
                             self._chain_cache[i] = [{'angles': a} for a in _new]
-                        elif self._geom_optimizer == 'gn':
-                            # per-batch Gauss-Newton/LM on the (low-dim, spline) chain coeffs
+                        elif self._geom_optimizer in ('gn', 'ggn'):
+                            # per-batch Gauss-Newton on the (low-dim, spline) chain coeffs:
+                            # 'gn' = exact Hessian (2nd-order, slow), 'ggn' = Fisher (1st-order, fast)
                             _ref = (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id)
-                            self._solve_chain_gn(i, selected_tracks_sim, _ref, _log_dedx, _parent_ids,
-                                                 max_iter=self._geom_lbfgs_steps)
+                            _solver = self._solve_chain_ggn if self._geom_optimizer == 'ggn' else self._solve_chain_gn
+                            _solver(i, selected_tracks_sim, _ref, _log_dedx, _parent_ids,
+                                    max_iter=self._geom_lbfgs_steps)
                         else:
                             self._process_chain_grads(i, _grads_chain, total_iter)
                         if total_iter % self._pos_residual_freq == 0:
