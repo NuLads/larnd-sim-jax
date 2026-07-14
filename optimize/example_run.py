@@ -576,9 +576,9 @@ if __name__ == '__main__':
     parser.add_argument("--lbfgs_position_fit", dest="lbfgs_position_fit", action="store_true",
                         help="Run end-to-end position-only geometry fit with L-BFGS + early stopping instead of fitting.")
     parser.add_argument("--geom_optimizer", dest="geom_optimizer", default="adam", type=str,
-                        help="Geometry-block optimiser: 'adam' (default, unchanged) or 'lbfgs' (jitted L-BFGS geometry solve).")
+                        help="Geometry-block optimiser: 'adam' (default), 'lbfgs' (jitted L-BFGS), or 'gn' (per-batch Gauss-Newton/LM on the chain coeffs; intended for chain_basis=spline).")
     parser.add_argument("--geom_lbfgs_steps", dest="geom_lbfgs_steps", default=10, type=int,
-                        help="Max L-BFGS iterations per geometry solve (geom_optimizer=lbfgs).")
+                        help="Max L-BFGS/GN iterations per geometry solve (geom_optimizer=lbfgs|gn).")
     parser.add_argument("--geom_lbfgs_unique_size", dest="geom_lbfgs_unique_size", default=0, type=int,
                         help="Static unique-pixel size for the jitted geometry loss (0 = auto from batch).")
     parser.add_argument("--profile_geom_compile", dest="profile_geom_compile", default=-1, type=int,

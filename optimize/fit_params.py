@@ -2191,6 +2191,64 @@ class GradientDescentFitter(ParamFitter):
             new_states.append({'angles': new_angles, 'opt_state': new_opt})
         self._chain_cache[batch_idx] = new_states
 
+    def _solve_chain_gn(self, batch_idx, tracks, ref, log_dedx, parent_ids, max_iter=8):
+        """Gauss-Newton / Levenberg-Marquardt solve on this batch's chain coefficients,
+        with calibration + dEdx held fixed. Intended for the SPLINE basis where each track
+        is only 2K (~6) parameters, so the whole batch's chain vector is small (~6-30) and
+        the exact Hessian (jacfwd o jacrev through the sim) + a direct LM step converge in a
+        handful of iterations — vs thousands of Adam steps. NOT recommended for the angle
+        basis (2*n_chain params/track -> Hessian too large)."""
+        from jax.flatten_util import ravel_pytree
+        states = self._get_or_init_chain_state(batch_idx)
+        coeffs = [s['angles'] for s in states]
+        # Static-size unique + fixed ROI so the loss is jittable (as for the L-BFGS geom block).
+        _usize = self._geom_usize(batch_idx, tracks)
+        _roi = self._batch_padded_roi.get(batch_idx, (256, 256))
+        # pure loss(chain_coeffs_list) with calibration + dEdx fixed (data baked in this closure)
+        loss_fn = self.compute_loss(tracks, batch_idx, *ref, log_dedx=log_dedx, parent_ids=parent_ids,
+                                    chain_angles_per_track=coeffs, return_loss_closure=True,
+                                    unique_size=_usize, roi_override=_roi)
+        flat0, unflat = ravel_pytree(coeffs)
+        n = int(flat0.shape[0])
+
+        def f(x):
+            return loss_fn(unflat(x))
+
+        key = (batch_idx, n)
+        if not hasattr(self, '_chain_gn_vgh'):
+            self._chain_gn_vgh = {}
+        if key not in self._chain_gn_vgh:
+            self._chain_gn_vgh[key] = jax.jit(lambda x: (f(x), jax.grad(f)(x),
+                                                         jax.hessian(f)(x)))
+        vgh = self._chain_gn_vgh[key]
+
+        x = jnp.asarray(flat0, dtype=jnp.float32)
+        loss, g, H = vgh(x)
+        loss = float(loss); g = np.asarray(g); H = np.asarray(H)
+        lam = 1e-2
+        for it in range(max_iter):
+            Hs = 0.5 * (H + H.T)
+            dsc = np.maximum(np.abs(np.diag(Hs)), 1e-9 * max(np.abs(np.diag(Hs)).max(), 1.0))
+            accepted = False
+            for _bt in range(6):
+                try:
+                    step = -np.linalg.solve(Hs + lam * np.diag(dsc), g)
+                except np.linalg.LinAlgError:
+                    lam *= 4.0; continue
+                xt = x + jnp.asarray(step, dtype=jnp.float32)
+                lt, gt, Ht = vgh(xt)
+                lt = float(lt)
+                if np.isfinite(lt) and lt < loss:
+                    x, loss, g, H = xt, lt, np.asarray(gt), np.asarray(Ht)
+                    lam = max(lam / 3.0, 1e-9); accepted = True
+                    break
+                lam *= 4.0
+            if not accepted or np.linalg.norm(step) < 1e-6:
+                break
+        new_coeffs = unflat(x)
+        self._chain_cache[batch_idx] = [{'angles': new_coeffs[ti]} for ti in range(len(coeffs))]
+        return loss
+
     def _compute_pos_residual_batch(self, batch_idx):
         """Mean 3D distance (cm) between current fitted chain positions and true target positions."""
         ctxs           = self._batch_chain_contexts.get(batch_idx, [])
@@ -2949,6 +3007,11 @@ class GradientDescentFitter(ParamFitter):
                             _init = [s['angles'] for s in self._chain_cache[i]]
                             _new = self._solve_geom_block(i, selected_tracks_sim, _ref, _init, self._geom_lbfgs_steps)
                             self._chain_cache[i] = [{'angles': a} for a in _new]
+                        elif self._geom_optimizer == 'gn':
+                            # per-batch Gauss-Newton/LM on the (low-dim, spline) chain coeffs
+                            _ref = (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id)
+                            self._solve_chain_gn(i, selected_tracks_sim, _ref, _log_dedx, _parent_ids,
+                                                 max_iter=self._geom_lbfgs_steps)
                         else:
                             self._process_chain_grads(i, _grads_chain, total_iter)
                         if total_iter % self._pos_residual_freq == 0:
