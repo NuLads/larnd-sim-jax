@@ -2351,6 +2351,24 @@ class GradientDescentFitter(ParamFitter):
         _vg, _cg = self._chain_ggn_fns[key]
 
         x = jnp.asarray(flat0, dtype=jnp.float32)
+
+        if os.environ.get('LARND_GN_TIMING'):
+            import time as _t
+            _fresh = key not in getattr(self, '_gn_timed_keys', set())
+            # value_and_grad: 1st call (compile+exec) vs 2nd (exec only)
+            t0 = _t.time(); l0, g0 = _vg(x); jax.block_until_ready((l0, g0)); t_vg1 = _t.time() - t0
+            t0 = _t.time(); l0, g0 = _vg(x); jax.block_until_ready((l0, g0)); t_vg2 = _t.time() - t0
+            # cg_step: 1st (compile+exec) vs 2nd (exec only)
+            t0 = _t.time(); d0 = _cg(x, g0, jnp.float32(1e-2)); jax.block_until_ready(d0); t_cg1 = _t.time() - t0
+            t0 = _t.time(); d0 = _cg(x, g0, jnp.float32(1e-2)); jax.block_until_ready(d0); t_cg2 = _t.time() - t0
+            logger.info(f"[GN-TIMING] batch {batch_idx} n={n} usize={usize} cg_maxiter={_cg_maxiter} fresh_compile={_fresh}: "
+                        f"vg compile+exec {t_vg1:.1f}s / exec {t_vg2:.2f}s | "
+                        f"cg compile+exec {t_cg1:.1f}s / exec {t_cg2:.2f}s | "
+                        f"vg_compile~{t_vg1-t_vg2:.1f}s cg_compile~{t_cg1-t_cg2:.1f}s")
+            if not hasattr(self, '_gn_timed_keys'):
+                self._gn_timed_keys = set()
+            self._gn_timed_keys.add(key)
+
         loss, g = _vg(x); loss = float(loss)
         lam = 1e-2
         for it in range(max_iter):
