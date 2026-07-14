@@ -2218,13 +2218,22 @@ class GradientDescentFitter(ParamFitter):
         if not hasattr(self, '_chain_gn_vgh'):
             self._chain_gn_vgh = {}
         if key not in self._chain_gn_vgh:
-            self._chain_gn_vgh[key] = jax.jit(lambda x: (f(x), jax.grad(f)(x),
-                                                         jax.hessian(f)(x)))
-        vgh = self._chain_gn_vgh[key]
+            _vg = jax.jit(jax.value_and_grad(f))
+            # Hessian-vector product: one memory-bounded 2nd-order pass per column. jax.hessian
+            # would stack n tangents through the huge FEE tape at once (OOM); assembling the
+            # Hessian column-by-column via HVPs keeps peak memory at a single pass.
+            _hvp = jax.jit(lambda x, v: jax.jvp(jax.grad(f), (x,), (v,))[1])
+            self._chain_gn_vgh[key] = (_vg, _hvp)
+        _vg, _hvp = self._chain_gn_vgh[key]
+
+        def _val_grad_hess(x):
+            lo, gr = _vg(x)
+            eye = np.eye(n, dtype=np.float32)
+            Hc = np.stack([np.asarray(_hvp(x, jnp.asarray(eye[i]))) for i in range(n)], axis=1)
+            return float(lo), np.asarray(gr), Hc
 
         x = jnp.asarray(flat0, dtype=jnp.float32)
-        loss, g, H = vgh(x)
-        loss = float(loss); g = np.asarray(g); H = np.asarray(H)
+        loss, g, H = _val_grad_hess(x)
         lam = 1e-2
         for it in range(max_iter):
             Hs = 0.5 * (H + H.T)
@@ -2236,15 +2245,14 @@ class GradientDescentFitter(ParamFitter):
                 except np.linalg.LinAlgError:
                     lam *= 4.0; continue
                 xt = x + jnp.asarray(step, dtype=jnp.float32)
-                lt, gt, Ht = vgh(xt)
-                lt = float(lt)
+                lt = float(_vg(xt)[0])                      # trial: loss only (cheap)
                 if np.isfinite(lt) and lt < loss:
-                    x, loss, g, H = xt, lt, np.asarray(gt), np.asarray(Ht)
-                    lam = max(lam / 3.0, 1e-9); accepted = True
+                    x = xt; lam = max(lam / 3.0, 1e-9); accepted = True
                     break
                 lam *= 4.0
             if not accepted or np.linalg.norm(step) < 1e-6:
                 break
+            loss, g, H = _val_grad_hess(x)               # refresh grad+Hessian at accepted point
         new_coeffs = unflat(x)
         self._chain_cache[batch_idx] = [{'angles': new_coeffs[ti]} for ti in range(len(coeffs))]
         return loss
