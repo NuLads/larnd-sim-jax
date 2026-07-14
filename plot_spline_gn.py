@@ -35,7 +35,7 @@ gn = load('fit_result/pos_basis/history_iter*_posb_spline_len50_clr3e-3_mcs0.5_k
 adam = load('fit_result/pos_basis/history_iter*_posb_spline_len50_clr3e-3_mcs0.5_knot40.pkl')
 gn_log = sorted(glob.glob('logs/pos_basis/job-31639464.out'))
 
-fig, ax = plt.subplots(1, 3, figsize=(18, 5))
+fig, ax = plt.subplots(2, 2, figsize=(14, 10)); ax = ax.ravel()
 
 # (A) convergence: residual vs iteration (log-x since scales differ hugely)
 if adam is not None:
@@ -66,18 +66,51 @@ if gn_log:
                transform=ax[1].transAxes, ha='center', fontsize=9,
                bbox=dict(boxstyle='round', fc='lightyellow'))
 
-# (C) headline numbers
-ax[2].axis('off')
+# (C) residual vs CUMULATIVE WALL-CLOCK TIME — the real "is GN faster" comparison
+ADAM_S_PER_IT = (22 * 3600 + 26 * 60 + 37 - (18 * 3600 + 11 * 60 + 9)) / 5000.0  # 4h15m / 5000
+if adam is not None:
+    pa = np.asarray(adam['pos_residual_iter'], float) * 1e4
+    w = 40; k = np.ones(w) / w
+    pas = np.convolve(np.r_[[pa[0]] * (w // 2), pa, [pa[-1]] * (w // 2)], k, 'valid')[:len(pa)]
+    t_adam = np.arange(len(pa)) * ADAM_S_PER_IT / 60.0    # minutes
+    ax[2].plot(t_adam, pas, 'C0-', lw=2, label=f'Adam ({ADAM_S_PER_IT:.1f} s/it)')
+    # time Adam first crosses ~60 µm
+    below = np.where(pas < 60)[0]
+    if len(below):
+        ax[2].plot(t_adam[below[0]], pas[below[0]], 'C0*', ms=16)
+        ax[2].annotate(f'{t_adam[below[0]]:.0f} min', (t_adam[below[0]], 60), color='C0', fontsize=10)
+if gn is not None and gn_log:
+    dts = iter_dts(gn_log[0])
+    cum = np.concatenate([[0], np.cumsum(dts)]) / 60.0     # minutes, per iter (0..N)
+    pg = np.asarray(gn['pos_residual_iter'], float) * 1e4  # every 5 iters
+    gi = np.arange(len(pg)) * 5
+    gi = np.clip(gi, 0, len(cum) - 1)
+    ax[2].plot(cum[gi], pg, 'C1o-', lw=2, ms=5, label='GN/GGN (1 epoch)')
+    below = np.where(pg < 60)[0]
+    if len(below):
+        ax[2].plot(cum[gi[below[0]]], pg[below[0]], 'C1*', ms=16)
+        ax[2].annotate(f'{cum[gi[below[0]]]:.0f} min', (cum[gi[below[0]]], 60), color='C1', fontsize=10)
+ax[2].axhline(56, color='0.6', ls='--', lw=1)
+ax[2].set_xlabel('cumulative wall-clock time [min]'); ax[2].set_ylabel('mean position residual [µm]')
+ax[2].set_title('(C) residual vs REAL time — Adam wins wall-clock at 50cm (honest)')
+ax[2].set_ylim(0, 400); ax[2].set_xlim(-2, 90); ax[2].legend(); ax[2].grid(alpha=0.3)
+
+# (D) headline numbers
+ax[3].axis('off')
 txt = ("Spline GN (data-as-args) — 50 cm position-only\n\n"
-       f"• per-batch: ~7 min (compile storm) → ~35 s (shared)\n"
-       f"• residual: 1051 µm → 56 µm (= Adam floor)\n"
-       f"• convergence: 1 epoch vs Adam's thousands of iters\n"
-       f"• matrix-free GGN + CG (no OOM, PSD)\n"
-       f"• padded segments = zero-charge → loss-neutral\n\n"
-       "Verdict: GN is practical on the spline basis.")
-ax[2].text(0.03, 0.7, txt, fontsize=12, va='top', family='monospace',
+       f"WORKS: 1051 µm → 56 µm (= Adam floor), matrix-free\n"
+       f"  GGN+CG, no OOM, PSD; converges in 1 EPOCH\n"
+       f"  (vs Adam's ~400 iters).\n\n"
+       f"WALL-CLOCK (honest): Adam ~20 min < GN ~42 min\n"
+       f"  GN uses far fewer iters but each costs ~42 s\n"
+       f"  (~20 min one-time compile + global-max exec).\n\n"
+       f"WHERE GN WINS: 400 cm, where Adam does NOT\n"
+       f"  converge in 8000 iters; + exact min & H⁻¹ cov.\n"
+       f"CLOSABLE: precompute usize/nhits (1 compile) +\n"
+       f"  size-bucket exec → ~6 min/epoch.")
+ax[3].text(0.03, 0.7, txt, fontsize=12, va='top', family='monospace',
            bbox=dict(boxstyle='round', fc='#eef', ec='0.6'))
-fig.suptitle('Spline Gauss-Newton position fit — demonstration it works', fontsize=14)
+fig.suptitle('Spline Gauss-Newton position fit: works + honest wall-clock', fontsize=14)
 fig.tight_layout()
 fig.savefig('plots/spline_gn_demo.png', dpi=130)
 print('[saved] plots/spline_gn_demo.png')
