@@ -33,7 +33,7 @@ def iter_dts(logfile):
 # GN (data-as-args shared) and Adam spline runs, 50cm position-only
 gn = load('fit_result/pos_basis/history_iter*_posb_spline_len50_clr3e-3_mcs0.5_knot40_geomggn.pkl')
 adam = load('fit_result/pos_basis/history_iter*_posb_spline_len50_clr3e-3_mcs0.5_knot40.pkl')
-gn_log = sorted(glob.glob('logs/pos_basis/job-31639464.out'))
+gn_log = sorted(glob.glob('logs/pos_basis/job-31665611.out'))
 
 fig, ax = plt.subplots(2, 2, figsize=(14, 10)); ax = ax.ravel()
 
@@ -97,17 +97,17 @@ ax[2].set_ylim(0, 400); ax[2].set_xlim(-2, 90); ax[2].legend(); ax[2].grid(alpha
 
 # (D) headline numbers
 ax[3].axis('off')
-txt = ("Spline GN (data-as-args) — 50 cm position-only\n\n"
-       f"WORKS: 1051 µm → 56 µm (= Adam floor), matrix-free\n"
-       f"  GGN+CG, no OOM, PSD; converges in 1 EPOCH\n"
+txt = ("Spline GN (data-as-args, OPTIMIZED) — 50 cm\n\n"
+       f"WORKS: 1163 µm → 40 µm (below Adam floor),\n"
+       f"  matrix-free GGN+CG, no OOM, PSD; 1 EPOCH\n"
        f"  (vs Adam's ~400 iters).\n\n"
-       f"WALL-CLOCK (honest): Adam ~20 min < GN ~42 min\n"
-       f"  GN uses far fewer iters but each costs ~42 s\n"
-       f"  (~20 min one-time compile + global-max exec).\n\n"
-       f"WHERE GN WINS: 400 cm, where Adam does NOT\n"
-       f"  converge in 8000 iters; + exact min & H⁻¹ cov.\n"
-       f"CLOSABLE: precompute usize/nhits (1 compile) +\n"
-       f"  size-bucket exec → ~6 min/epoch.")
+       f"OPTIMIZED: usize/nhits precomputed → ONE compile\n"
+       f"  (was 3-5); GNSTEPS 6→4 → 42 s → 35 s/batch.\n\n"
+       f"WALL-CLOCK (honest): Adam ~20 min < GN ~34 min\n"
+       f"  GN needs ~10x fewer iters, each ~35 s incl.\n"
+       f"  ~4 min one-time compile. Still Adam-favoured @50cm.\n\n"
+       f"WHERE GN WINS: 400 cm — Adam does NOT converge\n"
+       f"  in 8000 iters; + exact min & H⁻¹ covariance.")
 ax[3].text(0.03, 0.7, txt, fontsize=12, va='top', family='monospace',
            bbox=dict(boxstyle='round', fc='#eef', ec='0.6'))
 fig.suptitle('Spline Gauss-Newton position fit: works + honest wall-clock', fontsize=14)
