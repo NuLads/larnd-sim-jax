@@ -2337,8 +2337,10 @@ class GradientDescentFitter(ParamFitter):
             self._ggn_geom = dict(T=Tm, nc=ncm, K=Km, Nseg=Nm, rs=rs, rl=rl, usg=usg)
         gs = self._ggn_geom
         Tm, ncm, Km, Nm, roig, usg = gs['T'], gs['nc'], gs['K'], gs['Nseg'], (gs['rs'], gs['rl']), gs['usg']
-        # nhits: coarse 512-bucket + running-max -> few distinct values (usually 1-2 compiles total)
-        nhits = int(((int(np.asarray(ref[0]).shape[0]) + 511) // 512) * 512)
+        # nhits: round to next POWER OF 2 (>=512) + running-max -> log-few distinct values even
+        # across the wide 400cm range (512-fixed buckets gave 14 recompiles there).
+        _nh0 = int(np.asarray(ref[0]).shape[0])
+        nhits = 1 << max(9, (max(_nh0, 1) - 1).bit_length())
         if not hasattr(self, '_ggn_rmax'):
             self._ggn_rmax = dict(nh=0)
         self._ggn_rmax['nh'] = max(self._ggn_rmax['nh'], nhits)
