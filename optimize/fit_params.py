@@ -2334,7 +2334,7 @@ class GradientDescentFitter(ParamFitter):
             return loss_fn(unflat(xflat))
 
         _cg_maxiter = int(min(max(20, n // 4), 60))   # CG iters ~ effective rank, capped
-        _precond = os.environ.get('LARND_GN_PRECOND', '1') != '0'
+        _precond = os.environ.get('LARND_GN_PRECOND', '0') == '1'
         _hutch_k = 6                                    # Hutchinson probes for diag(F)
 
         def cg_step(xflat, gflat, lam):
