@@ -761,6 +761,7 @@ class ParamFitter:
 
         if use_physical_params:
             def loss_wrapper(physical_params):
+                physical_params = self._apply_linked_diffusion(physical_params)
                 prediction = self.sim_strategy.predict(physical_params, tracks, self.sim_track_fields, rngkey)
                 return self.loss_strategy.compute(physical_params, prediction, target_data)
 
