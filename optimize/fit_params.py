@@ -2265,23 +2265,26 @@ class GradientDescentFitter(ParamFitter):
                 'dx': fld.index('dx')}
 
     def _solve_chain_ggn(self, batch_idx, tracks, ref, log_dedx, parent_ids, max_iter=6):
-        """FIRST-ORDER Gauss-Newton (Fisher/GGN) solve on the spline chain coefficients.
+        """Matrix-free FIRST-ORDER Gauss-Newton (Fisher/GGN) solve on the chain parameters,
+        for BOTH the spline coefficients AND the high-dim segment (angle) chain.
 
         The llhd loss is a marked Poisson point process, so its Fisher is
             F = sum_c exp(z_c) Jz[c] Jz[c]^T  +  sum_c exp(z_c)/sigma^2 Jq[c] Jq[c]^T
-        with z = log-intensity field, q = expected charge, Jz/Jq = d(field)/d(coeffs).
-        Only FIRST-order jacfwd is needed (n forward passes, no 2nd-order tape) -> compiles
-        like a gradient and is ~5-25x cheaper than the exact-Hessian HVP version. The MCS
-        prior (quadratic in coeffs) adds a small analytic Hessian. PSD by construction.
-        Spline basis only. dEdx + calibration held fixed."""
+        with z = log-intensity field, q = expected charge. The damped normal equations
+        (F + lambda I) dtheta = -g are solved MATRIX-FREE with conjugate gradient, where each
+        CG iteration is one GGN-vector product = one jvp + one vjp through the sim (first
+        order, no 2nd-order tape, no materialized Jacobian). CG converges in ~(number of
+        data-constrained modes) iterations, NOT in n -> works even for the segment basis
+        (n = 2*n_chain per track, hundreds of params) where assembling the n x n Fisher is
+        impossible. dEdx + calibration held fixed; PSD by construction."""
         from jax.flatten_util import ravel_pytree
         from larndsim.sim_jax import simulate_wfs as _sim_wfs
         states = self._get_or_init_chain_state(batch_idx)
         coeffs = [s['angles'] for s in states]
         meta = self._batch_chain_meta.get(batch_idx)
-        if meta is None or meta.get('basis') != 'spline':
-            # fall back to exact-Hessian solve if not spline
-            return self._solve_chain_gn(batch_idx, tracks, ref, log_dedx, parent_ids, max_iter)
+        if meta is None:
+            return  # nothing to solve
+        basis = meta.get('basis', 'angle')
         col_map = self._chain_col_map()
         # ref_params keeps the readout-noise fields (nonzero even under --no-noise, which the
         # marginalized FEE needs for 1/sigma); overwrite only the calibration params with the
@@ -2301,7 +2304,10 @@ class GradientDescentFitter(ParamFitter):
 
         def fields(xflat):
             cl = unflat(xflat)
-            t, _ = _chain_warp_spline(tracks, cl, meta, col_map)
+            if basis == 'spline':
+                t, _ = _chain_warp_spline(tracks, cl, meta, col_map)
+            else:
+                t, _, _ = _chain_warp_vectorized(tracks, cl, meta, col_map)
             if log_dedx is not None and parent_ids is not None:
                 safe = jnp.clip(parent_ids, 0, log_dedx.shape[0] - 1)
                 dd = jnp.where(parent_ids >= 0, jnp.maximum(jnp.exp(jnp.take(log_dedx, safe)), 1e-3), t[:, dedx_idx])
@@ -2313,8 +2319,7 @@ class GradientDescentFitter(ParamFitter):
 
         def ggn_vp(xflat, v):
             # matrix-free Fisher/GGN-vector product: F v = Jz^T (w . Jz v) + Jq^T (w/sig^2 . Jq v),
-            # via jvp (Jz v, Jq v) then vjp (Jz^T .). Never materializes the huge field Jacobian
-            # (the explicit jacfwd form OOM'd at 400cm: 224GB). First-order, memory-bounded.
+            # via jvp (Jz v, Jq v) then vjp (Jz^T .). Never materializes the field Jacobian.
             (z, q), (Jzv, Jqv) = jax.jvp(fields, (xflat,), (v,))
             w = jax.lax.stop_gradient(jnp.exp(z))
             _, vjp_fn = jax.vjp(fields, xflat)
@@ -2328,38 +2333,38 @@ class GradientDescentFitter(ParamFitter):
         def f(xflat):
             return loss_fn(unflat(xflat))
 
-        key = (batch_idx, n, 'ggn')
+        _cg_maxiter = int(min(max(20, n // 4), 60))   # CG iters ~ effective rank, capped
+
+        def cg_step(xflat, gflat, lam):
+            # solve (F + lam I) dtheta = -g, matrix-free, entirely on-device (jitted CG)
+            def A(v):
+                return ggn_vp(xflat, v) + lam * v
+            dx, _ = jax.scipy.sparse.linalg.cg(A, -gflat, tol=1e-4, maxiter=_cg_maxiter)
+            return dx
+
+        key = (batch_idx, n, 'ggn_cg')
         if not hasattr(self, '_chain_ggn_fns'):
             self._chain_ggn_fns = {}
         if key not in self._chain_ggn_fns:
-            self._chain_ggn_fns[key] = (jax.jit(jax.value_and_grad(f)), jax.jit(ggn_vp))
-        _vg, _ggnvp = self._chain_ggn_fns[key]
-
-        _eye = [jnp.asarray(e, dtype=jnp.float32) for e in np.eye(n, dtype=np.float32)]
-
-        def _assemble_F(x):
-            # n first-order GGN-vps, one column at a time (peak memory = one jvp+vjp pass)
-            return np.stack([np.asarray(_ggnvp(x, _eye[i])) for i in range(n)], axis=1)
+            self._chain_ggn_fns[key] = (jax.jit(jax.value_and_grad(f)),
+                                        jax.jit(cg_step, static_argnums=()))
+        _vg, _cg = self._chain_ggn_fns[key]
 
         x = jnp.asarray(flat0, dtype=jnp.float32)
-        loss, g = _vg(x); loss = float(loss); g = np.asarray(g)
-        lam = 1e-3
+        loss, g = _vg(x); loss = float(loss)
+        lam = 1e-2
         for it in range(max_iter):
-            F = _assemble_F(x)
-            dsc = np.maximum(np.abs(np.diag(F)), 1e-9 * max(np.abs(np.diag(F)).max(), 1.0))
             accepted = False
             for _bt in range(6):
-                try:
-                    step = -np.linalg.solve(F + lam * np.diag(dsc), g)
-                except np.linalg.LinAlgError:
-                    lam *= 4.0; continue
-                xt = x + jnp.asarray(step, dtype=jnp.float32)
+                dx = _cg(x, g, jnp.float32(lam))
+                xt = x + dx
                 lt, gt = _vg(xt); lt = float(lt)
+                snorm = float(jnp.linalg.norm(dx))
                 if np.isfinite(lt) and lt < loss:
-                    x, loss, g = xt, lt, np.asarray(gt); lam = max(lam / 3.0, 1e-9); accepted = True
+                    x, loss, g = xt, lt, gt; lam = max(lam / 3.0, 1e-9); accepted = True
                     break
                 lam *= 4.0
-            if not accepted or np.linalg.norm(step) < 1e-6:
+            if not accepted or snorm < 1e-6:
                 break
         nc2 = unflat(x)
         self._chain_cache[batch_idx] = [{'angles': nc2[ti]} for ti in range(len(coeffs))]
