@@ -2311,12 +2311,15 @@ class GradientDescentFitter(ParamFitter):
                                              unique_size=usize, roi_override=roi)
             return pred['hit_prob'], adc2charge(pred['adcs_distrib'], phys)
 
-        def fisher(xflat):
-            z, _ = fields(xflat)
-            Jz, Jq = jax.jacfwd(fields)(xflat)
-            w = jnp.exp(jax.lax.stop_gradient(z)).reshape(-1)
-            Jz2 = Jz.reshape(-1, n); Jq2 = Jq.reshape(-1, n)
-            return Jz2.T @ (w[:, None] * Jz2) + Jq2.T @ ((w / sigma ** 2)[:, None] * Jq2)
+        def ggn_vp(xflat, v):
+            # matrix-free Fisher/GGN-vector product: F v = Jz^T (w . Jz v) + Jq^T (w/sig^2 . Jq v),
+            # via jvp (Jz v, Jq v) then vjp (Jz^T .). Never materializes the huge field Jacobian
+            # (the explicit jacfwd form OOM'd at 400cm: 224GB). First-order, memory-bounded.
+            (z, q), (Jzv, Jqv) = jax.jvp(fields, (xflat,), (v,))
+            w = jax.lax.stop_gradient(jnp.exp(z))
+            _, vjp_fn = jax.vjp(fields, xflat)
+            (gv,) = vjp_fn((w * Jzv, (w / sigma ** 2) * Jqv))
+            return gv
 
         # full-loss value+grad (data + MCS prior) via the existing closure
         loss_fn = self.compute_loss(tracks, batch_idx, *ref, log_dedx=log_dedx, parent_ids=parent_ids,
@@ -2329,14 +2332,20 @@ class GradientDescentFitter(ParamFitter):
         if not hasattr(self, '_chain_ggn_fns'):
             self._chain_ggn_fns = {}
         if key not in self._chain_ggn_fns:
-            self._chain_ggn_fns[key] = (jax.jit(jax.value_and_grad(f)), jax.jit(fisher))
-        _vg, _fish = self._chain_ggn_fns[key]
+            self._chain_ggn_fns[key] = (jax.jit(jax.value_and_grad(f)), jax.jit(ggn_vp))
+        _vg, _ggnvp = self._chain_ggn_fns[key]
+
+        _eye = [jnp.asarray(e, dtype=jnp.float32) for e in np.eye(n, dtype=np.float32)]
+
+        def _assemble_F(x):
+            # n first-order GGN-vps, one column at a time (peak memory = one jvp+vjp pass)
+            return np.stack([np.asarray(_ggnvp(x, _eye[i])) for i in range(n)], axis=1)
 
         x = jnp.asarray(flat0, dtype=jnp.float32)
         loss, g = _vg(x); loss = float(loss); g = np.asarray(g)
         lam = 1e-3
         for it in range(max_iter):
-            F = np.asarray(_fish(x))
+            F = _assemble_F(x)
             dsc = np.maximum(np.abs(np.diag(F)), 1e-9 * max(np.abs(np.diag(F)).max(), 1.0))
             accepted = False
             for _bt in range(6):
