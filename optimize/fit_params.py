@@ -2315,7 +2315,7 @@ class GradientDescentFitter(ParamFitter):
         # precompute_static_pixels) so batch 0 already uses the final shape -> one shared compile
         # (a running max would keep growing across varied batches and recompile through epoch 1).
         if not hasattr(self, '_ggn_geom'):
-            Tm = ncm = Km = Nm = rs = rl = 0
+            Tm = ncm = Km = Nm = rs = rl = usg0 = 0
             for i, ctxs in self._batch_chain_contexts.items():
                 if not ctxs:
                     continue
@@ -2323,19 +2323,20 @@ class GradientDescentFitter(ParamFitter):
                 Km = max(Km, max(_spline_K(c.total_len, self._chain_spline_knot_cm) for c in ctxs))
                 Nm = max(Nm, sum(int(np.asarray(c.idxs).shape[0]) for c in ctxs))
                 r = self._batch_padded_roi.get(i, (256, 256)); rs = max(rs, int(r[0])); rl = max(rl, int(r[1]))
-            self._ggn_geom = dict(T=Tm, nc=ncm, K=Km, Nseg=Nm, rs=rs, rl=rl)
+                fp = self._batch_fixed_pixels.get(i)
+                if fp is not None:
+                    usg0 = max(usg0, int(fp.shape[0]))
+            # global static unique size (+256 headroom for geometry moving tracks to new pixels)
+            usg = int(((usg0 + 256 + 127) // 128) * 128) if usg0 else 768
+            self._ggn_geom = dict(T=Tm, nc=ncm, K=Km, Nseg=Nm, rs=rs, rl=rl, usg=usg)
         gs = self._ggn_geom
-        Tm, ncm, Km, Nm, roig = gs['T'], gs['nc'], gs['K'], gs['Nseg'], (gs['rs'], gs['rl'])
-        # usize (128-mult) and nhits (256-mult) still per-batch: round + running-max so they
-        # stabilise within a couple of batches (few bucketed values).
-        _, _up = _sim_wfs(self.ref_params, self.sim_strategy.response, tracks, self.sim_track_fields)
-        usize = int(((int(_up.shape[0]) + 127) // 128) * 128)
+        Tm, ncm, Km, Nm, roig, usg = gs['T'], gs['nc'], gs['K'], gs['Nseg'], (gs['rs'], gs['rl']), gs['usg']
+        # nhits (256-mult) still per-batch: round + running-max (few bucketed values, stabilises fast)
         nhits = int(((int(np.asarray(ref[0]).shape[0]) + 255) // 256) * 256)
         if not hasattr(self, '_ggn_rmax'):
-            self._ggn_rmax = dict(usize=0, nh=0)
-        self._ggn_rmax['usize'] = max(self._ggn_rmax['usize'], usize)
+            self._ggn_rmax = dict(nh=0)
         self._ggn_rmax['nh'] = max(self._ggn_rmax['nh'], nhits)
-        usg, nhm = self._ggn_rmax['usize'], self._ggn_rmax['nh']
+        nhm = self._ggn_rmax['nh']
 
         # pad: tracks (+1 guaranteed zero-charge row for padded segments), coeffs, meta, target
         zero_row = int(tracks.shape[0])
