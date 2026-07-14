@@ -738,6 +738,10 @@ class ParamFitter:
         self._chain_momentum_GeV = float(chain_momentum_GeV)
         self._chain_basis = str(chain_basis)              # 'angle' | 'spline'
         self._chain_spline_knot_cm = float(chain_spline_knot_cm)
+        # Diffusion-annealing (less-local loss): guess-diffusion WIDTH starts at this factor and
+        # anneals to 1 over N iterations. env-driven for quick experimentation.
+        self._diff_anneal_start = float(os.environ.get('LARND_DIFF_ANNEAL_START', '1.0'))
+        self._diff_anneal_iters = int(os.environ.get('LARND_DIFF_ANNEAL_ITERS', '0'))
         self._batch_chain_contexts: dict = {}
         self._batch_chain_meta: dict = {}   # cached vectorized-warp metadata per batch
         self._batch_fixed_pixels = {}
@@ -1573,7 +1577,7 @@ class ParamFitter:
         with open(f'fit_result/{self.test_name}/history_iter{self.total_iter}_{self.out_label}.pkl', "wb") as f_history:
             pickle.dump(self.training_history, f_history)
 
-    def compute_loss(self, tracks, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=False, epoch=0, use_physical_params=False, log_dedx=None, parent_ids=None, chain_angles_per_track=None, return_loss_closure=False, unique_size=None, roi_override=None):
+    def compute_loss(self, tracks, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, with_hess=False, epoch=0, use_physical_params=False, log_dedx=None, parent_ids=None, chain_angles_per_track=None, return_loss_closure=False, unique_size=None, roi_override=None, diff_scale=1.0):
         """Compute the simulation loss and (optionally) gradients.
 
         When ``log_dedx`` and ``parent_ids`` are provided the function jointly
@@ -1726,6 +1730,15 @@ class ParamFitter:
                         for key in self.relevant_params_list
                     }
                 physical_params = self.ref_params.replace(**new_phys)
+
+                # LESS-LOCAL LOSS via diffusion annealing: inflate the guess diffusion so charge
+                # spreads over more pixels -> predicted & target intensities overlap even when the
+                # track is off -> long-range position gradient (widens the capture basin). diff_scale
+                # is a param-space factor (width ~ sqrt(param)), annealed 1 over iterations.
+                if diff_scale != 1.0:
+                    physical_params = physical_params.replace(
+                        long_diff=physical_params.long_diff * diff_scale,
+                        tran_diff=physical_params.tran_diff * diff_scale)
 
                 # Optionally warp track geometry using per-track chain angles.
                 # Each track's segments are repositioned by interpolating along the
@@ -3320,8 +3333,16 @@ class GradientDescentFitter(ParamFitter):
                     if self.fit_dedx and not _use_dedx and total_iter == 0:
                         logger.info(f"dEdx fitting deferred: will activate at iteration {self.dedx_start_iter}")
 
+                    # Diffusion-annealing schedule (less-local loss): width factor decays start->1
+                    # over diff_anneal_iters; param-space scale = factor**2 (width ~ sqrt(param)).
+                    _diff_scale = 1.0
+                    if getattr(self, '_diff_anneal_start', 1.0) > 1.0 and total_iter < getattr(self, '_diff_anneal_iters', 0):
+                        _frac = 1.0 - total_iter / float(self._diff_anneal_iters)
+                        _wf = 1.0 + (self._diff_anneal_start - 1.0) * _frac
+                        _diff_scale = _wf * _wf
+
                     # loss
-                    loss_val, grads, _grads_dedx, _grads_chain, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True, log_dedx=_log_dedx, parent_ids=_parent_ids, chain_angles_per_track=_chain_angles_pt)
+                    loss_val, grads, _grads_dedx, _grads_chain, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True, log_dedx=_log_dedx, parent_ids=_parent_ids, chain_angles_per_track=_chain_angles_pt, diff_scale=_diff_scale)
 
                     # Apply per-segment dEdx gradient immediately after every step.
                     if _grads_dedx is not None and _log_dedx is not None and not _dedx_frozen:
