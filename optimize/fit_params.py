@@ -281,6 +281,44 @@ def _build_chain_meta_spline(ctxs, knot_cm):
     }
 
 
+def _pad_spline_meta(meta, Tm, ncm, Km, Nm, zero_row):
+    """Pad a spline chain meta to fixed global-max dims (Tm tracks, ncm nodes, Km modes,
+    Nm segments) so every batch presents ONE jit signature -> the compiled cg_step is shared
+    across all batches (data-as-args). Padded per-track slots are harmless (no real segment
+    references them); padded segments point to `zero_row` (a zero-charge track row) so they
+    deposit nothing and are loss-neutral."""
+    T = meta['T']; nc = meta['max_nc']; K = meta['max_K']; Ns = int(meta['seg_rows'].shape[0])
+    def pT(a, val=0.0):
+        return jnp.pad(a, [(0, Tm - T)] + [(0, 0)] * (a.ndim - 1), constant_values=val)
+    def pS(a, val=0):
+        return jnp.pad(a, [(0, Nm - Ns)], constant_values=val)
+    return {
+        'basis': 'spline', 'T': Tm, 'max_nc': ncm, 'max_K': Km,
+        'ncs_np': np.pad(meta['ncs_np'], (0, Tm - T), constant_values=1),
+        'ncs': pT(meta['ncs'], 1),
+        'Ks_np': np.pad(meta['Ks_np'], (0, Tm - T), constant_values=K),
+        'nominal': jnp.pad(meta['nominal'], [(0, Tm - T), (0, ncm - nc), (0, 0)]),
+        'Bmat': jnp.pad(meta['Bmat'], [(0, Tm - T), (0, ncm - nc), (0, Km - K)]),
+        'e1': pT(meta['e1']), 'e2': pT(meta['e2']),
+        'step': pT(meta['step'], 1.0), 'sigma': pT(meta['sigma'], 1.0),
+        'seg_rows': pS(meta['seg_rows'], zero_row), 'seg_track': pS(meta['seg_track'], 0),
+        'seg_am': pS(meta['seg_am'], 0.0), 'seg_as': pS(meta['seg_as'], 0.0), 'seg_ae': pS(meta['seg_ae'], 0.0),
+    }
+
+
+def _pad_spline_coeffs(coeffs, Tm, Km):
+    """Pad the per-track spline coeffs list to Tm tracks x 2Km (matching _pad_spline_meta).
+    The warp reads c[:K] and c[K:2K] per track (Ks_np[ti]=K), so end-padding is transparent."""
+    out = []
+    for c in coeffs:
+        K = c.shape[0] // 2
+        out.append(jnp.concatenate([c[:K], jnp.zeros(Km - K, c.dtype),
+                                    c[K:2 * K], jnp.zeros(Km - K, c.dtype)]))
+    for _ in range(Tm - len(coeffs)):
+        out.append(jnp.zeros(2 * Km, dtype=jnp.float32))
+    return out
+
+
 def _chain_warp_spline(t, coeffs_pt, meta, col_map):
     """Warp via smooth transverse displacement. coeffs_pt[ti] is a flat (2K,) vector
     [beta_e1 (K), beta_e2 (K)]. dx is FROZEN (not written) -> energy decoupled."""
@@ -2264,6 +2302,117 @@ class GradientDescentFitter(ParamFitter):
                 'xe': fld.index('x_end'), 'ye': fld.index('y_end'), 'ze': fld.index('z_end'),
                 'dx': fld.index('dx')}
 
+    def _solve_chain_ggn_shared(self, batch_idx, tracks, ref, log_dedx, parent_ids, meta, coeffs, col_map, max_iter):
+        """Data-as-args spline GGN solve: pad every batch to the running global-max shape and
+        pass tracks/target/meta/coeffs as TRACED args, so all batches reuse ONE compiled
+        cg_step/vg (the spline is ~99% compile-bound; kills the per-batch compile storm)."""
+        from jax.flatten_util import ravel_pytree
+        from larndsim.sim_jax import simulate_wfs as _sim_wfs
+        sigma = self.loss_strategy.sigma_charge / 1000.0
+        phys = self.ref_params.replace(**{k: getattr(self.current_params, k) for k in self.relevant_params_list})
+
+        # this batch's dims
+        T = meta['T']; nc = meta['max_nc']; K = meta['max_K']; Nseg = int(meta['seg_rows'].shape[0])
+        _, _up = _sim_wfs(self.ref_params, self.sim_strategy.response, tracks, self.sim_track_fields)
+        usize = int(((int(_up.shape[0]) + 127) // 128) * 128)
+        roi = self._batch_padded_roi.get(batch_idx, (256, 256))
+        nhits = int(np.asarray(ref[0]).shape[0])
+        # running global max (grows a few times in epoch 1, then stable -> shared compile)
+        if not hasattr(self, '_ggn_rmax'):
+            self._ggn_rmax = dict(T=0, nc=0, K=0, Nseg=0, usize=0, rs=0, rl=0, nh=0)
+        m = self._ggn_rmax
+        for k, v in [('T', T), ('nc', nc), ('K', K), ('Nseg', Nseg), ('usize', usize),
+                     ('rs', int(roi[0])), ('rl', int(roi[1])), ('nh', nhits)]:
+            m[k] = max(m[k], v)
+        Tm, ncm, Km, Nm = m['T'], m['nc'], m['K'], m['Nseg']
+        usg, roig, nhm = m['usize'], (m['rs'], m['rl']), m['nh']
+
+        # pad: tracks (+1 guaranteed zero-charge row for padded segments), coeffs, meta, target
+        zero_row = int(tracks.shape[0])
+        tracks_p = jnp.concatenate([tracks, jnp.zeros((1, tracks.shape[1]), tracks.dtype)], axis=0)
+        meta_p = _pad_spline_meta(meta, Tm, ncm, Km, Nm, zero_row)
+        coeffs_p = _pad_spline_coeffs(coeffs, Tm, Km)
+        tkeys = ['adcs', 'pixel_x', 'pixel_y', 'pixel_z', 'ticks', 'hit_prob', 'event', 'pixel_id']
+        def _padh(a, val):
+            a = jnp.asarray(a)
+            return jnp.pad(a, [(0, nhm - a.shape[0])] + [(0, 0)] * (a.ndim - 1), constant_values=val)
+        target_p = tuple(_padh(r, -1 if k == 'pixel_id' else 0) for k, r in zip(tkeys, ref))
+
+        marr_keys = ['ncs', 'nominal', 'Bmat', 'e1', 'e2', 'step', 'sigma',
+                     'seg_rows', 'seg_track', 'seg_am', 'seg_as', 'seg_ae']
+        meta_static = {'basis': 'spline', 'T': Tm, 'max_nc': ncm, 'max_K': Km,
+                       'ncs_np': meta_p['ncs_np'], 'Ks_np': meta_p['Ks_np']}
+        meta_arr = tuple(meta_p[k] for k in marr_keys)
+        flat0, unflat = ravel_pytree(coeffs_p)
+
+        def _meta_full(marr):
+            d = dict(meta_static); d.update({k: marr[i] for i, k in enumerate(marr_keys)}); return d
+
+        def fields(xflat, tracks_in, marr):
+            t, _ = _chain_warp_spline(tracks_in, unflat(xflat), _meta_full(marr), col_map)
+            pred = self.sim_strategy.predict(phys, t, self.sim_track_fields, None,
+                                             unique_size=usg, roi_override=roig)
+            return pred['hit_prob'], adc2charge(pred['adcs_distrib'], phys)
+
+        def ggn_vp(xflat, v, tracks_in, marr):
+            ff = lambda xx: fields(xx, tracks_in, marr)
+            (z, q), (Jzv, Jqv) = jax.jvp(ff, (xflat,), (v,))
+            w = jax.lax.stop_gradient(jnp.exp(z))
+            _, vjp_fn = jax.vjp(ff, xflat)
+            (gv,) = vjp_fn((w * Jzv, (w / sigma ** 2) * Jqv))
+            return gv
+
+        # loss closure (data + MCS prior) reused across batches via data_over override
+        if not hasattr(self, '_ggn_shared_lossfn'):
+            self._ggn_shared_lossfn = self.compute_loss(
+                tracks_p, batch_idx, *ref, log_dedx=log_dedx, parent_ids=parent_ids,
+                chain_angles_per_track=coeffs, return_loss_closure=True, unique_size=usg, roi_override=roig)
+        loss_fn = self._ggn_shared_lossfn
+        def f(xflat, tracks_in, target_in, marr):
+            td = {k: target_in[i] for i, k in enumerate(tkeys)}
+            return loss_fn(unflat(xflat), data_over={'tracks': tracks_in, 'target': td, 'meta': _meta_full(marr)})
+
+        npad = int(flat0.shape[0])
+        _cg_maxiter = int(min(max(20, npad // 4), 60))
+        def cg_step(xflat, gflat, lam, tracks_in, marr):
+            def A(v):
+                return ggn_vp(xflat, v, tracks_in, marr) + lam * v
+            dx, _ = jax.scipy.sparse.linalg.cg(A, -gflat, tol=1e-4, maxiter=_cg_maxiter)
+            return dx
+
+        key = (Tm, ncm, Km, Nm, usg, roig, nhm)          # constant once max stabilises -> shared
+        if not hasattr(self, '_ggn_shared_fns'):
+            self._ggn_shared_fns = {}
+        if key not in self._ggn_shared_fns:
+            self._ggn_shared_fns = {key: (jax.jit(jax.value_and_grad(f)), jax.jit(cg_step))}  # drop stale
+        _vg, _cg = self._ggn_shared_fns[key]
+
+        x = jnp.asarray(flat0, dtype=jnp.float32)
+        loss, g = _vg(x, tracks_p, target_p, meta_arr); loss = float(loss)
+        lam = 1e-2
+        for it in range(max_iter):
+            accepted = False
+            for _bt in range(6):
+                dx = _cg(x, g, jnp.float32(lam), tracks_p, meta_arr)
+                xt = x + dx
+                lt, gt = _vg(xt, tracks_p, target_p, meta_arr); lt = float(lt)
+                snorm = float(jnp.linalg.norm(dx))
+                if np.isfinite(lt) and lt < loss:
+                    x, loss, g = xt, lt, gt; lam = max(lam / 3.0, 1e-9); accepted = True
+                    break
+                lam *= 4.0
+            if not accepted or snorm < 1e-6:
+                break
+        # unpad: recover each real track's 2K coeffs from the padded (2Km) layout
+        padded = unflat(x)
+        new = []
+        for ti, c in enumerate(coeffs):
+            Kt = c.shape[0] // 2
+            pc = padded[ti]
+            new.append(jnp.concatenate([pc[:Kt], pc[Km:Km + Kt]]))
+        self._chain_cache[batch_idx] = [{'angles': new[ti]} for ti in range(len(coeffs))]
+        return float(loss)
+
     def _solve_chain_ggn(self, batch_idx, tracks, ref, log_dedx, parent_ids, max_iter=6):
         """Matrix-free FIRST-ORDER Gauss-Newton (Fisher/GGN) solve on the chain parameters,
         for BOTH the spline coefficients AND the high-dim segment (angle) chain.
@@ -2286,6 +2435,12 @@ class GradientDescentFitter(ParamFitter):
             return  # nothing to solve
         basis = meta.get('basis', 'angle')
         col_map = self._chain_col_map()
+        # Spline: use the shared-jit (data-as-args) path so all batches reuse ONE compiled
+        # cg_step (spline is 99% compile-bound; execution is 2-21s). Angle keeps the per-batch
+        # path (n too varied to share usefully).
+        if basis == 'spline' and os.environ.get('LARND_GN_SHARED', '1') == '1':
+            return self._solve_chain_ggn_shared(batch_idx, tracks, ref, log_dedx, parent_ids,
+                                                meta, coeffs, col_map, max_iter)
         # ref_params keeps the readout-noise fields (nonzero even under --no-noise, which the
         # marginalized FEE needs for 1/sigma); overwrite only the calibration params with the
         # current values (mirrors loss_wrapper_combined). Using current_params directly would
