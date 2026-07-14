@@ -46,6 +46,14 @@ case ${GNMODE} in
     FIT_TYPE=gn_calib; ITERS=1;    MAX_NBATCH=1
     LR_SCHEDULER=constant_schedule
     EXTRA_ARGS="--gn_curvature ggn --gn_validate --set_init_params Ab 0.8348813503927325 eField 0.521518936637242 tran_diff 1.0027633760716438e-05 long_diff 5.8141822809782784e-06 lifetime 2406.4465970250712" ;;
+  truthfloor)
+    # PERFECT-KNOWLEDGE DIAGNOSTIC: seed the calibration at the TRUE params with TRUE
+    # geometry + TRUE dEdx (INPUT_SIM=true, no fitting), and measure the loss-min offset
+    # from truth vs statistical sigma. Quantifies the irreducible floor imposed by the
+    # (10cm-segmented, stochastic) target. LEN/NBATCH set via env for a statistics scan.
+    FIT_TYPE=gn_calib; ITERS=1;    MAX_NBATCH=${TF_NBATCH:-100}
+    LR_SCHEDULER=constant_schedule
+    EXTRA_ARGS="--gn_validate --set_init_params Ab 0.8348813503927325 eField 0.521518936637242 tran_diff 1.0027633760716438e-05 long_diff 5.8141822809782784e-06 lifetime 2406.4465970250712" ;;
   gn_smoke)
     FIT_TYPE=gn_calib; ITERS=3;    MAX_NBATCH=1
     LR_SCHEDULER=constant_schedule ;;
@@ -111,6 +119,7 @@ python3 -m optimize.example_run \
     --mode ${MODE} \
     --lut_file src/larndsim/detector_properties/response_44.npy \
     --loss_fn ${LOSS} \
+    ${NONOISE_FLAG:-} \
     --probabilistic_sim \
     --sim_seed_strategy different \
     --non_deterministic \

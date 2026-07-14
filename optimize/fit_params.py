@@ -3677,6 +3677,19 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
             logger.info(f"[GN-VALIDATE] H^-1 relative sigma [%]: "
                         + "  ".join(f"{k}={rel_sig[j]:.2f}" for j, k in enumerate(rl)))
             logger.info(f"[GN-VALIDATE] H^-1 correlation matrix:\n{np.array2string(corr, precision=2)}")
+
+            # PERFECT-KNOWLEDGE DIAGNOSTIC: at the current (= true, when seeded so) params,
+            # the Newton step -H^-1 g is the displacement of the loss MINIMUM from this point.
+            # If |offset| >> sigma the target's loss minimum is systematically away from truth
+            # (an irreducible model/segmentation floor); if |offset| ~ sigma it is consistent
+            # with statistical noise (truth IS the minimum, biases are just statistics).
+            offset = -np.linalg.solve(Hs, g)                    # norm-space displacement to the min
+            rel_off = offset * dphys / np.where(phys_now != 0, phys_now, 1.0) * 100
+            signif = np.abs(offset) / np.maximum(sig_norm, 1e-30)
+            logger.info(f"[GN-VALIDATE] loss-min OFFSET from truth [phys %]: "
+                        + "  ".join(f"{k}={rel_off[j]:+.2f}" for j, k in enumerate(rl)))
+            logger.info(f"[GN-VALIDATE] offset significance [|offset|/sigma]: "
+                        + "  ".join(f"{k}={signif[j]:.1f}" for j, k in enumerate(rl)))
         except np.linalg.LinAlgError:
             logger.info("[GN-VALIDATE] H not invertible; no covariance")
         return H, F, g

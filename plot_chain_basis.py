@@ -103,7 +103,14 @@ def track_profiles(ctx, params, basis, true_pts):
         w = V[0]
     proj = lambda P: P @ w
     resid = np.linalg.norm(fit_pts - tr, axis=1)
-    return s, proj(tr_perp), proj(perp(fit_pts)), resid
+    # detect the REAL true nodes: the stored truth is a linear interpolation of the
+    # target's ~10 cm segment endpoints, so it is piecewise-linear -> node boundaries are
+    # where the polyline direction changes (even sub-degree MCS kinks give a nonzero 2nd diff).
+    dtr = np.diff(tr, axis=0)
+    ntr = dtr / (np.linalg.norm(dtr, axis=1, keepdims=True) + 1e-12)
+    cs = np.sum(ntr[1:] * ntr[:-1], axis=1)
+    node_idx = np.r_[0, np.where(cs < 1 - 1e-7)[0] + 1, m - 1]
+    return s, proj(tr_perp), proj(perp(fit_pts)), resid, node_idx
 
 
 def main():
@@ -158,16 +165,16 @@ def main():
                 tk = str(ctx['track_id'])
                 if tk not in tpa.get(b, {}):
                     continue
-                s, tr, _, _ = track_profiles(ctx, cca[b][ti]['angles'], 'angle', tpa[b][tk])
+                s, tr, _, _, _ = track_profiles(ctx, cca[b][ti]['angles'], 'angle', tpa[b][tk])
                 cand.append((np.ptp(tr), b, ti, ctx['track_id']))
         cand.sort(reverse=True)
         picks = cand[:3]
         fig, axes = plt.subplots(1, len(picks), figsize=(5.2 * len(picks), 4.2), squeeze=False)
         for ax, (_, b, ti, tk) in zip(axes[0], picks):
             ctx = ctxa[b][ti]; tks = str(tk)
-            s, tr, fa, ra = track_profiles(ctx, cca[b][ti]['angles'], 'angle', tpa[b][tks])
-            _, _, fs, rs = track_profiles(ctx, ccs[b][ti]['angles'], 'spline', tpa[b][tks])
-            ax.plot(s, tr * 1e4, 'k-', lw=2.5, label='true')
+            s, tr, fa, ra, nidx = track_profiles(ctx, cca[b][ti]['angles'], 'angle', tpa[b][tks])
+            _, _, fs, rs, _ = track_profiles(ctx, ccs[b][ti]['angles'], 'spline', tpa[b][tks])
+            ax.plot(s, tr * 1e4, 'k-', lw=2.2, label='true (target, ~10cm-seg resolution)')
             ax.axhline(0, color='0.6', ls='--', lw=1, label='linear guess (nominal)')
             ax.plot(s, fa * 1e4, 'C0-', lw=1.5, label=f'angle fit ({ra.mean()*1e4:.0f} µm)')
             ax.plot(s, fs * 1e4, 'C1-', lw=1.5, label=f'spline fit ({rs.mean()*1e4:.0f} µm)')
