@@ -365,9 +365,9 @@ if __name__ == '__main__':
     try:
         args = parser.parse_args()
         retval, status_message = main(args)
-    except Exception as e:
-        print(traceback.format_exc(), file=sys.stderr)
-        tb = traceback.format_exc()
+except Exception:
+    tb = traceback.format_exc()
+    print(tb, file=sys.stderr)
         if "DNN library initialization failed" in tb:
             status_message = (
                 "Error: Fitting failed due to GPU DNN/CuDNN initialization. "
