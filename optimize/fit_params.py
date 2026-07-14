@@ -2334,12 +2334,28 @@ class GradientDescentFitter(ParamFitter):
             return loss_fn(unflat(xflat))
 
         _cg_maxiter = int(min(max(20, n // 4), 60))   # CG iters ~ effective rank, capped
+        _precond = os.environ.get('LARND_GN_PRECOND', '1') != '0'
+        _hutch_k = 6                                    # Hutchinson probes for diag(F)
 
         def cg_step(xflat, gflat, lam):
             # solve (F + lam I) dtheta = -g, matrix-free, entirely on-device (jitted CG)
             def A(v):
                 return ggn_vp(xflat, v) + lam * v
-            dx, _ = jax.scipy.sparse.linalg.cg(A, -gflat, tol=1e-4, maxiter=_cg_maxiter)
+            if _precond:
+                # Jacobi (diagonal) preconditioner. CG ran to maxiter (ill-conditioned, not
+                # low-rank) so diagonal scaling should cut iterations a lot. diag(F) estimated
+                # matrix-free via Hutchinson: E[v ⊙ (F v)] over Rademacher v (k GGN-vps).
+                keys = jax.random.split(jax.random.PRNGKey(0), _hutch_k)
+                def _probe(acc, k):
+                    v = jax.random.rademacher(k, (xflat.shape[0],), dtype=xflat.dtype)
+                    return acc + v * ggn_vp(xflat, v), None   # scan (sequential) = memory-bounded
+                diag, _ = jax.lax.scan(_probe, jnp.zeros_like(xflat), keys)
+                diag = diag / _hutch_k
+                Minv = 1.0 / jnp.maximum(jnp.abs(diag) + lam, 1e-8)
+                M = lambda r: Minv * r
+                dx, _ = jax.scipy.sparse.linalg.cg(A, -gflat, tol=1e-4, maxiter=_cg_maxiter, M=M)
+            else:
+                dx, _ = jax.scipy.sparse.linalg.cg(A, -gflat, tol=1e-4, maxiter=_cg_maxiter)
             return dx
 
         key = (batch_idx, n, 'ggn_cg')
