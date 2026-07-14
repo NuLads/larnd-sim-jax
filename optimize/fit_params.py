@@ -2283,7 +2283,12 @@ class GradientDescentFitter(ParamFitter):
             # fall back to exact-Hessian solve if not spline
             return self._solve_chain_gn(batch_idx, tracks, ref, log_dedx, parent_ids, max_iter)
         col_map = self._chain_col_map()
-        phys = self.current_params
+        # ref_params keeps the readout-noise fields (nonzero even under --no-noise, which the
+        # marginalized FEE needs for 1/sigma); overwrite only the calibration params with the
+        # current values (mirrors loss_wrapper_combined). Using current_params directly would
+        # carry noise=0 -> ZeroDivisionError.
+        phys = self.ref_params.replace(**{k: getattr(self.current_params, k)
+                                          for k in self.relevant_params_list})
         sigma = self.loss_strategy.sigma_charge / 1000.0
         _, _up = _sim_wfs(self.ref_params, self.sim_strategy.response, tracks, self.sim_track_fields)
         usize = int(((int(_up.shape[0]) + 127) // 128) * 128)
