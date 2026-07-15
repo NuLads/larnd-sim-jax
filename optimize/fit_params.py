@@ -2199,6 +2199,24 @@ class GradientDescentFitter(ParamFitter):
                     # 2K spline coefficients, initialised to zero = nominal (linear-guess) track
                     K = _spline_K(ctx.total_len, self._chain_spline_knot_cm)
                     params = jnp.zeros(2 * K, dtype=jnp.float32)
+                    # DIAGNOSTIC (LARND_INIT_FROM_TRUTH): seed at the least-squares spline fit of the
+                    # TRUE positions. If the fit then STAYS near truth -> the loss min is fine and the
+                    # linear-guess init/landscape was the accuracy limiter; if it DRIFTS away -> the
+                    # loss min is genuinely offset from truth (loss bias).
+                    if os.environ.get('LARND_INIT_FROM_TRUTH') and hasattr(self, '_batch_true_positions'):
+                        tp = self._batch_true_positions.get(batch_idx, {})
+                        true_pts = tp.get(ctx.track_id)
+                        if true_pts is not None:
+                            u0 = _dir_from_angles(ctx.theta0_i, ctx.phi0_i)
+                            e1, e2 = _transverse_frame(u0)
+                            L = float(ctx.total_len); al = np.asarray(ctx.alpha_mid, float)
+                            tr = np.asarray(true_pts, float); m = min(len(al), len(tr)); al, tr = al[:m], tr[:m]
+                            nom = np.asarray(ctx.x0_fixed)[None, :] + al[:, None] * L * u0[None, :]
+                            d = tr - nom
+                            B = np.sin(np.outer(al, np.pi * np.arange(1, K + 1)))
+                            b1 = np.linalg.lstsq(B, d @ e1, rcond=None)[0]
+                            b2 = np.linalg.lstsq(B, d @ e2, rcond=None)[0]
+                            params = jnp.asarray(np.concatenate([b1, b2]).astype(np.float32))
                 else:
                     n_c = ctx.n_chain
                     angles = np.empty(2 * n_c, dtype=np.float32)
