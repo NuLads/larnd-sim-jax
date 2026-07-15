@@ -12,10 +12,15 @@ import traceback
 if '--gpu' not in sys.argv:
     os.environ['JAX_PLATFORMS'] = 'cpu'
 
-from larndsim.consts_jax import build_params_class, load_detector_properties, load_lut
-from larndsim.sim_jax import simulate_stochastic, simulate_parametrized, simulate_wfs
+from larndsim.consts_jax import (
+    build_params_class,
+    load_detector_properties,
+    load_lut,
+    apply_diffusion_link,
+)
+from larndsim.sim_jax import simulate_stochastic, simulate_parametrized, simulate_probabilistic, simulate_wfs
 from larndsim.losses_jax import get_hits_space_coords
-from larndsim.detsim_jax import validate_event_ids_for_packing, validate_local_event_ids
+from larndsim.detsim_jax import validate_event_ids_for_packing, validate_local_event_ids, id2pixel, get_hit_z
 from pprint import pprint
 import numpy as np
 import h5py
@@ -24,6 +29,7 @@ from tqdm import tqdm
 from numpy.lib import recfunctions as rfn
 from larndsim.sim_jax import pad_size
 from .dataio import TracksDataset
+from .strategies import pad_to_closest_multiple
 import jax.numpy as jnp
 from larndsim.fee_jax import digitize
 from larndsim.losses_jax import adc2charge
@@ -37,6 +43,32 @@ logger.setLevel(logging.INFO)
 # jax.config.update('jax_log_compiles', True)
 
 
+def _write_batch_h5(path, ibatch, event_arr, local_to_global,
+                    datasets, unmasked_datasets=None):
+    """Split arrays by event_id and write one h5 group per event under batch_<ibatch>.
+
+    `datasets` values are indexed by (event_arr == local_id); `unmasked_datasets`
+    values are written verbatim into every event group (used for the non-prob wfs blob).
+    """
+    with h5py.File(path, 'a') as f:
+        batch_group = f.create_group(f"batch_{ibatch}")
+        for local_event_id in np.unique(event_arr).astype(int):
+            if local_event_id < 0:  # skip padding
+                continue
+            global_event_id = local_to_global.get(local_event_id, local_event_id)
+            m = (event_arr == local_event_id)
+            event_group = batch_group.create_group(f"event_{global_event_id}")
+            for name, arr in datasets.items():
+                event_group.create_dataset(name, data=np.asarray(arr)[m])
+            event_group.create_dataset(
+                'eventID',
+                data=np.full(int(m.sum()), global_event_id, dtype=np.int64),
+            )
+            if unmasked_datasets:
+                for name, arr in unmasked_datasets.items():
+                    event_group.create_dataset(name, data=np.asarray(arr))
+
+
 def main(config):
     output_filename = config.output_file
     if not config.out_np:
@@ -47,6 +79,12 @@ def main(config):
         os.remove(output_filename)
     if config.lut_file == "" and config.mode == 'lut':
         return 1, 'Error: LUT file is required for mode "lut"'
+    if config.probabilistic_sim and config.mode != 'lut':
+        return 1, 'Error: --probabilistic_sim is only supported for mode "lut"'
+    if config.probabilistic_sim and config.jac:
+        return 1, 'Error: --probabilistic_sim is not compatible with --jac'
+    if config.probabilistic_sim and config.out_np:
+        return 1, 'Error: --probabilistic_sim is not compatible with --out_np (distribution shape differs)'
 
     if not config.gpu:
         jax.config.update('jax_platform_name', 'cpu')
@@ -75,6 +113,14 @@ def main(config):
 
 
     ref_params = ref_params.replace(**{k: getattr(config, k) for k in params_to_apply}, time_window=config.signal_length)
+
+    if config.link_diffusion:
+        ref_params = apply_diffusion_link(ref_params, anchor='long_diff')
+        logger.info(
+            "Diffusion link enabled: long_diff=%s, tran_diff=%s",
+            float(ref_params.long_diff),
+            float(ref_params.tran_diff),
+        )
 
     if not config.noise:
         ref_params = ref_params.replace(RESET_NOISE_CHARGE=0, UNCORRELATED_NOISE_CHARGE=0)
@@ -123,13 +169,34 @@ def main(config):
         rngseed = ibatch if config.seed is None else config.seed
         if config.mode == 'lut':
             wfs, unique_pixels = simulate_wfs(ref_params, response, tracks, fields)
-            adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event, hit_pixels = simulate_stochastic(ref_params, wfs, unique_pixels, rngseed=rngseed)
+            if config.probabilistic_sim:
+                unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=True)
+                wfs = pad_to_closest_multiple(wfs, dims_to_pad=(0,), multiple=128, pad_value=0.0, pad_front=True)
+                adcs_distrib, pix_x_prob, pix_y_prob, ticks_prob, event_prob = simulate_probabilistic(ref_params, wfs, unique_pixels)
+                _, _, pixel_plane_prob, _ = id2pixel(ref_params, unique_pixels)
+            else:
+                adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event, hit_pixels = simulate_stochastic(ref_params, wfs, unique_pixels, rngseed=rngseed)
         else:
-            
+
             adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event, hit_pixels = simulate_parametrized(ref_params, tracks, fields, rngseed=rngseed)
             wfs = None
         if config.jac:
             jac_res = jax.jacfwd(sim_wrapper)(ref_params, tracks)
+
+        if config.probabilistic_sim:
+            ds = {
+                'adcs_distrib': adcs_distrib,
+                'ticks_prob':   ticks_prob,
+                'pix_x':        pix_x_prob,
+                'pix_y':        pix_y_prob,
+                'pixel_plane':  pixel_plane_prob,
+                'pixels':       unique_pixels,
+            }
+            if config.save_wfs:
+                ds['wfs'] = wfs
+            _write_batch_h5(output_filename, ibatch,
+                            np.asarray(event_prob), local_to_global, ds)
+            continue
 
         adc_lowest = digitize(ref_params, ref_params.DISCRIMINATION_THRESHOLD)
         adcs_clean = adcs - adc_lowest
@@ -137,36 +204,25 @@ def main(config):
         Q = adc2charge(adcs.flatten()[mask], ref_params)
 
         if not config.out_np:
-            with h5py.File(output_filename, 'a') as f:
-                batch_group = f.create_group(f"batch_{ibatch}")
-
-                # Split output per-event using local→global ID mapping
-                for local_event_id in np.unique(event[mask]).astype(int):
-                    if local_event_id < 0:  # Skip padding
-                        continue
-
-                    global_event_id = local_to_global.get(local_event_id, local_event_id)
-                    event_mask = (event.flatten()[mask] == local_event_id)
-
-                    # Create per-event subgroup
-                    event_group = batch_group.create_group(f"event_{global_event_id}")
-                    event_group.create_dataset('adc_clean', data=adcs_clean.flatten()[mask][event_mask])
-                    event_group.create_dataset('adc', data=adcs.flatten()[mask][event_mask])
-                    event_group.create_dataset('Q', data=Q[event_mask])
-                    event_group.create_dataset('pixels', data=hit_pixels[mask][event_mask])
-                    event_group.create_dataset('ticks', data=ticks.flatten()[mask][event_mask])
-                    event_group.create_dataset('eventID', data=np.full(event_mask.sum(), global_event_id, dtype=np.int64))
-                    event_group.create_dataset('pix_x', data=pixel_x[mask][event_mask])
-                    event_group.create_dataset('pix_y', data=pixel_y[mask][event_mask])
-                    event_group.create_dataset('pix_z', data=pixel_z.flatten()[mask][event_mask])
-
-                    if config.jac:
-                        for par in pars:
-                            event_group.create_dataset(f'jac_{par}_adc', data=getattr(jac_res, par)[:, :, 0].flatten()[mask][event_mask])
-                            event_group.create_dataset(f'jac_{par}_ticks', data=getattr(jac_res, par)[:, :, 1].flatten()[mask][event_mask])
-
-                    if config.save_wfs:
-                        event_group.create_dataset('wfs', data=wfs)
+            event_flat = event.flatten()[mask]
+            ds = {
+                'adc_clean': adcs_clean.flatten()[mask],
+                'adc':       adcs.flatten()[mask],
+                'Q':         Q,
+                'pixels':    hit_pixels[mask],
+                'ticks':     ticks.flatten()[mask],
+                'pix_x':     pixel_x[mask],
+                'pix_y':     pixel_y[mask],
+                'pix_z':     pixel_z.flatten()[mask],
+            }
+            if config.jac:
+                for par in pars:
+                    jac_par = getattr(jac_res, par)
+                    ds[f'jac_{par}_adc']   = jac_par[:, :, 0].flatten()[mask]
+                    ds[f'jac_{par}_ticks'] = jac_par[:, :, 1].flatten()[mask]
+            unmasked = {'wfs': wfs} if config.save_wfs else None
+            _write_batch_h5(output_filename, ibatch, event_flat,
+                            local_to_global, ds, unmasked_datasets=unmasked)
 
 
         else:
@@ -220,6 +276,10 @@ if __name__ == '__main__':
     parser.add_argument('--out_np', action='store_true', default=False, help='store target-like output in npz')
     parser.add_argument('--max_batch_len', type=float, default=50., help='Maximum trajectory length budget used while preparing tracks')
     parser.add_argument('--chop', action='store_true', default=False, help='Enable segment chopping in data loading (default: disabled)')
+    parser.add_argument('--probabilistic_sim', '--probabilistic-sim', default=False, action='store_true',
+                        help='Use probabilistic sim: output full ADC/tick distribution per pixel (LUT mode only).')
+    parser.add_argument('--link_diffusion', action='store_true', default=False,
+                        help='Link long_diff and tran_diff using mobility/field transport relation (default: off).')
 
     try:
         args = parser.parse_args()

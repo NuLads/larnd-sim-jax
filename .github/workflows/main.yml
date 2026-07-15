@@ -20,6 +20,14 @@ on:
 
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
+env:
+  OMP_NUM_THREADS: 1
+  MKL_NUM_THREADS: 1
+  OPENBLAS_NUM_THREADS: 1
+  VECLIB_MAXIMUM_THREADS: 1
+  NUMEXPR_NUM_THREADS: 1
+  XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
+
 jobs:
   test-sim:
     # Steps represent a sequence of tasks that will be executed as part of the job
@@ -80,7 +88,9 @@ jobs:
 
       - name: Make fit plots
         run: |
-          ./optimize/analysis_scripts/plot_fit.py --input_file fit_result/**/*.pkl --output_dir output
+          for f in fit_result/*/*.pkl; do
+            ./optimize/analysis_scripts/plot_fit.py --input_file "$f" --output_dir output
+          done
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
@@ -103,7 +113,9 @@ jobs:
       
       - name: Validate fit convergence
         run: |
-          python3 tests/test_fit_convergence.py --input_file fit_result/**/*.pkl --strict
+          for f in fit_result/*/*.pkl; do
+            python3 tests/test_fit_convergence.py --input_file "$f" --strict
+          done
 
   test-fit-lut:
     runs-on: ubuntu-latest
@@ -128,7 +140,9 @@ jobs:
 
       - name: Make fit plots
         run: |
-          ./optimize/analysis_scripts/plot_fit.py --input_file fit_result/**/*.pkl --output_dir output
+          for f in fit_result/*/*.pkl; do
+            ./optimize/analysis_scripts/plot_fit.py --input_file "$f" --output_dir output
+          done
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
@@ -151,7 +165,9 @@ jobs:
 
       - name: Validate fit convergence
         run: |
-          python3 tests/test_fit_convergence.py --input_file fit_result/**/*.pkl --strict
+          for f in fit_result/*/*.pkl; do
+            python3 tests/test_fit_convergence.py --input_file "$f" --strict
+          done
 
 
   test-fit-nll:
@@ -177,7 +193,9 @@ jobs:
 
       - name: Make fit plots
         run: |
-          ./optimize/analysis_scripts/plot_fit.py --input_file fit_result/**/*.pkl --output_dir output
+          for f in fit_result/*/*.pkl; do
+            ./optimize/analysis_scripts/plot_fit.py --input_file "$f" --output_dir output
+          done
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
@@ -200,7 +218,9 @@ jobs:
 
       - name: Validate fit convergence
         run: |
-          python3 tests/test_fit_convergence.py --input_file fit_result/**/*.pkl --strict
+          for f in fit_result/*/*.pkl; do
+            python3 tests/test_fit_convergence.py --input_file "$f"
+          done
 
 
   test-scan:
@@ -387,8 +407,39 @@ jobs:
 
     steps:
       - name: Trigger RTDs build
-        uses: pgranger23/rtds-action@main
-        with:
-          webhook_url: ${{ secrets.RTDS_WEBHOOK_URL }}
-          webhook_token: ${{ secrets.RTDS_WEBHOOK_TOKEN }}
-          commit_ref: ${{ github.ref }}
+        env:
+          WEBHOOK_URL: ${{ secrets.RTDS_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.RTDS_WEBHOOK_TOKEN }}
+          RTD_BRANCH: ${{ github.head_ref || github.ref_name }}
+          RTD_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, urllib.error, urllib.request
+          from urllib.parse import urlparse
+
+          payload = json.dumps(
+              {
+                  'branches': [os.environ['RTD_BRANCH']],
+                  'default_branch': os.environ['RTD_DEFAULT_BRANCH'],
+                  'token': os.environ['WEBHOOK_TOKEN'],
+              },
+              separators=(',', ':'),
+          ).encode('utf-8')
+
+          webhook_url = os.environ['WEBHOOK_URL']
+          parsed_url = urlparse(webhook_url)
+          if parsed_url.scheme != 'https' and parsed_url.hostname not in {'127.0.0.1', 'localhost'}:
+              print('RTD webhook URL must use HTTPS.', file=sys.stderr)
+              sys.exit(1)
+
+          req = urllib.request.Request(webhook_url, data=payload, method='POST')
+          req.add_header('Content-Type', 'application/json')
+
+          try:
+              with urllib.request.urlopen(req) as response:
+                  print(f'Payload sent to webhook successfully: {response.status}')
+          except urllib.error.HTTPError as e:
+              print(f'Failed to send payload to webhook: {e.code} {e.reason}', file=sys.stderr)
+              print(e.read().decode('utf-8', errors='replace'), file=sys.stderr)
+              sys.exit(1)
+          EOF

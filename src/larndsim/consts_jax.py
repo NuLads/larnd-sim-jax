@@ -402,6 +402,8 @@ class Params_template:
     shift_y: float = struct.field(pytree_node=False)
     shift_z: float = struct.field(pytree_node=False)
     size_margin: float = struct.field(pytree_node=False)
+    excess_offset: float = struct.field(pytree_node=False, default=0.0)
+    smooth_sigma_scale: float = struct.field(pytree_node=False, default=1.0)
     use_dedx_density: bool = struct.field(pytree_node=False, default=False)
     dedx_density_mode: str = struct.field(pytree_node=False, default="histogram")  # histogram | flow
     flow_expectation_mode: str = struct.field(pytree_node=False, default="sample")  # sample | grid | quadrature
@@ -414,7 +416,7 @@ class Params_template:
     long_diff_extent: int = struct.field(pytree_node=False, default=20)
     roi_threshold: float = struct.field(pytree_node=False, default=0.01)  # Threshold for region of interest selection
     roi_split_length: int = struct.field(pytree_node=False, default=400)  # Length of the region of interest split
-    fee_paths_scaling: int = struct.field(pytree_node=False, default=20)  # Scaling factor for fee paths
+    fee_paths_scaling: int = struct.field(pytree_node=False, default=100)  # Scaling factor for fee paths
     nb_tran_diff_bins: int = struct.field(pytree_node=False, default=5)
     hit_prob_threshold: float = struct.field(pytree_node=False, default=1e-5)  # Threshold for hit probability
     tran_diff_bin_edges: jax.Array = struct.field(pytree_node=False, default=None) # Bin edges for transverse diffusion
@@ -477,6 +479,59 @@ def get_vdrift(params):
     #return params.eField
 
 
+def get_mobility(params):
+    """Return electron mobility using the detector-property parameterization.
+
+    Returns mobility in units consistent with ``get_vdrift`` such that
+    ``get_vdrift(params) == get_mobility(params) * params.eField``.
+    """
+    a0, a1, a2, a3, a4, a5 = params.ELECTRON_MOBILITY_PARAMS
+    num = a0 + a1 * params.eField + a2 * (params.eField ** 1.5) + a3 * (params.eField ** 2.5)
+    denom = 1 + (a1 / a0) * params.eField + a4 * (params.eField ** 2) + a5 * (params.eField ** 3)
+    temp_corr = (params.temperature / 89) ** (-1.5)
+    return num / denom * temp_corr / 1000
+
+
+def get_diffusion_ratio_dl_over_dt(params):
+    """Compute :math:`D_L / D_T` from mobility and electric field.
+
+    Uses the transport relation
+    :math:`D_L / D_T = 1 + (E/\mu)\,\mathrm{d}\mu/\mathrm{d}E`.
+    """
+    a0, a1, a2, a3, a4, a5 = params.ELECTRON_MOBILITY_PARAMS
+    efield = params.eField
+    temp_corr = (params.temperature / 89) ** (-1.5)
+
+    num = a0 + a1 * efield + a2 * (efield ** 1.5) + a3 * (efield ** 2.5)
+    denom = 1 + (a1 / a0) * efield + a4 * (efield ** 2) + a5 * (efield ** 3)
+    dnum = a1 + 1.5 * a2 * jnp.sqrt(efield) + 2.5 * a3 * (efield ** 1.5)
+    dden = (a1 / a0) + 2.0 * a4 * efield + 3.0 * a5 * (efield ** 2)
+
+    mu = num / denom * temp_corr / 1000
+    dmu_de = ((dnum * denom) - (num * dden)) / (denom ** 2) * temp_corr / 1000
+    return 1.0 + (efield / mu) * dmu_de
+
+
+def apply_diffusion_link(params, anchor="long_diff"):
+    """Enforce a mobility-based link between ``long_diff`` and ``tran_diff``.
+
+    Args:
+        params: parameter container with ``long_diff``, ``tran_diff``, ``eField``,
+            and ``ELECTRON_MOBILITY_PARAMS``.
+        anchor (str):
+            - ``"long_diff"`` keeps ``long_diff`` and computes ``tran_diff``.
+            - ``"tran_diff"`` keeps ``tran_diff`` and computes ``long_diff``.
+    """
+    if anchor not in ("long_diff", "tran_diff"):
+        raise ValueError(f"Unknown diffusion anchor '{anchor}'. Use 'long_diff' or 'tran_diff'.")
+
+    ratio_dl_over_dt = get_diffusion_ratio_dl_over_dt(params)
+
+    if anchor == "long_diff":
+        return params.replace(tran_diff=params.long_diff / ratio_dl_over_dt)
+    return params.replace(long_diff=params.tran_diff * ratio_dl_over_dt)
+
+
 def load_detector_properties(params_cls, detprop_file, pixel_file):
     """
     Loads detector properties and pixel geometry from YAML files and initializes a parameter class.
@@ -509,7 +564,7 @@ def load_detector_properties(params_cls, detprop_file, pixel_file):
         "vdrift_static": 0.159645,
         "lifetime": 2.2e3,
         "long_diff": 4.0e-6,
-        "tran_diff": 8.8e-6,
+        "tran_diff": 8.0e-6,
         "shift_x": 0.,
         "shift_y": 0.,
         "shift_z": 0.,
@@ -552,6 +607,8 @@ def load_detector_properties(params_cls, detprop_file, pixel_file):
         "UNCORRELATED_NOISE_CHARGE": 500,
         "ELECTRON_MOBILITY_PARAMS": (551.6, 7158.3, 4440.43, 4.29, 43.63, 0.2053),
         "size_margin": 2e-2,
+        "excess_offset": 0.0,
+        "smooth_sigma_scale": 1.0,
         "diffusion_in_current_sim": True,
         "mc_diff": False,
         "tpc_centers": jnp.array([[0, 0, 0], [0, 0, 0]]), # Placeholder for TPC centers,

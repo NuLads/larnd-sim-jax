@@ -29,7 +29,7 @@ def _soft_where(condition_val, true_val, false_val, sharpness=100.0):
     return w * true_val + (1 - w) * false_val
 
 
-def log_diff_ndtr(a, b):
+def log_diff_ndtr(a, b, min_log_prob=-18.42):
     """
     Compute log(Φ(a) - Φ(b)) where Φ is standard normal CDF.
 
@@ -46,11 +46,11 @@ def log_diff_ndtr(a, b):
     neg_expm1_safe = _soft_max(neg_expm1, eps, sharpness=1e10)
 
     log_term = jnp.log(neg_expm1_safe)
-    log_term_safe = _soft_max(log_term, -100.0, sharpness=10.0)
+    log_term_safe = _soft_max(log_term, min_log_prob, sharpness=10.0)
 
     log_prob = la + log_term_safe
 
-    return _soft_where(a - b, log_prob, -1000.0, sharpness=1000.0)
+    return jnp.where(a > b, log_prob, min_log_prob)
 
 @annotate_function
 @jit
@@ -331,7 +331,9 @@ def get_adc_values(params, pixels_signals, noise_rng_key):
 #     # return (charges_new, new_prob), (charge_avg_across, tick_avg, no_hit_prob_across, prob_distrib_across)
 
 
-def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, threshold, interval, Nvalues):
+def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_uncorr,
+                       threshold, interval, Nvalues, min_log_prob,
+                       excess_offset=0.0, smooth_sigma_scale=1.0):
     Nticks = q_sum.shape[0]
     z_scale = 1.0 / sigma
 
@@ -343,21 +345,29 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, threshold,
     q_max_future = lax.cummax(q_sum_loc, axis=1)
     log_guess = log_diff_ndtr(
         (q_max_future[..., 1:] - threshold) * z_scale,
-        (q_max_future[..., :-1] - threshold) * z_scale
+        (q_max_future[..., :-1] - threshold) * z_scale,
+        min_log_prob=min_log_prob
     )
 
     # 2. Log-probability of a hit being collected in the shifted window
     log_prob_event = log_diff_ndtr(
         (q_sum_loc[..., shifted_ticks] - threshold) * z_scale,
-        (q_sum_loc[..., :-1] - threshold) * z_scale
+        (q_sum_loc[..., :-1] - threshold) * z_scale,
+        min_log_prob=min_log_prob
     )
     log_prob_event = jnp.minimum(log_prob_event, log_guess)
-    log_prob_event = _soft_max(log_prob_event, -1000.0, sharpness=1.0)
+    log_prob_event = _soft_max(log_prob_event, min_log_prob, sharpness=1.0)
 
+    # esperance_value: expected ADC given a crossing at tick t.
+    # esperance_value is kept because it is returned as the expected-charge output.
     esperance_value = q_sum[..., shifted_ticks] + threshold - 0.5 * (q_sum[..., 1:] + q_sum[..., :-1])
-    log_prob_event = _soft_where(
-        esperance_value - threshold, log_prob_event, -1000.0, sharpness=10.0
-    )
+
+    # Unified Gaussian acceptance correction (Fix 2, corrected)
+    # Replace both log_adc_correction and _soft_where with a single correction
+    # that integrates over the uncorrelated noise U, since reset noise N cancels out.
+    safe_sigma_uncorr = jnp.maximum(sigma_uncorr * smooth_sigma_scale, 1.0)
+    log_accept = jss.log_ndtr((esperance_value - threshold + excess_offset) / safe_sigma_uncorr)
+    log_prob_event = log_prob_event + log_accept
 
     # 3. Aggregate Results
     log_prob_distrib = log_prob_event + previous_log_prob[:, None]
@@ -383,8 +393,8 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, threshold,
 
     return (charges_new, new_log_prob), (log_total_hit_dist_tick, esperance_value)
 
-@partial(jit, static_argnums=(2))
-def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9):
+@partial(jit, static_argnums=(2, 3))
+def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_prob=-18.42):
     """
     A globally-stopped, vmap-based implementation of the beam search. This is a highly optimized pattern for parallel hardware.
     """
@@ -396,7 +406,7 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9):
     # --- Vectorize the single-step function ---
     vmapped_step_fun = vmap(
         _find_one_hit_step,
-        in_axes=(0, 0, 0, None, None, None, None) # Map over q_sum, charges, probs
+        in_axes=(0, 0, 0, None, None, None, None, None, None, None, None)  # Map over q_sum, charges, probs
     )
 
     # --- Pre-calculate q_sum for all pixels ---
@@ -417,8 +427,11 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9):
             charges, probs, _ = operand
             # Run one hit-finding step for all pixels in parallel
             (new_charges, new_probs), (prob_dist, charge_dist) = vmapped_step_fun(
-                q_sum_all, charges, probs, params.RESET_NOISE_CHARGE, params.DISCRIMINATION_THRESHOLD, interval, 
-                Nvalues
+                q_sum_all, charges, probs,
+                params.RESET_NOISE_CHARGE, params.UNCORRELATED_NOISE_CHARGE,
+                params.DISCRIMINATION_THRESHOLD, interval,
+                Nvalues, min_log_prob,
+                params.excess_offset, params.smooth_sigma_scale
             )
             # LogSumExp gives the log of the total probability
             total_prob_per_pixel = jax.nn.logsumexp(new_probs, axis=1)
@@ -428,7 +441,7 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9):
         def _inactive_branch(operand):
             """A cheap pass-through, executed when the whole batch is inactive."""
             return operand, (
-                jnp.full((Npix, Nticks - 1), -1000.0, dtype=jnp.float32),
+                jnp.full((Npix, Nticks - 1), min_log_prob, dtype=jnp.float32),
                 jnp.zeros((Npix, Nticks - 1), dtype=jnp.float32),
                 )
 
@@ -443,7 +456,7 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9):
 
     # --- Setup and Execute the Global Scan ---
     initial_charges = jnp.zeros((Npix, Nvalues), dtype=jnp.float32)
-    initial_log_probs = jnp.full((Npix, Nvalues), -1000.0, dtype=jnp.float32).at[:, 0].set(0.0)
+    initial_log_probs = jnp.full((Npix, Nvalues), min_log_prob, dtype=jnp.float32).at[:, 0].set(0.0)
     initial_active = jnp.array(True)
     
     init_loop = (initial_charges, initial_log_probs, initial_active)
@@ -461,8 +474,21 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9):
     return jnp.moveaxis(log_prob_distrib, 0, 1), jnp.moveaxis(charge_distrib, 0, 1)
 
 @jit
-def get_average_hit_values(ticks_prob, adcs_distrib):
-    Npix, Nhits, Nticks = ticks_prob.shape
+def get_average_hit_values(log_ticks_prob, adcs_distrib, min_log_prob=-18.42):
+    """
+    Computes expected hit values (tick, ADC, probability) from the probabilistic grid.
+
+    Args:
+        log_ticks_prob: Log-probabilities for each bin (Npix, Nhits, Nticks).
+        adcs_distrib: ADC distribution for each bin.
+        min_log_prob: Minimum log-probability floor (log(1e-8) ~ -18.42).
+    """
+    Npix, Nhits, Nticks = log_ticks_prob.shape
+
+    # Exponentiate to linear probabilities
+    # We clip to min_log_prob to avoid extremely negative values affecting the sum
+    ticks_prob = jnp.exp(jnp.maximum(log_ticks_prob, min_log_prob))
+
     # For each (pixel, hit_index), compute λ = Σ_t P(tick | pixel, hit_index)
     # This represents the expected probability of this particular hit existing
     lambda_per_hit = jnp.sum(ticks_prob, axis=2)  # (Npix, Nhits)
