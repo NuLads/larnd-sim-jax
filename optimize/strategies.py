@@ -475,7 +475,7 @@ class CollapsedProbabilisticLossStrategy(LossStrategy):
 
 
 class ProbabilisticLossStrategy(LossStrategy):
-    def __init__(self, sigma_charge=500.0, eps=1e-8, time_window=2, sigma_time=1.0, apply_deadtime=False, deadtime_ticks=18, first_hit_only=False, **kwargs):
+    def __init__(self, sigma_charge=500.0, eps=1e-8, time_window=2, sigma_time=1.0, apply_deadtime=False, deadtime_ticks=18, first_hit_only=False, spatial_moment_weight=0.0, spatial_moment_nslices=16, **kwargs):
         """
         Computes negative log-likelihood of observed hits given predicted probability distributions.
         
@@ -503,12 +503,51 @@ class ProbabilisticLossStrategy(LossStrategy):
         self.apply_deadtime = apply_deadtime
         self.deadtime_ticks = deadtime_ticks
         self.first_hit_only = first_hit_only
+        self.spatial_moment_weight = spatial_moment_weight
+        self.spatial_moment_nslices = spatial_moment_nslices
 
         if time_window > 0:
             delta = jnp.arange(-time_window, time_window + 1)
             weights = jnp.exp(-0.5 * (delta / sigma_time)**2)
             weights = weights / jnp.sum(weights)
             self.log_time_weights = jnp.log(weights)
+
+    def _spatial_moment_penalty(self, params, prediction, target, target_pixel_ids):
+        """Poor-man's OT: match the charge-weighted TRANSVERSE (x,y) centroid of predicted vs
+        target charge in each drift-tick (~z) slice. Rewards the track's transverse position as a
+        function of longitudinal position -> a non-local spatial objective that moves the loss-MINIMUM
+        location (unlike width-only losses). Differentiable through hit_prob/adcs_distrib -> geometry."""
+        S = self.spatial_moment_nslices
+        eps = 1e-6
+
+        # --- Predicted: expected charge per (pixel, tick), summed over the value axis ---
+        prob = jnp.exp(prediction['hit_prob'])                       # (Npix, Nval, Ntick)
+        pred_charge = adc2charge(prediction['adcs_distrib'], params) # (Npix, Nval, Ntick)
+        w_pt = jnp.sum(prob * pred_charge, axis=1)                   # (Npix, Ntick)  expected charge
+        Ntick = w_pt.shape[1]
+        px = prediction['pixel_x']; py = prediction['pixel_y']      # (Npix,)
+
+        tick_slice = jnp.clip((jnp.arange(Ntick) * S) // Ntick, 0, S - 1)   # (Ntick,)
+        onehot = (tick_slice[:, None] == jnp.arange(S)[None, :]).astype(w_pt.dtype)  # (Ntick, S)
+        q_pix_slice = w_pt @ onehot                                  # (Npix, S) charge per pixel/slice
+        wsum_p = jnp.sum(q_pix_slice, axis=0)                        # (S,)
+        cx_p = (px @ q_pix_slice) / (wsum_p + eps)                   # (S,)
+        cy_p = (py @ q_pix_slice) / (wsum_p + eps)
+
+        # --- Target: charge-weighted centroid per drift slice ---
+        valid = (target_pixel_ids >= 0).astype(w_pt.dtype)
+        q_t = adc2charge(target['adcs'], params) * valid            # (Nhits,)
+        t_ticks = jnp.clip(target['ticks'].astype(int), 0, Ntick - 1)
+        t_slice = jnp.clip((t_ticks * S) // Ntick, 0, S - 1)        # (Nhits,)
+        onehot_t = (t_slice[:, None] == jnp.arange(S)[None, :]).astype(w_pt.dtype)  # (Nhits, S)
+        wsum_t = q_t @ onehot_t                                     # (S,)
+        cx_t = ((q_t * target['pixel_x']) @ onehot_t) / (wsum_t + eps)
+        cy_t = ((q_t * target['pixel_y']) @ onehot_t) / (wsum_t + eps)
+
+        # Weight each slice by the (min) charge present in both; only slices with target+pred charge.
+        w_slice = jnp.sqrt((wsum_p * wsum_t)) * (wsum_t > eps) * (wsum_p > eps)
+        sq = (cx_p - cx_t) ** 2 + (cy_p - cy_t) ** 2               # (S,) cm^2
+        return jnp.sum(w_slice * sq) / (jnp.sum(w_slice) + eps)     # charge-weighted mean sq (cm^2)
 
     def compute(self, params, prediction, target):
         """
@@ -737,16 +776,23 @@ class ProbabilisticLossStrategy(LossStrategy):
         
         # Combine into final Negative Log-Likelihood
         nll = -ll_hits - no_match_penalty + expected_total_hits
-        
+
+        # Optional spatial-moment (poor-man's OT) term: match transverse charge centroid per drift slice
+        spatial_moment = 0.0
+        if self.spatial_moment_weight > 0.0:
+            spatial_moment = self._spatial_moment_penalty(params, prediction, target, target_pixel_ids)
+            nll = nll + self.spatial_moment_weight * spatial_moment
+
         # Auxiliary info for debugging
         aux = {
             "log_likelihood_charge": 0.0,
             "log_likelihood_tick": -jnp.sum(joint_hit_log_probs),
             "no_match_penalty": -no_match_penalty,
             "expected_total_hits": expected_total_hits,
-            "matched_hits": jnp.sum(is_relevant_target_hit & pixel_match_valid)
+            "matched_hits": jnp.sum(is_relevant_target_hit & pixel_match_valid),
+            "spatial_moment": spatial_moment,
         }
-        
+
         return nll, aux
 
 class DistributionLossStrategy(LossStrategy):
