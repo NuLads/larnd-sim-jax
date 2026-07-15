@@ -296,7 +296,7 @@ def _dedx_density_flow_quadrature(R_values, particle_type, n_nodes=16, y_clip=5.
         cond_flat = jnp.repeat(R_norm, n_nodes)[:, None]
         log_py = flow.log_prob(y_flat, condition=cond_flat).reshape(n_tracks, n_nodes)
     else:
-        cond_flat = jnp.zeros((y_flat.shape[0], 0), dtype=jnp.float32)
+        cond_flat = jnp.zeros((y_flat.shape[0], cond_dim), dtype=jnp.float32)
         log_py = flow.log_prob(y_flat, condition=cond_flat).reshape(n_tracks, n_nodes)
 
     log_quad = jnp.log(jnp.maximum(quad_base[None, :], 1e-30))
