@@ -550,7 +550,10 @@ class ProbabilisticLossStrategy(LossStrategy):
         # Weight each slice by the (min) charge present in both; only slices with target+pred charge.
         w_slice = jnp.sqrt((wsum_p * wsum_t)) * (wsum_t > eps) * (wsum_p > eps)
         sq = (cx_p - cx_t) ** 2 + (cy_p - cy_t) ** 2               # (S,) cm^2
-        return jnp.sum(w_slice * sq) / (jnp.sum(w_slice) + eps)     # charge-weighted mean sq (cm^2)
+        penalty = jnp.sum(w_slice * sq) / (jnp.sum(w_slice) + eps)  # charge-weighted mean sq (cm^2)
+        diag = {"sm_pred_charge": jnp.sum(wsum_p), "sm_tgt_charge": jnp.sum(wsum_t),
+                "sm_npix_pred": jnp.sum(pix_valid)}
+        return penalty, diag
 
     def compute(self, params, prediction, target):
         """
@@ -782,8 +785,9 @@ class ProbabilisticLossStrategy(LossStrategy):
 
         # Optional spatial-moment (poor-man's OT) term: match transverse charge centroid per drift slice
         spatial_moment = 0.0
+        sm_diag = {}
         if self.spatial_moment_weight > 0.0:
-            spatial_moment = self._spatial_moment_penalty(params, prediction, target, target_pixel_ids)
+            spatial_moment, sm_diag = self._spatial_moment_penalty(params, prediction, target, target_pixel_ids)
             nll = nll + self.spatial_moment_weight * spatial_moment
 
         # Auxiliary info for debugging
@@ -794,6 +798,7 @@ class ProbabilisticLossStrategy(LossStrategy):
             "expected_total_hits": expected_total_hits,
             "matched_hits": jnp.sum(is_relevant_target_hit & pixel_match_valid),
             "spatial_moment": spatial_moment,
+            **sm_diag,
         }
 
         return nll, aux
