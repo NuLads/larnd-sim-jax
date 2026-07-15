@@ -161,7 +161,7 @@ def _dedx_density_flow(n_tracks, R_values, particle_type):
         cond_flat = jnp.repeat(R_norm, n_dedx_bins)[:, None]
         log_py = flow.log_prob(y_flat, condition=cond_flat)
     else:
-        cond_flat = jnp.zeros((y_flat.shape[0], 0), dtype=jnp.float32)
+        cond_flat = jnp.zeros((y_flat.shape[0], cond_dim), dtype=jnp.float32)
         log_py = flow.log_prob(y_flat, condition=cond_flat)
 
     # Convert p(y|R) to p(dE/dx|R) up to a constant, then row-normalize.
