@@ -520,32 +520,40 @@ class ProbabilisticLossStrategy(LossStrategy):
         S = self.spatial_moment_nslices
         eps = 1e-6
 
-        # --- Predicted: expected charge per (pixel, tick), summed over the value axis ---
+        # --- Predicted: COLLAPSE each pixel to (expected charge, expected tick) so it matches the
+        # target's one-entry-per-hit structure. (Distributing charge across tick-slices smears a
+        # time-extended waveform over many z-slices vs the target's single tick -> the metric then
+        # decouples from true position. Collapsing to the charge-weighted expected tick fixes this.)
         prob = jnp.exp(prediction['hit_prob'])                       # (Npix, Nval, Ntick)
         pred_charge = adc2charge(prediction['adcs_distrib'], params) # (Npix, Nval, Ntick)
-        w_pt = jnp.sum(prob * pred_charge, axis=1)                   # (Npix, Ntick)  expected charge
-        # Mask padded/invalid pixels (unique_pixels padded with -1 -> garbage coordinates from id2pixel)
-        pix_valid = (prediction['unique_pixels'] >= 0).astype(w_pt.dtype)  # (Npix,)
-        w_pt = w_pt * pix_valid[:, None]
-        Ntick = w_pt.shape[1]
+        w = prob * pred_charge                                       # (Npix, Nval, Ntick)
+        pix_valid = (prediction['unique_pixels'] >= 0).astype(w.dtype)   # mask -1 padding
+        Ntick = prob.shape[-1]
+        ticks = jnp.arange(Ntick).astype(w.dtype)
+        q_sum = jnp.sum(w, axis=(1, 2))                             # (Npix,)
+        q_pix = q_sum * pix_valid                                   # (Npix,) expected charge
+        t_pix = jnp.sum(w * ticks[None, None, :], axis=(1, 2)) / (q_sum + eps)  # (Npix,) expected tick
         px = prediction['pixel_x']; py = prediction['pixel_y']      # (Npix,)
 
-        tick_slice = jnp.clip((jnp.arange(Ntick) * S) // Ntick, 0, S - 1)   # (Ntick,)
-        onehot = (tick_slice[:, None] == jnp.arange(S)[None, :]).astype(w_pt.dtype)  # (Ntick, S)
-        q_pix_slice = w_pt @ onehot                                  # (Npix, S) charge per pixel/slice
-        wsum_p = jnp.sum(q_pix_slice, axis=0)                        # (S,)
-        cx_p = (px @ q_pix_slice) / (wsum_p + eps)                   # (S,)
-        cy_p = (py @ q_pix_slice) / (wsum_p + eps)
+        # Differentiable SOFT slice assignment by expected tick (Gaussian over slice centers).
+        slice_centers = (jnp.arange(S).astype(w.dtype) + 0.5) * (Ntick / S)   # (S,)
+        sigma_slice = Ntick / S
+        def soft_assign(tvals):                                     # (N,) -> (N, S)
+            d = tvals[:, None] - slice_centers[None, :]
+            return jax.nn.softmax(-0.5 * (d / sigma_slice) ** 2, axis=1)
 
-        # --- Target: charge-weighted centroid per drift slice ---
-        valid = (target_pixel_ids >= 0).astype(w_pt.dtype)
-        q_t = adc2charge(target['adcs'], params) * valid            # (Nhits,)
-        t_ticks = jnp.clip(target['ticks'].astype(int), 0, Ntick - 1)
-        t_slice = jnp.clip((t_ticks * S) // Ntick, 0, S - 1)        # (Nhits,)
-        onehot_t = (t_slice[:, None] == jnp.arange(S)[None, :]).astype(w_pt.dtype)  # (Nhits, S)
-        wsum_t = q_t @ onehot_t                                     # (S,)
-        cx_t = ((q_t * target['pixel_x']) @ onehot_t) / (wsum_t + eps)
-        cy_t = ((q_t * target['pixel_y']) @ onehot_t) / (wsum_t + eps)
+        A_p = soft_assign(t_pix) * q_pix[:, None]                   # (Npix, S) charge per pixel/slice
+        wsum_p = jnp.sum(A_p, axis=0)                               # (S,)
+        cx_p = (px @ A_p) / (wsum_p + eps)                          # (S,)
+        cy_p = (py @ A_p) / (wsum_p + eps)
+
+        # --- Target: already one hit per entry (single tick) ---
+        valid = (target_pixel_ids >= 0).astype(w.dtype)
+        q_t = adc2charge(target['adcs'], params) * valid           # (Nhits,)
+        A_t = soft_assign(target['ticks'].astype(w.dtype)) * q_t[:, None]  # (Nhits, S)
+        wsum_t = jnp.sum(A_t, axis=0)                               # (S,)
+        cx_t = (target['pixel_x'] @ A_t) / (wsum_t + eps)
+        cy_t = (target['pixel_y'] @ A_t) / (wsum_t + eps)
 
         # Weight each slice by the (min) charge present in both; only slices with target+pred charge.
         w_slice = jnp.sqrt((wsum_p * wsum_t)) * (wsum_t > eps) * (wsum_p > eps)
