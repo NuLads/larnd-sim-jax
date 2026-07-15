@@ -21,8 +21,8 @@ STEP=${STEP:-2.0}
 GEOM=${GEOM:-adam}
 GNSTEPS=${GNSTEPS:-8}
 
-INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/diffsim_input/true_through_muon_edep_10cm_vol1cm.h5
-INPUT_FILE_SIM=/sdf/group/neutrino/pgranger/lads-data/linear_guess_segments.h5
+INPUT_FILE_TGT=${INPUT_FILE_TGT:-/sdf/data/neutrino/cyifan/diffsim_input/true_through_muon_edep_10cm_vol1cm.h5}
+INPUT_FILE_SIM=${INPUT_FILE_SIM:-/sdf/group/neutrino/pgranger/lads-data/linear_guess_segments.h5}
 SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax/larndsim-jax_main.sif
 JAX_CACHE_DIR=/sdf/group/neutrino/pgranger/.jax_cache
 
