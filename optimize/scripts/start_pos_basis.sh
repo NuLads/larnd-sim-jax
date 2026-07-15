@@ -48,7 +48,7 @@ python3 -m optimize.example_run \
     --number_pix_neighbors 4 --signal_length 150 --mode lut \
     --lut_file src/larndsim/detector_properties/response_44.npy \
     --loss_fn llhd ${LOSS_TW:+--loss_time_window $LOSS_TW} ${LOSS_SC:+--loss_sigma_charge $LOSS_SC} ${LOSS_ST:+--loss_sigma_time $LOSS_ST} --probabilistic_sim --sim_seed_strategy different --non_deterministic --no-noise \
-    --fit_chain_positions --chain_lr ${CLR} --chain_start_iter 0 --chain_update_freq 1 \
+    --fit_chain_positions --chain_lr ${CLR} ${CHAIN_DECAY:+--chain_decay_rate $CHAIN_DECAY --chain_decay_start 0} --chain_start_iter 0 --chain_update_freq 1 \
     --mcs_prior_weight ${MCS} --chain_step_len ${STEP} --chain_momentum_GeV 3.0 \
     --chain_basis ${BASIS} --chain_spline_knot_cm ${KNOT} \
     --geom_optimizer ${GEOM} --geom_lbfgs_steps ${GNSTEPS} \
