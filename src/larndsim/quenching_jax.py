@@ -275,7 +275,7 @@ def _dedx_density_flow_quadrature(R_values, particle_type, n_nodes=16, y_clip=5.
     norm = flow_bundle["norm_params"]
     flow_cond_shape = getattr(flow, "cond_shape", None)
     cond_dim = int(flow_bundle.get("cond_dim", flow_cond_shape[0] if flow_cond_shape else 0))
-    use_condition = flow_cond_shape is not None and cond_dim > 0
+    use_condition = bool(flow_bundle.get("use_condition", ("R_mean" in norm and "R_std" in norm and cond_dim > 0)))
 
     y_mean = jnp.asarray(float(norm["dEdx_log_mean"]), dtype=jnp.float32)
     y_std = jnp.asarray(float(norm["dEdx_log_std"]), dtype=jnp.float32)
