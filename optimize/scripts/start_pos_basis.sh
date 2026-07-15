@@ -38,10 +38,10 @@ cd /sdf/group/neutrino/pgranger/larnd-sim-jax
 export PYTHONPATH=\$PWD/src:\$PWD:\$PYTHONPATH
 export JAX_COMPILATION_CACHE_DIR=${JAX_CACHE_DIR}
 python3 -m optimize.example_run \
-    --params long_diff \
+    --params ${PARAMS:-long_diff} \
     --input_file_sim ${INPUT_FILE_SIM} --input_file_tgt ${INPUT_FILE_TGT} \
     --fit_type chain --iterations ${ITER} --max_nbatch 100 --max_batch_len ${LEN} \
-    --data_seed 1 --seed ${SEED:-0} --lr 0 --optimizer_fn Adam \
+    --data_seed 1 --seed ${SEED:-0} ${SETINIT:+--set_init_params $SETINIT} --lr 0 --optimizer_fn Adam \
     --lr_scheduler warmup_exponential_decay_schedule \
     --lr_kw '{\"decay_rate\" : 0.999, \"init_value\" : 0, \"warmup_steps\": 500}' \
     --max_clip_norm_val 100 --electron_sampling_resolution 0.01 \
