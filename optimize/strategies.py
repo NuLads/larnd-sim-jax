@@ -524,6 +524,9 @@ class ProbabilisticLossStrategy(LossStrategy):
         prob = jnp.exp(prediction['hit_prob'])                       # (Npix, Nval, Ntick)
         pred_charge = adc2charge(prediction['adcs_distrib'], params) # (Npix, Nval, Ntick)
         w_pt = jnp.sum(prob * pred_charge, axis=1)                   # (Npix, Ntick)  expected charge
+        # Mask padded/invalid pixels (unique_pixels padded with -1 -> garbage coordinates from id2pixel)
+        pix_valid = (prediction['unique_pixels'] >= 0).astype(w_pt.dtype)  # (Npix,)
+        w_pt = w_pt * pix_valid[:, None]
         Ntick = w_pt.shape[1]
         px = prediction['pixel_x']; py = prediction['pixel_y']      # (Npix,)
 
