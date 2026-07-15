@@ -116,7 +116,7 @@ def get_dedx_density_data(particle_type, force_reload=False):
     return artifact
 
 
-def _build_dedx_flow_template():
+def _build_dedx_flow_template(cond_dim=1):
     global eqx, RationalQuadraticSpline, StandardNormal, masked_autoregressive_flow, _FLOW_DEPS_AVAILABLE
 
     if _FLOW_DEPS_AVAILABLE is None:
@@ -144,7 +144,7 @@ def _build_dedx_flow_template():
         key=key,
         base_dist=StandardNormal((1,)),
         transformer=RationalQuadraticSpline(knots=8, interval=5.0),
-        cond_dim=1,
+        cond_dim=cond_dim,
         flow_layers=6,
         nn_width=64,
         nn_depth=3,
@@ -155,7 +155,7 @@ def get_dedx_flow_model(particle_type, force_reload=False):
     """Load and cache a particle-specific dE/dx flow model + normalization metadata."""
     global _dedx_flow_cache
 
-    supported_particles = ("stopping_muon", "stopping_proton")
+    supported_particles = ("stopping_muon", "stopping_proton", "throughgoing_muon")
     if particle_type not in supported_particles:
         raise ValueError(
             f"Unknown flow particle type '{particle_type}'. Expected one of: {list(supported_particles)}"
@@ -175,10 +175,12 @@ def get_dedx_flow_model(particle_type, force_reload=False):
     meta_map = {
         "stopping_muon": "dedx_flow_model_meta_stopping_muon_dx0.1mm.pkl",
         "stopping_proton": "dedx_flow_model_meta_stopping_proton_dx0.1mm.pkl",
+        "throughgoing_muon": "dedx_flow_model_meta_throughgoing_muon_dx0.1mm.pkl",
     }
     default_state_map = {
         "stopping_muon": "dedx_flow_model_stopping_muon_dx0.1mm.eqx",
         "stopping_proton": "dedx_flow_model_stopping_proton_dx0.1mm.eqx",
+        "throughgoing_muon": "dedx_flow_model_throughgoing_muon_dx0.1mm.eqx",
     }
 
     meta_path = detprop_dir / meta_map[particle_type]
@@ -201,11 +203,25 @@ def get_dedx_flow_model(particle_type, force_reload=False):
         f"dE/dx density [flow] loading state: particle_type={particle_type}, path={state_path}"
     )
 
-    template_flow = _build_dedx_flow_template()
+    condition_mode = str(meta.get("condition_mode", "conditional")).lower()
+    if "cond_dim" in meta:
+        cond_dim = int(meta["cond_dim"])
+    elif condition_mode in ("none", "unconditional"):
+        cond_dim = 0
+    else:
+        cond_dim = 1
+    if cond_dim < 0:
+        raise ValueError(f"Invalid cond_dim={cond_dim} in flow metadata at {meta_path}")
+
+    use_condition = cond_dim > 0 and condition_mode not in ("none", "unconditional")
+
+    template_flow = _build_dedx_flow_template(cond_dim=cond_dim)
     flow = eqx.tree_deserialise_leaves(state_path, template_flow)
 
     norm_params = meta.get("norm_params", {})
-    required_keys = ["R_mean", "R_std", "dEdx_log_mean", "dEdx_log_std"]
+    required_keys = ["dEdx_log_mean", "dEdx_log_std"]
+    if use_condition:
+        required_keys.extend(["R_mean", "R_std"])
     missing = [k for k in required_keys if k not in norm_params]
     if missing:
         raise ValueError(f"Missing norm params in flow metadata: {missing}")
@@ -216,6 +232,9 @@ def get_dedx_flow_model(particle_type, force_reload=False):
         "particle_type": particle_type,
         "meta_path": str(meta_path),
         "state_path": str(state_path),
+        "cond_dim": cond_dim,
+        "use_condition": use_condition,
+        "condition_mode": condition_mode,
     }
     _dedx_flow_cache[cache_key] = artifact
     return artifact
@@ -240,17 +259,12 @@ def preload_dedx_density_resources(particle_types=None, density_mode="histogram"
         raise ValueError(f"Unknown dedx density mode '{density_mode}'. Use 'histogram' or 'flow'.")
 
     if density_mode == "flow":
-        if particle_types:
-            flow_particle_types = set()
-            if "throughgoing_muon" in particle_types or "stopping_muon" in particle_types:
-                flow_particle_types.add("stopping_muon")
-            if "stopping_proton" in particle_types:
-                flow_particle_types.add("stopping_proton")
-            for particle_type in sorted(flow_particle_types):
-                get_dedx_flow_model(particle_type=particle_type, force_reload=force_reload)
-        else:
-            get_dedx_flow_model(particle_type="stopping_muon", force_reload=force_reload)
-            get_dedx_flow_model(particle_type="stopping_proton", force_reload=force_reload)
+        # quench(..., dedx_density_mode='flow') may evaluate all three particle flows
+        # in a single JIT trace path. Ensure every flow model is loaded in Python scope
+        # ahead of tracing to avoid deserializing Equinox modules under a JAX transform.
+        flow_particle_types = ("stopping_muon", "stopping_proton", "throughgoing_muon")
+        for particle_type in flow_particle_types:
+            get_dedx_flow_model(particle_type=particle_type, force_reload=force_reload)
 
     if not particle_types:
         particle_types = ("throughgoing_muon", "stopping_muon", "stopping_proton")
@@ -390,6 +404,9 @@ class Params_template:
     size_margin: float = struct.field(pytree_node=False)
     use_dedx_density: bool = struct.field(pytree_node=False, default=False)
     dedx_density_mode: str = struct.field(pytree_node=False, default="histogram")  # histogram | flow
+    flow_expectation_mode: str = struct.field(pytree_node=False, default="sample")  # sample | grid | quadrature
+    flow_quadrature_nodes: int = struct.field(pytree_node=False, default=24)  # Gauss-Legendre nodes; per-particle overrides in quenching_jax.py
+    flow_quadrature_y_clip: float = struct.field(pytree_node=False, default=5.25)  # Normalized y range [-clip, clip]; empirically ~5.15-5.25 per particle
     diffusion_in_current_sim: bool = struct.field(pytree_node=False, default=True)
     mc_diff: bool = struct.field(pytree_node=False, default=False)
     nb_sampling_bins_per_pixel: int = struct.field(pytree_node=False, default=10)
@@ -519,6 +536,9 @@ def load_detector_properties(params_cls, detprop_file, pixel_file):
         "signal_length": 150,
         "use_dedx_density": False,
         "dedx_density_mode": "histogram",
+        "flow_expectation_mode": "sample",
+        "flow_quadrature_nodes": 16,  # Gauss-Legendre nodes; per-particle overrides in quenching_jax.py
+        "flow_quadrature_y_clip": 5.2,  # Normalized y range [-clip, clip]; empirically ~5.15-5.25 per particle
         "MAX_ADC_VALUES": 10,
         "DISCRIMINATION_THRESHOLD": 7e3,
         "ADC_HOLD_DELAY": 15,
