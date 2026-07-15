@@ -253,10 +253,8 @@ class ParamFitter:
         self.use_dedx_density = bool(getattr(config, "use_dedx_density", False))
         self.dedx_density_mode = getattr(config, "dedx_density_mode", "histogram")
         self.flow_expectation_mode = getattr(config, "flow_expectation_mode", "sample")
-        flow_quadrature_nodes = getattr(config, "flow_quadrature_nodes", None)
-        self.flow_quadrature_nodes = int(flow_quadrature_nodes) if flow_quadrature_nodes is not None else None
-        flow_quadrature_y_clip = getattr(config, "flow_quadrature_y_clip", None)
-        self.flow_quadrature_y_clip = float(flow_quadrature_y_clip) if flow_quadrature_y_clip is not None else None
+        self.flow_quadrature_nodes = int(getattr(config, "flow_quadrature_nodes", 16))
+        self.flow_quadrature_y_clip = float(getattr(config, "flow_quadrature_y_clip", 5.0))
         self.probabilistic_sim = probabilistic_sim
         self.sz_mini_bt = sz_mini_bt
         self.shuffle_bt = shuffle_bt

@@ -407,8 +407,8 @@ class Params_template:
     use_dedx_density: bool = struct.field(pytree_node=False, default=False)
     dedx_density_mode: str = struct.field(pytree_node=False, default="histogram")  # histogram | flow
     flow_expectation_mode: str = struct.field(pytree_node=False, default="sample")  # sample | grid | quadrature
-    flow_quadrature_nodes: int | None = struct.field(pytree_node=False, default=None)  # Optional global Gauss-Legendre nodes override; None uses per-particle defaults in quenching_jax.py
-    flow_quadrature_y_clip: float | None = struct.field(pytree_node=False, default=None)  # Optional global normalized y range override; None uses per-particle defaults
+    flow_quadrature_nodes: int = struct.field(pytree_node=False, default=24)  # Gauss-Legendre nodes; per-particle overrides in quenching_jax.py
+    flow_quadrature_y_clip: float = struct.field(pytree_node=False, default=5.25)  # Normalized y range [-clip, clip]; empirically ~5.15-5.25 per particle
     diffusion_in_current_sim: bool = struct.field(pytree_node=False, default=True)
     mc_diff: bool = struct.field(pytree_node=False, default=False)
     nb_sampling_bins_per_pixel: int = struct.field(pytree_node=False, default=10)
@@ -592,8 +592,8 @@ def load_detector_properties(params_cls, detprop_file, pixel_file):
         "use_dedx_density": False,
         "dedx_density_mode": "histogram",
         "flow_expectation_mode": "sample",
-        "flow_quadrature_nodes": None,  # Optional global Gauss-Legendre nodes override; None uses per-particle defaults in quenching_jax.py
-        "flow_quadrature_y_clip": None,  # Optional global normalized y range override; None uses per-particle defaults
+        "flow_quadrature_nodes": 16,  # Gauss-Legendre nodes; per-particle overrides in quenching_jax.py
+        "flow_quadrature_y_clip": 5.2,  # Normalized y range [-clip, clip]; empirically ~5.15-5.25 per particle
         "MAX_ADC_VALUES": 10,
         "DISCRIMINATION_THRESHOLD": 7e3,
         "ADC_HOLD_DELAY": 15,
