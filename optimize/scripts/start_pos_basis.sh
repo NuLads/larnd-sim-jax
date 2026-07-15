@@ -47,7 +47,7 @@ python3 -m optimize.example_run \
     --max_clip_norm_val 100 --electron_sampling_resolution 0.01 \
     --number_pix_neighbors 4 --signal_length 150 --mode lut \
     --lut_file src/larndsim/detector_properties/response_44.npy \
-    --loss_fn llhd --probabilistic_sim --sim_seed_strategy different --non_deterministic --no-noise \
+    --loss_fn llhd ${LOSSKW:+--loss_fn_kw "$LOSSKW"} --probabilistic_sim --sim_seed_strategy different --non_deterministic --no-noise \
     --fit_chain_positions --chain_lr ${CLR} --chain_start_iter 0 --chain_update_freq 1 \
     --mcs_prior_weight ${MCS} --chain_step_len ${STEP} --chain_momentum_GeV 3.0 \
     --chain_basis ${BASIS} --chain_spline_knot_cm ${KNOT} \
