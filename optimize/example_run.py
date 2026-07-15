@@ -117,6 +117,15 @@ def main(config):
     param_list = make_param_list(config)
     logger.info(f"Param list: {param_list}")
 
+    # Merge individual loss-width overrides into loss_fn_kw (clean CLI, avoids JSON quoting).
+    _lkw = dict(config.loss_fn_kw or {})
+    for _a, _k in [('loss_sigma_charge', 'sigma_charge'), ('loss_time_window', 'time_window'), ('loss_sigma_time', 'sigma_time')]:
+        if getattr(config, _a, None) is not None:
+            _lkw[_k] = getattr(config, _a)
+    config.loss_fn_kw = _lkw or None
+    if _lkw:
+        logger.info(f"Loss overrides: {_lkw}")
+
     if config.fit_type == "chain":
         param_fit = GradientDescentFitter(relevant_params=param_list,
                                 sim_track_fields=sim_track_fields, tgt_track_fields=tgt_track_fields,
@@ -433,6 +442,9 @@ if __name__ == '__main__':
                         help="Feature to use for distribution loss.")
     parser.add_argument("--loss_fn_kw", dest="loss_fn_kw", default=None, type=json.loads,
                         help="Loss function keyword arguments.")
+    parser.add_argument("--loss_sigma_charge", default=None, type=float, help="Override ProbabilisticLoss sigma_charge (wider = less per-hit-noise-sensitive).")
+    parser.add_argument("--loss_time_window", default=None, type=int, help="Override ProbabilisticLoss time_window (wider = marginalize more ticks).")
+    parser.add_argument("--loss_sigma_time", default=None, type=float, help="Override ProbabilisticLoss sigma_time.")
     parser.add_argument("--max_batch_len", dest="max_batch_len", default=None, type=float,
                         help="Max dx [cm] per batch. If passed, will add tracks to batch until overflow, splitting where needed")
     parser.add_argument("--max_nbatch", dest="max_nbatch", default=None, type=int,
