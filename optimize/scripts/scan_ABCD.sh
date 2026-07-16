@@ -20,7 +20,7 @@
 # --- CONFIGURATION SELECTION ---
 # Example format: A1-B1-C1-D1
 # Change this variable or pass it as an argument
-CONFIG="A6-B2-C2-D2"
+CONFIG="A2-B2-C2-D2"
 
 if [ -z "$SLURM_ARRAY_TASK_ID" ]; then
     SLURM_ARRAY_TASK_ID=1
@@ -84,14 +84,14 @@ elif [ "$CONF_A" == "A2" ]; then
         B_LABEL="closure"
     elif [ "$CONF_B" == "B2" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_reco_dE_range_0.05cm.h5
-        USE_DENSITY_FLAG="--use_dedx_density"
-        B_LABEL="dE_density"
-        # B_LABEL="reco_dE"
+        # USE_DENSITY_FLAG="--use_dedx_density"
+        # B_LABEL="dE_density"
+        B_LABEL="reco_dE"
     elif [ "$CONF_B" == "B3" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_true_traj_start_end_reco_seg_step_0.01cm_range_0.05cm.h5
         B_LABEL="reco_traj_st_ed_pos_dE"
     elif [ "$CONF_B" == "B4" ]; then
-	INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_max_evt_37815_reco_pos_dE_seg_step_0.01cm_range_0.05cm.h5
+	    INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_max_evt_37815_reco_pos_dE_seg_step_0.01cm_range_0.05cm.h5
         B_LABEL="reco_pos_dE"
     fi
 elif [ "$CONF_A" == "A3" ]; then
@@ -148,7 +148,15 @@ elif [ "$CONF_C" == "C3" ]; then
     LR_LABEL="1"
 fi
 
-# D: Noise / Probabilistic Flag
+# D: Noise / Probabilistic Flag / Marginalization
+# D4 = D2 + Sigma_hat marginalization (input-segment noise from Stage 1 closure test).
+# The sigma_hat.npz path below was derived from the A2/B4 residual table; regenerate
+# it if you change the (reco, truth) pair.
+# MARG_K controls how many ε draws are averaged per compute_loss (K=1 default; K>1
+# reduces per-step gradient variance at K× wall-clock, useful for scan smoothing).
+MARGINALIZE_FLAG=""
+SIGMA_HAT_NPZ=optimize/analysis_scripts/bias_hat/sigma_hat.npz
+MARG_K=${MARG_K:-1}
 if [ "$CONF_D" == "D1" ]; then
     PROB_FLAG=""
     D_LABEL="stoc_noise"
@@ -157,6 +165,11 @@ elif [ "$CONF_D" == "D2" ]; then
     PROB_FLAG="--probabilistic_sim"
     D_LABEL="prob_noise"
     LOSS=llhd
+elif [ "$CONF_D" == "D4" ]; then
+    PROB_FLAG="--probabilistic_sim"
+    D_LABEL="prob_noise_marg_k${MARG_K}"
+    LOSS=llhd
+    MARGINALIZE_FLAG="--sigma_hat_npz ${SIGMA_HAT_NPZ} --marginalize_k ${MARG_K}"
 fi
 
 #PARAMS=optimize/scripts/param_list_${CONFIG}.yaml
@@ -212,5 +225,6 @@ python3 -m optimize.example_run \
     ${PROB_FLAG} \
     ${CHOP_FLAG} \
     ${USE_DENSITY_FLAG} \
+    ${MARGINALIZE_FLAG} \
     --print_input
 "
