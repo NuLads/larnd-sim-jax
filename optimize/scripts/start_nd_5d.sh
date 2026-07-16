@@ -25,6 +25,7 @@ DEDX_LR=1e-2
 MCS_PRIOR_WEIGHT=0.5
 CHAIN_STEP_LEN=2.0
 DRIFT_PROFILE=${DRIFT_PROFILE:-0.0}   # dEdx<->lifetime degeneracy breaker (needed at long scale)
+DEDX_PRIOR=${DEDX_PRIOR:-0.5}         # per-segment dEdx prior weight (higher = less freedom to absorb lifetime)
 
 INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/diffsim_input/true_through_muon_edep_10cm_vol1cm.h5
 INPUT_FILE_SIM=/sdf/group/neutrino/pgranger/lads-data/linear_guess_segments.h5
@@ -75,7 +76,7 @@ python3 -m optimize.example_run \
     --dedx_lr ${DEDX_LR} \
     --dedx_start_iter 0 \
     --dedx_freeze_iter 5200 \
-    --dedx_prior_weight 0.5 \
+    --dedx_prior_weight ${DEDX_PRIOR} \
     --dedx_use_split_t True \
     --dedx_student_nu_l 4.785 --dedx_student_nu_r 2.073 \
     --dedx_student_scale_l 0.1204 --dedx_student_scale_r 0.1058 \
