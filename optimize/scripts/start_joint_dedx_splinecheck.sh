@@ -63,7 +63,7 @@ python3 -m optimize.example_run \
     --max_batch_len ${MAX_BATCH_LEN} \
     --data_seed ${DATA_SEED} \
     --seed ${SEED} \
-    --lr 0 \
+    --lr ${CAL_LR:-0} \
     --optimizer_fn Adam \
     --max_clip_norm_val 100 \
     --electron_sampling_resolution 0.01 \
