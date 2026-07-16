@@ -20,7 +20,7 @@
 # --- CONFIGURATION SELECTION ---
 # Example format: A1-B1-C1-D1
 # Change this variable or pass it as an argument
-CONFIG="A2-B3-C2-D1" 
+CONFIG="A2-B5-C2-D2" 
 
 if [ -z "$SLURM_ARRAY_TASK_ID" ]; then
     SLURM_ARRAY_TASK_ID=1
@@ -39,6 +39,8 @@ N_NEIGH=4
 MODE="lut"
 LR_SCHEDULER=warmup_exponential_decay_schedule
 SIGNAL_LENGTH=200
+DEDX_DENSITY_MODE=flow #flow #histogram
+FLOW_EXPECTATION_MODE=sample
 
 # --- LOGIC FOR COMBINATIONS ---
 
@@ -49,11 +51,23 @@ IFS='-' read -r CONF_A CONF_B CONF_C CONF_D <<< "$CONFIG"
 if [ "$CONF_A" == "A1" ]; then
     INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/diffsim_input/true_proton_edep_2cm_range_0.1-cm.h5
     CHOP_FLAG="" # No --no_chop for A1
-    DX_LABEL="dxvaried"
+    DX_LABEL="stopp_dxvaried"
 elif [ "$CONF_A" == "A2" ]; then
     INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_range_0.05cm.h5
     CHOP_FLAG="--no_chop" # Add --no_chop for A2
-    DX_LABEL="dx0.01"
+    DX_LABEL="stopp_dx0.01"
+elif [ "$CONF_A" == "A3" ]; then
+    INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_1250070/job_25210996_0000/output_25210996_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_range_0.2cm.h5
+    # CHOP_FLAG="--no_chop" # Add --no_chop for A2
+    DX_LABEL="stopp_dx0.1_chopped"
+elif [ "$CONF_A" == "A5" ]; then
+    INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3576201/job_23729838_0000/output_23729838_0000-edepsim_lbl_range_0.05cm.h5
+    CHOP_FLAG="--no_chop" # No --no_chop for A3
+    DX_LABEL="thrumu_dx0.01"
+elif [ "$CONF_A" == "A6" ]; then
+    INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3407823/job_27035649_0001/output_27035649_0001-edepsim_lbl_trklen2cm_containment2cm_costheta0.966.h5
+    CHOP_FLAG="--no_chop" # No --no_chop for A3
+    DX_LABEL="stopmu_dx0.01"
 fi
 
 # B: SIM Input File
@@ -71,16 +85,61 @@ elif [ "$CONF_A" == "A2" ]; then
         B_LABEL="closure"
     elif [ "$CONF_B" == "B2" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_reco_dE_range_0.05cm.h5
-        B_LABEL="reco_dE"
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="dE_density"
+        # B_LABEL="reco_dE"
     elif [ "$CONF_B" == "B3" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_true_traj_start_end_reco_seg_step_0.01cm_range_0.05cm.h5
         B_LABEL="reco_traj_st_ed_pos_dE"
     elif [ "$CONF_B" == "B4" ]; then
-	INPUT_FILE_TGT=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_range_0.05cm_correct_dir.h5
-	INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_max_evt_37815_reco_pos_dE_seg_step_0.01cm_range_0.05cm_correct_dir.h5
-        B_LABEL="reco_pos_dE"
+	    INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_max_evt_37815_reco_pos_dE_seg_step_0.01cm_range_0.05cm.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="reco_pos_dE_density"
+    elif [ "$CONF_B" == "B5" ]; then
+	    INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_max_evt_37815_reco_pos_dE_seg_step_0.01cm_range_0.05cm.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="reco_pos_dE_density_no_diffusion_par_lr2"
+    fi
+elif [ "$CONF_A" == "A3" ]; then
+    if [ "$CONF_B" == "B1" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_1250070/job_25210996_0000/output_25210996_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_range_0.2cm.h5
+        B_LABEL="closure"
+    elif [ "$CONF_B" == "B2" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_1250070/job_25210996_0000/output_25210996_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_reco_dE_range_0.2cm.h5
+        B_LABEL="reco_dE"
+    fi
+elif [ "$CONF_A" == "A5" ]; then
+    if [ "$CONF_B" == "B1" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3576201/job_23729838_0000/output_23729838_0000-edepsim_lbl_range_0.05cm.h5
+        B_LABEL="closure"
+    elif [ "$CONF_B" == "B2" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3576201/job_23729838_0000/output_23729838_0000-edepsim_lbl_range_0.05cm.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="dE_density"
+    elif [ "$CONF_B" == "B3" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3576201/job_23729838_0000/output_23729838_0000-edepsim_lbl_range_0.05cm_straight_line_reco_idx0_10000.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="dE_density_reco_pos"
+    elif [ "$CONF_B" == "B4" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3576201/job_23729838_0000/output_23729838_0000-edepsim_lbl_range_0.05cm_straight_line_reco_idx0_10000.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="dE_density_reco_pos_Ab_Efield_lifetime"
+    elif [ "$CONF_B" == "B5" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3576201/job_23729838_0000/output_23729838_0000-edepsim_lbl_range_0.05cm_straight_line_reco_idx0_10000.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="dE_density_reco_pos_kb_Efield_lifetime"
+    fi
+elif [ "$CONF_A" == "A6" ]; then
+    if [ "$CONF_B" == "B1" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3407823/job_27035649_0001/output_27035649_0001-edepsim_lbl_trklen2cm_containment2cm_costheta0.966.h5
+        B_LABEL="closure"
+    elif [ "$CONF_B" == "B2" ]; then
+        INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_3407823/job_27035649_0001/output_27035649_0001-edepsim_lbl_trklen2cm_containment2cm_costheta0.966.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="dE_density"
     fi
 fi
+
 
 # C: Normalization / Params
 if [ "$CONF_C" == "C1" ]; then
@@ -119,10 +178,10 @@ elif [ "$CONF_D" == "D2" ]; then
     LOSS=llhd
 fi
 
-PARAMS=optimize/scripts/param_list_${CONFIG}.yaml
+PARAMS=optimize/scripts/param_list_${CONFIG}_2.yaml
 
 # Generate Label
-LABEL="r3_${CONFIG}_stopp_${B_LABEL}_${DX_LABEL}_${D_LABEL}_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_${NORM}_tgtsd${TARGET_SEED}"
+LABEL="${CONFIG}_${B_LABEL}_${DX_LABEL}_${D_LABEL}_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_${NORM}_tgtsd${TARGET_SEED}"
 
 SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax.sif
 
@@ -155,7 +214,7 @@ python3 -m optimize.example_run \
     --number_pix_neighbors ${N_NEIGH} \
     --signal_length ${SIGNAL_LENGTH} \
     --mode ${MODE} \
-    --lut_file ../Data_selection/response_44_v2a_full_tick.npz \
+    --lut_file src/larndsim/detector_properties/response_44_v2a_full_tick.npz \
     --loss_fn ${LOSS} \
     --sim_seed_strategy ${SEED_STRATEGY} \
     --clip_from_range \
@@ -163,7 +222,9 @@ python3 -m optimize.example_run \
     --lr_kw '{\"decay_rate\" : 0.99, \"init_value\" : 0, \"warmup_steps\": 1000}' \
     --shuffle_bt \
     --normalization_scheme ${NORM} \
+    --dedx_density_mode ${DEDX_DENSITY_MODE} \
     ${PROB_FLAG} \
     ${CHOP_FLAG} \
+    ${USE_DENSITY_FLAG} \
     --print_input
 "

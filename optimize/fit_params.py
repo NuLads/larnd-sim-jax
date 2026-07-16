@@ -12,7 +12,7 @@ import numpy as np
 from .ranges import ranges
 from larndsim.sim_jax import get_size_history
 from larndsim.losses_jax import mse_adc, mse_time, mse_time_adc, chamfer_3d, sdtw_adc, sdtw_time, sdtw_time_adc, adc2charge, nll_loss, llhd_loss #, sinkhorn_loss
-from larndsim.consts_jax import build_params_class, load_detector_properties, load_lut
+from larndsim.consts_jax import build_params_class, load_detector_properties, load_lut, apply_diffusion_link
 from larndsim.detsim_jax import validate_event_ids_for_packing, validate_local_event_ids
 from larndsim.softdtw_jax import SoftDTW
 from jax.flatten_util import ravel_pytree
@@ -239,6 +239,8 @@ class ParamFitter:
         self.target_fixed_range = target_fixed_range
         self.diffusion_in_current_sim = diffusion_in_current_sim
         self.mc_diff = mc_diff
+        self.link_diffusion = bool(getattr(config, "link_diffusion", False))
+        self._diffusion_anchor = "long_diff"
 
         self.out_label = out_label
         self.test_name = test_name
@@ -251,6 +253,9 @@ class ParamFitter:
         self.signal_length = config.signal_length
         self.use_dedx_density = bool(getattr(config, "use_dedx_density", False))
         self.dedx_density_mode = getattr(config, "dedx_density_mode", "histogram")
+        self.flow_expectation_mode = getattr(config, "flow_expectation_mode", "sample")
+        self.flow_quadrature_nodes = int(getattr(config, "flow_quadrature_nodes", 16))
+        self.flow_quadrature_y_clip = float(getattr(config, "flow_quadrature_y_clip", 5.0))
         self.probabilistic_sim = probabilistic_sim
         self.sz_mini_bt = sz_mini_bt
         self.shuffle_bt = shuffle_bt
@@ -272,7 +277,13 @@ class ParamFitter:
                 f"apply_swap={marginalize_apply_swap}; K={self.marginalize_k}"
             )
 
-        print(f"Using dE/dx density propagation: {self.use_dedx_density}, mode: {self.dedx_density_mode}")
+        print(
+            "Using dE/dx density propagation: "
+            f"{self.use_dedx_density}, mode: {self.dedx_density_mode}, "
+            f"flow_expectation_mode: {self.flow_expectation_mode}, "
+            f"flow_quadrature_nodes: {self.flow_quadrature_nodes}, "
+            f"flow_quadrature_y_clip: {self.flow_quadrature_y_clip}"
+        )
 
         if self.normalization_scheme not in ("sigmoid", "exp_log", "divide"):
             raise ValueError(
@@ -297,6 +308,26 @@ class ParamFitter:
             self.relevant_params_dict = None
         else:
             raise TypeError("relevant_params must be list of param names or list of dicts with learning rates")
+
+        if self.link_diffusion and {"long_diff", "tran_diff"}.issubset(set(self.relevant_params_list)):
+            raise ValueError(
+                "--link_diffusion is enabled, so long_diff and tran_diff are not independent. "
+                "Fit only one of them."
+            )
+        if self.link_diffusion:
+            has_long = "long_diff" in self.relevant_params_list
+            has_tran = "tran_diff" in self.relevant_params_list
+            if has_long ^ has_tran:
+                self._diffusion_anchor = "long_diff" if has_long else "tran_diff"
+                logger.info(
+                    "Auto-selected diffusion-link anchor from fit params: %s",
+                    self._diffusion_anchor,
+                )
+            # The other diffusion field is derived via apply_diffusion_link.
+            # Track it separately so we can log its trajectory in the pkl.
+            self._linked_derived = "tran_diff" if self._diffusion_anchor == "long_diff" else "long_diff"
+        else:
+            self._linked_derived = None
 
         self.target_val_dict = None
         if len(set_target_vals) > 0:
@@ -377,6 +408,15 @@ class ParamFitter:
         for param in self.shift_no_fit:
             self.training_history[param + '_target'] = []
 
+        # Log the linked-diffusion derived parameter's trajectory too.
+        # It has no direct gradient (not in relevant_params_list) but its
+        # value evolves each iteration as anchor and eField change.
+        if self._linked_derived is not None:
+            d = self._linked_derived
+            self.training_history[d] = []
+            self.training_history[d + '_target'] = []
+            self.training_history[d + '_init'] = [float(getattr(self.current_params, d))]
+
         if self.compute_target_hessian:
             self.training_history['hessian'] = []
             self.training_history['gradient'] = []
@@ -397,8 +437,22 @@ class ParamFitter:
             return self.normalization_scale_exp_log
         return 1.0
 
+    def _apply_linked_diffusion(self, params):
+        if not self.link_diffusion:
+            return params
+        return apply_diffusion_link(params, anchor=self._diffusion_anchor)
+
     def setup_params(self):
-        Params = build_params_class(self.relevant_params_list)
+        # When link_diffusion is on, apply_diffusion_link writes a JAX tracer
+        # (tran_diff * ratio(eField)) into the derived-side field. That field
+        # must be a real pytree leaf (pytree_node=True); otherwise Flax treats
+        # every unique tracer as a new static and JAX recompiles every trace.
+        params_for_grad = list(self.relevant_params_list)
+        if self.link_diffusion:
+            derived = "tran_diff" if self._diffusion_anchor == "long_diff" else "long_diff"
+            if derived not in params_for_grad:
+                params_for_grad.append(derived)
+        Params = build_params_class(params_for_grad)
         ref_params = load_detector_properties(Params, self.detector_props, self.pixel_layouts)
 
         if self.set_params:
@@ -419,9 +473,13 @@ class ParamFitter:
             "mc_diff",
             "use_dedx_density",
             "dedx_density_mode",
+            "flow_expectation_mode",
+            "flow_quadrature_nodes",
+            "flow_quadrature_y_clip",
         ]
 
         ref_params = ref_params.replace(**{key: getattr(self, key) for key in params_to_apply})
+        ref_params = self._apply_linked_diffusion(ref_params)
 
         # Initialize Simulation Strategy
         if self.current_mode == 'lut':
@@ -461,6 +519,7 @@ class ParamFitter:
                 initial_params[param_name] = float(param_val)
 
         self.current_params = ref_params.replace(**initial_params)
+        self.current_params = self._apply_linked_diffusion(self.current_params)
 
         self.ref_params = ref_params
 
@@ -493,6 +552,7 @@ class ParamFitter:
                 for key in self.relevant_params_list
             }
         self.current_params = self.ref_params.replace(**new_physical_params)
+        self.current_params = self._apply_linked_diffusion(self.current_params)
 
     def make_target_sim(self):
         np.random.seed(self.target_seed)
@@ -523,6 +583,7 @@ class ParamFitter:
                 logger.info(f'{param}, target: {param_val}, init {getattr(self.current_params, param)}')    
                 self.target_params[param] = param_val
         self.target_params = self.ref_params.replace(**self.target_params)
+        self.target_params = self._apply_linked_diffusion(self.target_params)
         # Target generation must always use original per-segment dEdx (no dE/dx density propagation).
         self.target_params = self.target_params.replace(
             use_dedx_density=False,
@@ -735,6 +796,7 @@ class ParamFitter:
             lv, gr, ax, hs, ahs = None, None, None, None, None
             if use_physical_params:
                 def loss_wrapper(physical_params):
+                    physical_params = self._apply_linked_diffusion(physical_params)
                     prediction = self.sim_strategy.predict(physical_params, tracks_this, self.sim_track_fields, rngkey)
                     return self.loss_strategy.compute(physical_params, prediction, target_data)
 
@@ -761,6 +823,7 @@ class ParamFitter:
                             for key in self.relevant_params_list
                         }
                     physical_params = self.ref_params.replace(**new_phys)
+                    physical_params = self._apply_linked_diffusion(physical_params)
                     prediction = self.sim_strategy.predict(physical_params, tracks_this, self.sim_track_fields, rngkey)
                     return self.loss_strategy.compute(physical_params, prediction, target_data)
 
@@ -822,6 +885,9 @@ class ParamFitter:
         self.training_history['losses_iter'] = []
         self.training_history['aux_iter'] = []
 
+        if self._linked_derived is not None:
+            self.training_history[self._linked_derived + "_iter"] = []
+
         # Include initial value in training history (if haven't loaded a checkpoint)
         for param in self.relevant_params_list:
             if len(self.training_history[param]) == 0:
@@ -834,6 +900,13 @@ class ParamFitter:
             for param in self.shift_no_fit:
                 if len(self.training_history[param+'_target']) == 0:
                     self.training_history[param+'_target'].append(getattr(self.target_params, param))
+
+        if self._linked_derived is not None:
+            d = self._linked_derived
+            if len(self.training_history[d + "_iter"]) == 0:
+                self.training_history[d + "_iter"].append(float(getattr(self.current_params, d)))
+            if not self.read_target and len(self.training_history[d + '_target']) == 0:
+                self.training_history[d + '_target'].append(float(getattr(self.target_params, d)))
 
     def fit(self, *args, **kwargs):
         raise NotImplementedError("Fit method not implemented. Use a derived class")
@@ -1070,6 +1143,11 @@ class GradientDescentFitter(ParamFitter):
                                 else:
                                     self.training_history[param + '_iter'].append(getattr(self.current_params, param).item())
 
+                            if self._linked_derived is not None:
+                                d = self._linked_derived
+                                dv = getattr(self.current_params, d)
+                                self.training_history[d + '_iter'].append(dv if type(dv) == float else dv.item())
+
                             self.training_history['size_history'].append(get_size_history())
 
                             if jax.devices()[0].platform == 'gpu':
@@ -1101,6 +1179,11 @@ class GradientDescentFitter(ParamFitter):
                                 self.training_history[param + '_iter'].append(getattr(self.current_params, param))
                             else:
                                 self.training_history[param + '_iter'].append(getattr(self.current_params, param).item())
+
+                        if self._linked_derived is not None:
+                            d = self._linked_derived
+                            dv = getattr(self.current_params, d)
+                            self.training_history[d + '_iter'].append(dv if type(dv) == float else dv.item())
 
                         self.training_history['size_history'].append(get_size_history())
                         if jax.devices()[0].platform == 'gpu':
@@ -1159,6 +1242,7 @@ class LikelihoodProfiler(ParamFitter):
             for param in self.relevant_params_list:
                 target_params[param] = ranges[param]['nom']
             self.target_params = self.ref_params.replace(**target_params)
+            self.target_params = self._apply_linked_diffusion(self.target_params)
             # Keep target simulation on the original dEdx path regardless of scan mode.
             self.target_params = self.target_params.replace(
                 use_dedx_density=False,
@@ -1212,6 +1296,7 @@ class LikelihoodProfiler(ParamFitter):
                     start_time = time()
                     new_param_values = {param: lower + iter*param_step}
                     self.current_params = self.ref_params.replace(**new_param_values)
+                    self.current_params = self._apply_linked_diffusion(self.current_params)
                     loss_val, grads, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=True, with_grad=True, use_physical_params=True)
 
                     stop_time = time()
@@ -1328,12 +1413,14 @@ class MinuitFitter(ParamFitter):
                 def loss_wrapper(args): # type: ignore
                     # Update the current params with the new values
                     self.current_params = self.current_params.replace(**{key: args[i] for i, key in enumerate(self.relevant_params_list)})
+                    self.current_params = self._apply_linked_diffusion(self.current_params)
                     loss_val, _, _ , _, _= self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_grad=False, use_physical_params=True)
                     return loss_val
 
                 def grad_wrapper(args): # type: ignore
                     # Update the current params with the new values
                     self.current_params = self.current_params.replace(**{key: args[i] for i, key in enumerate(self.relevant_params_list)})
+                    self.current_params = self._apply_linked_diffusion(self.current_params)
                     _, grads, _, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, with_loss=False, use_physical_params=True)
                     return [getattr(grads, key) for key in self.relevant_params_list]
 
@@ -1351,6 +1438,7 @@ class MinuitFitter(ParamFitter):
                 # Update the current params with the new values
 
                 self.current_params = self.current_params.replace(**{key: args[i] for i, key in enumerate(self.relevant_params_list)})
+                self.current_params = self._apply_linked_diffusion(self.current_params)
                 tot_loss = 0
                 for i in range(len(dataloader_sim)):
                     # sim
@@ -1371,6 +1459,7 @@ class MinuitFitter(ParamFitter):
                 logger.debug(f"Grad wrapper called with args: {args}")
                 # Update the current params with the new values
                 self.current_params = self.current_params.replace(**{key: args[i] for i, key in enumerate(self.relevant_params_list)})
+                self.current_params = self._apply_linked_diffusion(self.current_params)
                 tot_grad = [0 for _ in range(len(self.relevant_params_list))]
                 for i in range(len(dataloader_sim)):
                     # sim

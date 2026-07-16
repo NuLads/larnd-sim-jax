@@ -4,8 +4,8 @@
 
 ##SBATCH --account=mli:nu-ml-dev
 ##SBATCH --account=mli:cider-ml
-##SBATCH --account=neutrino:dune-ml
-#SBATCH --account=neutrino:cider-nu
+#SBATCH --account=neutrino:dune-ml
+##SBATCH --account=neutrino:cider-nu
 ##SBATCH --account=neutrino:ml-dev
 
 #SBATCH --job-name=diffsim
@@ -14,8 +14,9 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=32g
 #SBATCH --gpus-per-node=a100:1
-#SBATCH --time=2:00:00
-#SBATCH --array=0,1,2,3,4,5,6,7,8
+#SBATCH --time=4:00:00
+#SBATCH --array=0,1,2,3,4,5
+##SBATCH --array=0,1,2,3,4,5,6,7,8
 
 # --- CONFIGURATION SELECTION ---
 # Example format: A1-B1-C1-D1
@@ -40,6 +41,7 @@ MODE="lut"
 LR_SCHEDULER=warmup_exponential_decay_schedule
 SIGNAL_LENGTH=200
 DEDX_DENSITY_MODE=flow #flow #histogram
+FLOW_EXPECTATION_MODE=sample #grid #quadrature #sample
 
 # --- LOGIC FOR COMBINATIONS ---
 
@@ -178,7 +180,7 @@ PARAMS=("Ab" "kb" "eField" "tran_diff" "long_diff" "lifetime" "shift_z" "shift_x
 PARAM=${PARAMS[$SLURM_ARRAY_TASK_ID]}
 
 # Generate Label
-LABEL="${PARAM}_${CONFIG}_${DX_LABEL}_${B_LABEL}_${D_LABEL}_${DEDX_DENSITY_MODE}_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_${NORM}"
+LABEL="${PARAM}_${CONFIG}_${DX_LABEL}_${B_LABEL}_${D_LABEL}_${DEDX_DENSITY_MODE}_${FLOW_EXPECTATION_MODE}_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_${NORM}"
 
 SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax.sif
 
@@ -213,7 +215,7 @@ python3 -m optimize.example_run \
     --number_pix_neighbors ${N_NEIGH} \
     --signal_length ${SIGNAL_LENGTH} \
     --mode ${MODE} \
-    --lut_file ../Data_selection/response_44_v2a_full_tick.npz \
+    --lut_file src/larndsim/detector_properties/response_44_v2a_full_tick.npz \
     --loss_fn ${LOSS} \
     --sim_seed_strategy ${SEED_STRATEGY} \
     --clip_from_range \
@@ -222,9 +224,10 @@ python3 -m optimize.example_run \
     --shuffle_bt \
     --normalization_scheme ${NORM} \
     --dedx_density_mode ${DEDX_DENSITY_MODE} \
+    --flow_expectation_mode ${FLOW_EXPECTATION_MODE} \
     ${PROB_FLAG} \
     ${CHOP_FLAG} \
     ${USE_DENSITY_FLAG} \
     ${MARGINALIZE_FLAG} \
-    --print_input
+    --print_input \
 "
