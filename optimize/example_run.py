@@ -130,6 +130,8 @@ def main(config):
                                 normalization_scale_sigmoid=config.normalization_scale_sigmoid,
                                 normalization_scale_exp_log=config.normalization_scale_exp_log,
                                 sz_mini_bt=config.sz_mini_bt, shuffle_bt=config.shuffle_bt, shuffle_seed=config.shuffle_seed,
+                                sigma_hat_npz=config.sigma_hat_npz, marginalize_apply_swap=config.marginalize_apply_swap,
+                                marginalize_k=config.marginalize_k,
                                 resume_from=config.resume_from)
     elif config.fit_type == "scan":
         param_fit = LikelihoodProfiler(relevant_params=param_list,
@@ -148,7 +150,9 @@ def main(config):
                                 scan_tgt_nom=config.scan_tgt_nom, probabilistic_sim=config.probabilistic_sim,
                                 normalization_scheme=config.normalization_scheme,
                                 normalization_scale_sigmoid=config.normalization_scale_sigmoid,
-                                normalization_scale_exp_log=config.normalization_scale_exp_log)
+                                normalization_scale_exp_log=config.normalization_scale_exp_log,
+                                sigma_hat_npz=config.sigma_hat_npz, marginalize_apply_swap=config.marginalize_apply_swap,
+                                marginalize_k=config.marginalize_k)
     elif config.fit_type == "minuit":
         param_fit = MinuitFitter(relevant_params=param_list,
                                 sim_track_fields=sim_track_fields, tgt_track_fields=tgt_track_fields,
@@ -166,7 +170,9 @@ def main(config):
                                 minimizer_strategy=config.minimizer_strategy, minimizer_tol=config.minimizer_tol, separate_fits=config.separate_fits, probabilistic_sim=config.probabilistic_sim,
                                 normalization_scheme=config.normalization_scheme,
                                 normalization_scale_sigmoid=config.normalization_scale_sigmoid,
-                                normalization_scale_exp_log=config.normalization_scale_exp_log)
+                                normalization_scale_exp_log=config.normalization_scale_exp_log,
+                                sigma_hat_npz=config.sigma_hat_npz, marginalize_apply_swap=config.marginalize_apply_swap,
+                                marginalize_k=config.marginalize_k)
 
     elif config.fit_type == "hess":
         param_fit = HessianCalculator(relevant_params=param_list, set_init_params=config.set_init_params,
@@ -186,6 +192,8 @@ def main(config):
                                 normalization_scheme=config.normalization_scheme,
                                 normalization_scale_sigmoid=config.normalization_scale_sigmoid,
                                 normalization_scale_exp_log=config.normalization_scale_exp_log,
+                                sigma_hat_npz=config.sigma_hat_npz, marginalize_apply_swap=config.marginalize_apply_swap,
+                                marginalize_k=config.marginalize_k,
                                 compute_target_hessian=True)
 
     else:
@@ -354,6 +362,18 @@ if __name__ == '__main__':
     parser.add_argument('--no_chop', default=False, action='store_true', help='Disable chopping in data loading')
     parser.add_argument('--no_pad', default=False, action='store_true', help='Disable padding in data loading')
     parser.add_argument("--resume_from", dest="resume_from", default=None, type=str, help="Resume chain fit from a saved history_iter*.pkl checkpoint")
+    parser.add_argument("--sigma_hat_npz", default=None, type=str,
+                        help="Stage 2 marginalization: path to sigma_hat.npz (from analysis_scripts/bias_hat/). "
+                             "When set, each compute_loss draws N(0, diag(sigma_hat)) per segment and adds to "
+                             "start/end/midpoint position columns.")
+    parser.add_argument("--no_marginalize_swap", dest="marginalize_apply_swap", action="store_false",
+                        default=True,
+                        help="Disable swap_xz remap of sigma_hat (only correct when the loader also has swap_xz=False).")
+    parser.add_argument("--marginalize_k", type=int, default=1,
+                        help="Stage 2 marginalization: number of ε draws per compute_loss call. "
+                             "K=1 (default) relies on SGD averaging across steps; K>1 averages K "
+                             "perturbations serially per step — recommended for scan-mode smoothing. "
+                             "Ignored if --sigma_hat_npz is not set.")
 
     try:
         args = parser.parse_args()

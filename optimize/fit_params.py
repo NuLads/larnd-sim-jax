@@ -218,6 +218,7 @@ class ParamFitter:
                  normalization_scale_sigmoid=1.0,
                  normalization_scale_exp_log=1.0,
                  sz_mini_bt=1, shuffle_bt=False, shuffle_seed=42, resume_from=None,
+                 sigma_hat_npz=None, marginalize_apply_swap=True, marginalize_k=1,
                  config = {}):
 
         self.read_target = read_target
@@ -256,6 +257,20 @@ class ParamFitter:
         self.shuffle_seed = shuffle_seed
         self.sim_track_fields = sim_track_fields
         self.tgt_track_fields = tgt_track_fields
+
+        # Stage 2 marginalization: input-segment perturbation. See src/larndsim/marginalization.py.
+        self.marginalization = None
+        self.marginalize_k = max(1, int(marginalize_k))
+        if sigma_hat_npz is not None:
+            from larndsim.marginalization import SigmaHatPerturbation
+            self.marginalization = SigmaHatPerturbation.from_npz(
+                sigma_hat_npz, apply_swap=marginalize_apply_swap
+            )
+            logger.info(
+                f"[marginalization] sigma_hat loaded from {sigma_hat_npz}; "
+                f"sigma_code (cm) = {np.asarray(self.marginalization.sigma_code)}; "
+                f"apply_swap={marginalize_apply_swap}; K={self.marginalize_k}"
+            )
 
         print(f"Using dE/dx density propagation: {self.use_dedx_density}, mode: {self.dedx_density_mode}")
 
@@ -710,47 +725,77 @@ class ParamFitter:
             'pixel_id': ref_pixel_id
         }
 
-        if use_physical_params:
-            def loss_wrapper(physical_params):
-                prediction = self.sim_strategy.predict(physical_params, tracks, self.sim_track_fields, rngkey)
-                return self.loss_strategy.compute(physical_params, prediction, target_data)
+        # Stage 2 marginalization: perturb tracks K times and average loss/grad.
+        # K=1 is the identity case (either no marginalization, or one draw per SGD step).
+        K = self.marginalize_k if self.marginalization is not None else 1
+        tracks_original = tracks
 
-            if with_loss and with_grad:
-                (loss_val, aux), grads = value_and_grad(loss_wrapper, has_aux=True)(self.current_params)
-            elif with_loss:
-                loss_val, aux = loss_wrapper(self.current_params)
-            elif with_grad:
-                grads, aux = grad(loss_wrapper, has_aux=True)(self.current_params)
+        def _run_single(tracks_this):
+            """One forward (+backward, +hess) pass with the given perturbed tracks."""
+            lv, gr, ax, hs, ahs = None, None, None, None, None
+            if use_physical_params:
+                def loss_wrapper(physical_params):
+                    prediction = self.sim_strategy.predict(physical_params, tracks_this, self.sim_track_fields, rngkey)
+                    return self.loss_strategy.compute(physical_params, prediction, target_data)
 
-            if with_hess:
-                hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.current_params)
-        else:
-            def loss_wrapper(norm_params_input):
-                # Map from unconstrained space to physical space internally
-                if self.normalization_scheme == "divide":
-                    new_phys = {
-                        key: getattr(norm_params_input, key) * getattr(self.params_normalization, key)
-                        for key in self.relevant_params_list
-                    }
-                else:
-                    new_phys = {
-                        key: map_norm_to_phys(getattr(norm_params_input, key), key, scheme=self.normalization_scheme, scale=self._norm_scale_for_scheme())
-                        for key in self.relevant_params_list
-                    }
-                physical_params = self.ref_params.replace(**new_phys)
-                prediction = self.sim_strategy.predict(physical_params, tracks, self.sim_track_fields, rngkey)
-                return self.loss_strategy.compute(physical_params, prediction, target_data)
+                if with_loss and with_grad:
+                    (lv, ax), gr = value_and_grad(loss_wrapper, has_aux=True)(self.current_params)
+                elif with_loss:
+                    lv, ax = loss_wrapper(self.current_params)
+                elif with_grad:
+                    gr, ax = grad(loss_wrapper, has_aux=True)(self.current_params)
 
-            # Differentiate with respect to norm_params
-            if with_loss and with_grad:
-                (loss_val, aux), grads = value_and_grad(loss_wrapper, has_aux=True)(self.norm_params)
-            elif with_loss:
-                loss_val, aux = loss_wrapper(self.norm_params)
-            elif with_grad:
-                grads, aux = grad(loss_wrapper, has_aux=True)(self.norm_params)
- 
-            if with_hess:
-                hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.norm_params)
+                if with_hess:
+                    hs, ahs = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.current_params)
+            else:
+                def loss_wrapper(norm_params_input):
+                    # Map from unconstrained space to physical space internally
+                    if self.normalization_scheme == "divide":
+                        new_phys = {
+                            key: getattr(norm_params_input, key) * getattr(self.params_normalization, key)
+                            for key in self.relevant_params_list
+                        }
+                    else:
+                        new_phys = {
+                            key: map_norm_to_phys(getattr(norm_params_input, key), key, scheme=self.normalization_scheme, scale=self._norm_scale_for_scheme())
+                            for key in self.relevant_params_list
+                        }
+                    physical_params = self.ref_params.replace(**new_phys)
+                    prediction = self.sim_strategy.predict(physical_params, tracks_this, self.sim_track_fields, rngkey)
+                    return self.loss_strategy.compute(physical_params, prediction, target_data)
+
+                # Differentiate with respect to norm_params
+                if with_loss and with_grad:
+                    (lv, ax), gr = value_and_grad(loss_wrapper, has_aux=True)(self.norm_params)
+                elif with_loss:
+                    lv, ax = loss_wrapper(self.norm_params)
+                elif with_grad:
+                    gr, ax = grad(loss_wrapper, has_aux=True)(self.norm_params)
+
+                if with_hess:
+                    hs, ahs = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.norm_params)
+            return lv, gr, ax, hs, ahs
+
+        # K-fold marginalization loop: distinct ε per k, then average.
+        for k in range(K):
+            if self.marginalization is not None:
+                tracks_k = self.marginalization.perturb(tracks_original, self.sim_track_fields, int(i) * K + k)
+            else:
+                tracks_k = tracks_original
+            lv, gr, ax, hs, ahs = _run_single(tracks_k)
+            if lv is not None:
+                loss_val = lv if loss_val is None else loss_val + lv
+            if gr is not None:
+                grads = gr if grads is None else jax.tree_util.tree_map(lambda a, b: a + b, grads, gr)
+            aux = ax           # aux/hess are not averaged — last-K semantics
+            hess = hs
+            aux_hess = ahs
+
+        if K > 1:
+            if loss_val is not None:
+                loss_val = loss_val / K
+            if grads is not None:
+                grads = jax.tree_util.tree_map(lambda a: a / K, grads)
 
         return loss_val, grads, aux, hess, aux_hess
 
