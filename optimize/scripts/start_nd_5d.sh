@@ -75,7 +75,7 @@ python3 -m optimize.example_run \
     --fit_dedx \
     --dedx_lr ${DEDX_LR} \
     --dedx_start_iter 0 \
-    --dedx_freeze_iter 5200 \
+    --dedx_freeze_iter ${DEDX_FREEZE:-5200} \
     --dedx_prior_weight ${DEDX_PRIOR} \
     --dedx_use_split_t True \
     --dedx_student_nu_l 4.785 --dedx_student_nu_r 2.073 \
