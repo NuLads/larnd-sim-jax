@@ -788,6 +788,12 @@ class ParamFitter:
         self.dedx_lr = dedx_lr
         self.dedx_start_iter = int(dedx_start_iter)
         self.dedx_freeze_iter = int(dedx_freeze_iter) if dedx_freeze_iter is not None else None
+        # Adaptive freeze: dedx_freeze_iter == -1 => latch the freeze when dEdx MAE plateaus
+        # (robust across seeds/batch-sizes vs a fixed iteration that mistimes the co-adaptation).
+        self._dedx_freeze_adaptive = (self.dedx_freeze_iter is not None and self.dedx_freeze_iter == -1)
+        self._dedx_freeze_triggered = None
+        self._dedx_freeze_window = int(os.environ.get('LARND_DEDX_FREEZE_WINDOW', '60'))
+        self._dedx_freeze_rtol = float(os.environ.get('LARND_DEDX_FREEZE_RTOL', '0.02'))
         self.dedx_use_split_t = bool(dedx_use_split_t)
         self.dedx_student_nu_l = jnp.array(dedx_student_nu_l, dtype=jnp.float32) if dedx_student_nu_l is not None else DEDX_SPLIT_NU_L
         self.dedx_student_nu_r = jnp.array(dedx_student_nu_r, dtype=jnp.float32) if dedx_student_nu_r is not None else DEDX_SPLIT_NU_R
@@ -3286,7 +3292,18 @@ class GradientDescentFitter(ParamFitter):
 
                     # dEdx local state for this batch (gated by dedx_start_iter / dedx_freeze_iter)
                     _dedx_active  = self.fit_dedx and (total_iter >= self.dedx_start_iter)
-                    _dedx_frozen  = _dedx_active and (self.dedx_freeze_iter is not None) and (total_iter >= self.dedx_freeze_iter)
+                    # Adaptive freeze: latch once the dEdx MAE history plateaus (mean over the last
+                    # window vs the previous window changes < rtol) -> robust across seeds/batch sizes.
+                    if self._dedx_freeze_adaptive and _dedx_active and self._dedx_freeze_triggered is None:
+                        _mh = [m for m in self.training_history.get('dedx_mae_iter', []) if m == m]
+                        _W = self._dedx_freeze_window
+                        if len(_mh) >= 2 * _W:
+                            _recent = float(np.mean(_mh[-_W:])); _prev = float(np.mean(_mh[-2*_W:-_W]))
+                            if _prev > 0 and abs(_prev - _recent) / _prev < self._dedx_freeze_rtol:
+                                self._dedx_freeze_triggered = total_iter
+                                logger.info(f"Adaptive dEdx freeze triggered at iter {total_iter} (MAE plateau: {_prev:.4f}->{_recent:.4f})")
+                    _eff_freeze = self._dedx_freeze_triggered if self._dedx_freeze_adaptive else self.dedx_freeze_iter
+                    _dedx_frozen  = _dedx_active and (_eff_freeze is not None) and (_eff_freeze >= 0) and (total_iter >= _eff_freeze)
                     _use_dedx     = _dedx_active  # still inject dEdx values into the loss even when frozen
 
                     # Reset calibration Adam state once at the exact moment dEdx activates.
