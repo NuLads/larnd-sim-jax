@@ -16,8 +16,8 @@ PARAMS=optimize/scripts/param_list_nd_noshift.yaml
 ITERATIONS=${ITERATIONS:-3000}
 MAX_NBATCH=${MAX_NBATCH:-30}
 MAX_BATCH_LEN=${MAX_BATCH_LEN:-100}
-DATA_SEED=1
-SEED=0
+DATA_SEED=${DATA_SEED:-1}
+SEED=${SEED:-0}
 BASIS=${BASIS:-spline}
 KNOT=${KNOT:-40}
 CHAIN_LR=${CHAIN_LR:-1e-2}
@@ -35,7 +35,7 @@ JAX_CACHE_DIR=/sdf/group/neutrino/pgranger/.jax_cache
 BASIS_ARGS=""
 [ "$BASIS" = "spline" ] && BASIS_ARGS="--chain_basis spline --chain_spline_knot_cm ${KNOT}"
 
-LABEL=nd5d_${BASIS}_b${MAX_NBATCH}_len${MAX_BATCH_LEN}_clr${CHAIN_LR}_dpw${DRIFT_PROFILE}${TAG:-}
+LABEL=nd5d_${BASIS}_b${MAX_NBATCH}_len${MAX_BATCH_LEN}_clr${CHAIN_LR}_dpw${DRIFT_PROFILE}_ds${DATA_SEED}${TAG:-}
 TEST_NAME=nd_5d
 mkdir -p /sdf/group/neutrino/pgranger/larnd-sim-jax/logs/nd_5d
 
