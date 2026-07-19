@@ -794,6 +794,7 @@ class ParamFitter:
         self._dedx_freeze_triggered = None
         self._dedx_freeze_window = int(os.environ.get('LARND_DEDX_FREEZE_WINDOW', '60'))
         self._dedx_freeze_rtol = float(os.environ.get('LARND_DEDX_FREEZE_RTOL', '0.02'))
+        self._dedx_freeze_min_iter = int(os.environ.get('LARND_DEDX_FREEZE_MIN_ITER', '0'))
         self.dedx_use_split_t = bool(dedx_use_split_t)
         self.dedx_student_nu_l = jnp.array(dedx_student_nu_l, dtype=jnp.float32) if dedx_student_nu_l is not None else DEDX_SPLIT_NU_L
         self.dedx_student_nu_r = jnp.array(dedx_student_nu_r, dtype=jnp.float32) if dedx_student_nu_r is not None else DEDX_SPLIT_NU_R
@@ -3294,7 +3295,7 @@ class GradientDescentFitter(ParamFitter):
                     _dedx_active  = self.fit_dedx and (total_iter >= self.dedx_start_iter)
                     # Adaptive freeze: latch once the dEdx MAE history plateaus (mean over the last
                     # window vs the previous window changes < rtol) -> robust across seeds/batch sizes.
-                    if self._dedx_freeze_adaptive and _dedx_active and self._dedx_freeze_triggered is None:
+                    if self._dedx_freeze_adaptive and _dedx_active and self._dedx_freeze_triggered is None and total_iter >= self._dedx_freeze_min_iter:
                         _mh = [m for m in self.training_history.get('dedx_mae_iter', []) if m == m]
                         _W = self._dedx_freeze_window
                         if len(_mh) >= 2 * _W:
