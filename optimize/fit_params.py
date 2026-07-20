@@ -722,6 +722,9 @@ class ParamFitter:
         self._geom_lbfgs_unique_size = int(getattr(config, 'geom_lbfgs_unique_size', 0)) if config is not None else 0
         self._geom_vg_cache = {}
         self._chain_start_iter = int(chain_start_iter)
+        # Freeze geometry after it converges so calibration+penalty fit against FIXED positions
+        # (replicates the robust "ceiling" condition; a jittering geometry destabilizes lifetime).
+        self._chain_freeze_iter = int(os.environ.get('LARND_CHAIN_FREEZE_ITER', '0'))
         self._chain_update_freq = max(1, int(chain_update_freq))
         # Exponential decay of the chain-position learning rate. The chain optimizer
         # (optax.adam) is otherwise fixed-LR, so positions never settle and sustain a
@@ -3344,6 +3347,7 @@ class GradientDescentFitter(ParamFitter):
                     # Allow position-only mode (fit_dedx=False) as well as joint mode
                     _chain_active = (self.fit_chain_positions and
                                      total_iter >= self._chain_start_iter and
+                                     (self._chain_freeze_iter <= 0 or total_iter < self._chain_freeze_iter) and
                                      total_iter % self._chain_update_freq == 0 and
                                      i in self._batch_chain_contexts and
                                      (_log_dedx is not None or not self.fit_dedx))
