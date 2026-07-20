@@ -69,7 +69,7 @@ python3 -m optimize.example_run \
     --lut_file src/larndsim/detector_properties/response_44.npy \
     --loss_fn llhd \
     --probabilistic_sim \
-    --sim_seed_strategy different \
+    --sim_seed_strategy ${SIMSEED:-different} \
     --non_deterministic \
     --no-noise \
     --fit_dedx \
