@@ -725,6 +725,10 @@ class ParamFitter:
         # Freeze geometry after it converges so calibration+penalty fit against FIXED positions
         # (replicates the robust "ceiling" condition; a jittering geometry destabilizes lifetime).
         self._chain_freeze_iter = int(os.environ.get('LARND_CHAIN_FREEZE_ITER', '0'))
+        # Gate calibration updates until this iteration (0 = off). Enables a true geometry-only
+        # phase 1: with dEdx off the sim uses the input-file dEdx, and free calibration would
+        # absorb that per-segment mismatch via lifetime/diffusion (wrong basin, deterministic).
+        self._calib_start_iter = int(os.environ.get('LARND_CALIB_START_ITER', '0'))
         self._chain_update_freq = max(1, int(chain_update_freq))
         # Exponential decay of the chain-position learning rate. The chain optimizer
         # (optax.adam) is otherwise fixed-LR, so positions never settle and sustain a
@@ -2127,6 +2131,10 @@ class GradientDescentFitter(ParamFitter):
         # We extract only the relevant parameters to pass to the optimizer
         relevant_grads = extract_relevant_params(grads, self.relevant_params_list)
 
+        # Calibration-start gate (phase-1 geometry-only): skip the update entirely
+        if getattr(self, '_calib_start_iter', 0) > 0 and getattr(self, '_cur_total_iter', 0) < self._calib_start_iter:
+            return relevant_grads
+
         leaves = jax.tree_util.tree_leaves(relevant_grads)
         if any(jnp.isnan(leaf).any() for leaf in leaves):
             logger.warning("Got NaN gradients! Skipping update for this batch")
@@ -3295,6 +3303,7 @@ class GradientDescentFitter(ParamFitter):
                     ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = self.get_simulated_target(this_target, i, evts_sim, regen=False)
 
                     # dEdx local state for this batch (gated by dedx_start_iter / dedx_freeze_iter)
+                    self._cur_total_iter = total_iter  # for the calibration-start gate in process_grads
                     _dedx_active  = self.fit_dedx and (total_iter >= self.dedx_start_iter)
                     # Adaptive freeze: latch once the dEdx MAE history plateaus (mean over the last
                     # window vs the previous window changes < rtol) -> robust across seeds/batch sizes.
