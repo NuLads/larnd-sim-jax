@@ -3347,10 +3347,12 @@ class GradientDescentFitter(ParamFitter):
                     # Allow position-only mode (fit_dedx=False) as well as joint mode
                     _chain_active = (self.fit_chain_positions and
                                      total_iter >= self._chain_start_iter and
-                                     (self._chain_freeze_iter <= 0 or total_iter < self._chain_freeze_iter) and
                                      total_iter % self._chain_update_freq == 0 and
                                      i in self._batch_chain_contexts and
                                      (_log_dedx is not None or not self.fit_dedx))
+                    # Freeze gates the UPDATE only — the warp must still be APPLIED with the frozen
+                    # angles (gating _chain_active would silently revert geometry to the nominal line).
+                    _chain_frozen_now = (self._chain_freeze_iter > 0 and total_iter >= self._chain_freeze_iter)
                     if _chain_active:
                         _chain_states   = self._get_or_init_chain_state(i)
                         _chain_angles_pt = [s['angles'] for s in _chain_states]
@@ -3391,7 +3393,7 @@ class GradientDescentFitter(ParamFitter):
                     # Geometry block: per-track chain-angle update. Default = Adam (unchanged path);
                     # 'lbfgs' = jitted L-BFGS geometry solve (calibration held at current, as a traced
                     # arg) alternating with the calibration gradient step applied below.
-                    if _chain_active and _grads_chain is not None:
+                    if _chain_active and _grads_chain is not None and not _chain_frozen_now:
                         if self._geom_optimizer == 'lbfgs':
                             _ref = (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id)
                             _init = [s['angles'] for s in self._chain_cache[i]]
