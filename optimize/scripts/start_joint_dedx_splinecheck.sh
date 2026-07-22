@@ -35,7 +35,7 @@ INPUT_FILE_SIM=/sdf/group/neutrino/pgranger/lads-data/linear_guess_segments.h5
 SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax/larndsim-jax_main.sif
 JAX_CACHE_DIR=/sdf/group/neutrino/pgranger/.jax_cache
 
-LABEL=dedxcheck_${BASIS}_b${MAX_NBATCH}_len${MAX_BATCH_LEN}
+LABEL=dedxcheck_${BASIS}_b${MAX_NBATCH}_len${MAX_BATCH_LEN}${TAG:-}
 TEST_NAME=dedx_splinecheck
 
 mkdir -p /sdf/group/neutrino/pgranger/larnd-sim-jax/logs/dedx_splinecheck
