@@ -3349,7 +3349,8 @@ class GradientDescentFitter(ParamFitter):
                                      total_iter >= self._chain_start_iter and
                                      total_iter % self._chain_update_freq == 0 and
                                      i in self._batch_chain_contexts and
-                                     (_log_dedx is not None or not self.fit_dedx))
+                                     (_log_dedx is not None or not self.fit_dedx
+                                      or total_iter < self.dedx_start_iter))
                     # Freeze gates the UPDATE only — the warp must still be APPLIED with the frozen
                     # angles (gating _chain_active would silently revert geometry to the nominal line).
                     _chain_frozen_now = (self._chain_freeze_iter > 0 and total_iter >= self._chain_freeze_iter)
