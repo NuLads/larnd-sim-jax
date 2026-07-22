@@ -74,7 +74,7 @@ python3 -m optimize.example_run \
     --no-noise \
     --fit_dedx \
     --dedx_lr ${DEDX_LR} \
-    --dedx_start_iter 0 \
+    --dedx_start_iter ${DEDX_START:-0} \
     --dedx_freeze_iter ${DEDX_FREEZE:-5200} \
     --dedx_prior_weight ${DEDX_PRIOR} \
     --dedx_use_split_t True \
