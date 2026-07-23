@@ -32,7 +32,10 @@ def pad_to_closest_multiple(x, dims_to_pad=None, multiple=128, pad_value=0, pad_
         target_shape[dim] = ((x.shape[dim] + multiple - 1) // multiple) * multiple
     target_shape = tuple(target_shape)
 
-    logger.info(f"Padding from shape {x.shape} to target shape {target_shape} with pad value {pad_value}")
+    if target_shape == tuple(x.shape):
+        return x
+
+    logger.debug(f"Padding from shape {x.shape} to target shape {target_shape} with pad value {pad_value}")
 
     buffer = jnp.full(target_shape, pad_value, dtype=x.dtype)
     

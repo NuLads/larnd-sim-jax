@@ -7,6 +7,7 @@ if src_dir not in sys.path:
 if larndsim_dir not in sys.path:
     sys.path.insert(0, larndsim_dir)
 import shutil
+import copy
 import pickle
 import numpy as np
 from .ranges import ranges
@@ -3249,10 +3250,10 @@ class GradientDescentFitter(ParamFitter):
                         _raw_pids = np.asarray(_pids)
                         _n_orig = int(_raw_pids[_raw_pids >= 0].max()) + 1 if np.any(_raw_pids >= 0) else 0
                         _true_dedx = np.zeros(_n_orig, dtype=np.float32)
-                        for _seg in range(_n_orig):
-                            _rows = np.where(_raw_pids == _seg)[0]
-                            if len(_rows) > 0:
-                                _true_dedx[_seg] = float(_batch_flat[_rows[0], _dedx_field_idx])
+                        # Vectorized first-occurrence lookup (identical to the per-segment loop, ~100x faster)
+                        _valid = _raw_pids >= 0
+                        _uniq, _first = np.unique(_raw_pids[_valid], return_index=True)
+                        _true_dedx[_uniq] = _batch_flat[np.flatnonzero(_valid)[_first], _dedx_field_idx].astype(np.float32)
                         self._batch_true_dedx[_bi] = _true_dedx
             else:
                 logger.warning("TracksDataset does not support get_parent_segment_ids; disabling fit_dedx")
@@ -3461,10 +3462,12 @@ class GradientDescentFitter(ParamFitter):
                                 else:
                                     self.training_history[param + '_iter'].append(getattr(self.current_params, param).item())
 
-                            self.training_history['size_history'].append(get_size_history())
-
-                            if jax.devices()[0].platform == 'gpu':
-                                self.training_history['memory'].append(jax.devices("gpu")[0].memory_stats())
+                            if total_iter % print_freq == 0:
+                                # deepcopy: get_size_history() returns a global MUTABLE dict; appending it raw
+                                # aliases every entry to the same object (useless history, growing pickle)
+                                self.training_history['size_history'].append(copy.deepcopy(get_size_history()))
+                                if jax.devices()[0].platform == 'gpu':
+                                    self.training_history['memory'].append(jax.devices("gpu")[0].memory_stats())
 
                             if iterations is not None:
                                 if total_iter % print_freq == 0:
@@ -3509,9 +3512,10 @@ class GradientDescentFitter(ParamFitter):
                             else:
                                 self.training_history[param + '_iter'].append(getattr(self.current_params, param).item())
 
-                        self.training_history['size_history'].append(get_size_history())
-                        if jax.devices()[0].platform == 'gpu':
-                            self.training_history['memory'].append(jax.devices("gpu")[0].memory_stats())
+                        if total_iter % print_freq == 0:
+                            self.training_history['size_history'].append(copy.deepcopy(get_size_history()))
+                            if jax.devices()[0].platform == 'gpu':
+                                self.training_history['memory'].append(jax.devices("gpu")[0].memory_stats())
 
                         if iterations is not None:
                             if total_iter % print_freq == 0:
@@ -3658,7 +3662,7 @@ class LikelihoodProfiler(ParamFitter):
                         else:
                             self.training_history[par + '_iter'].append(getattr(self.current_params, par).item())
 
-                    self.training_history['size_history'].append(get_size_history())
+                    self.training_history['size_history'].append(copy.deepcopy(get_size_history()))
                     if jax.devices()[0].platform == 'gpu':
                         self.training_history['memory'].append(jax.devices("gpu")[0].memory_stats())
 
