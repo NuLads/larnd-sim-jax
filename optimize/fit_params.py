@@ -1650,6 +1650,10 @@ class ParamFitter:
                 nb_small, nb_large = get_roi_counts(self.ref_params, wfs_eval)
                 padded_small_nb = int(((int(nb_small) + 127) // 128) * 128)
                 padded_large_nb = int(((int(nb_large) + 127) // 128) * 128)
+                # wfs_eval.shape[0] is the dynamic-path 128-padded unique-pixel count: using it as the
+                # static unique_size reproduces the dynamic path's shapes EXACTLY (jit-loss path).
+                self._batch_usize_cache = getattr(self, '_batch_usize_cache', {})
+                self._batch_usize_cache[cache_key] = int(wfs_eval.shape[0])
                 self._roi_padded_cache[cache_key] = (padded_small_nb, padded_large_nb)
                 # Track running global max so all batches can be normalized once seen.
                 if not hasattr(self, '_roi_global_max'):
@@ -1881,6 +1885,9 @@ class ParamFitter:
                 aux_out['dedx_drift_penalty'] = dedx_drift_penalty
                 aux_out['mean_dedx'] = mean_dedx
                 aux_out['mcs_prior'] = _mcs_loss
+                # Saturation guard for the static-unique jit path: number of genuinely active pixels.
+                # If this reaches unique_size, jnp.unique(size=...) may be silently truncating.
+                aux_out['n_active_pixels'] = jnp.sum(prediction['unique_pixels'] >= 0)
                 return total_loss, aux_out
 
             _chain_angles_active = (self.fit_chain_positions and chain_angles_per_track is not None)
@@ -1894,26 +1901,67 @@ class ParamFitter:
                     _np = self.norm_params if norm_params_in is None else norm_params_in
                     return loss_wrapper_combined(_np, log_dedx, chain_angles_pt, data_over=data_over)[0]
                 return _chain_only_loss
+            # ── Optional jitted value_and_grad (LARND_JIT_LOSS=1) ──
+            # The eager path re-traces the whole loss every iteration and runs it op-by-op with all
+            # intermediates materialized. Jitting requires static shapes: unique_size is set to the
+            # dynamic path's own padded pixel count (cached at ROI evaluation, identical layout after
+            # sort) and roi_override to the cached ROI sizes — so the jitted program computes exactly
+            # the same arrays. The jitted closure is cached per batch and reused across iterations;
+            # everything it closes over (tracks, target, parent_ids, rngkey, meta) is batch-static.
+            # Cache key includes rngkey/diff_scale so strategies where they vary just recompile.
+            _jit_loss_on = (os.environ.get('LARND_JIT_LOSS', '0') == '1'
+                            and not use_physical_params and not with_hess)
+            _jit_usize = getattr(self, '_batch_usize_cache', {}).get((i, tracks.shape[0]))
+            if _jit_loss_on and unique_size is None and _jit_usize is not None:
+                unique_size = _jit_usize  # read by loss_wrapper_combined via closure
+                roi_override = (self.sim_strategy.padded_small_nb, self.sim_strategy.padded_large_nb)
+
+            def _get_jit_vg(mode, argnums):
+                self._jit_vg_cache = getattr(self, '_jit_vg_cache', {})
+                _shapes = tuple(a.shape for a in chain_angles_per_track) if chain_angles_per_track is not None else None
+                key = (i, mode, argnums, tracks.shape, _shapes, unique_size, roi_override,
+                       int(rngkey) if rngkey is not None else None, float(diff_scale))
+                fn = self._jit_vg_cache.get(key)
+                if fn is None:
+                    logger.info(f"[JIT-LOSS] compiling batch {i} mode={mode} usize={unique_size} roi={roi_override}")
+                    if mode == 'joint':
+                        fn = jax.jit(value_and_grad(loss_wrapper_combined, argnums=argnums, has_aux=True))
+                    else:  # 'pos'
+                        def _wrap_no_dedx_j(np_, ca_):
+                            return loss_wrapper_combined(np_, None, ca_)
+                        fn = jax.jit(value_and_grad(_wrap_no_dedx_j, argnums=argnums, has_aux=True))
+                    self._jit_vg_cache[key] = fn
+                return fn
+
             if with_loss and with_grad:
                 if _chain_angles_active and _dedx_active:
                     # Joint: global params + per-seg dEdx + chain angles
-                    (loss_val, aux), (grads, grads_dedx, grads_chain_per_track) = value_and_grad(
-                        loss_wrapper_combined, argnums=(0, 1, 2), has_aux=True
-                    )(self.norm_params, log_dedx, chain_angles_per_track)
+                    _vg = (_get_jit_vg('joint', (0, 1, 2)) if _jit_loss_on and unique_size is not None
+                           else value_and_grad(loss_wrapper_combined, argnums=(0, 1, 2), has_aux=True))
+                    (loss_val, aux), (grads, grads_dedx, grads_chain_per_track) = _vg(
+                        self.norm_params, log_dedx, chain_angles_per_track)
                 elif _chain_angles_active and not _dedx_active:
                     # Position-only: global params + chain angles (no dEdx)
                     def _wrap_no_dedx(np_, ca_):
                         return loss_wrapper_combined(np_, None, ca_)
-                    (loss_val, aux), (_g_np, grads_chain_per_track) = value_and_grad(
-                        _wrap_no_dedx, argnums=(0, 1), has_aux=True
-                    )(self.norm_params, chain_angles_per_track)
+                    _vg = (_get_jit_vg('pos', (0, 1)) if _jit_loss_on and unique_size is not None
+                           else value_and_grad(_wrap_no_dedx, argnums=(0, 1), has_aux=True))
+                    (loss_val, aux), (_g_np, grads_chain_per_track) = _vg(
+                        self.norm_params, chain_angles_per_track)
                     grads = _g_np
                     grads_dedx = None
                 else:
-                    (loss_val, aux), (grads, grads_dedx) = value_and_grad(
-                        loss_wrapper_combined, argnums=(0, 1), has_aux=True
-                    )(self.norm_params, log_dedx, None)
+                    _vg = (_get_jit_vg('joint', (0, 1)) if _jit_loss_on and unique_size is not None
+                           else value_and_grad(loss_wrapper_combined, argnums=(0, 1), has_aux=True))
+                    (loss_val, aux), (grads, grads_dedx) = _vg(self.norm_params, log_dedx, None)
                     grads_chain_per_track = None
+                # Saturation guard: if active pixels reach the static size, unique() may truncate
+                if _jit_loss_on and unique_size is not None and aux is not None and 'n_active_pixels' in aux:
+                    _nact = int(aux['n_active_pixels'])
+                    if _nact >= int(unique_size):
+                        logger.warning(f"[JIT-LOSS] batch {i}: active pixels {_nact} saturate unique_size {unique_size} — "
+                                       f"falling back to dynamic path for this batch")
+                        self._batch_usize_cache.pop((i, tracks.shape[0]), None)
             elif with_loss:
                 loss_val, aux = loss_wrapper_combined(self.norm_params, log_dedx,
                                                       chain_angles_per_track if _chain_angles_active else None)
