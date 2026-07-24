@@ -4,8 +4,8 @@
 
 ##SBATCH --account=mli:nu-ml-dev
 ##SBATCH --account=mli:cider-ml
-##SBATCH --account=neutrino:dune-ml
-#SBATCH --account=neutrino:cider-nu
+#SBATCH --account=neutrino:dune-ml
+##SBATCH --account=neutrino:cider-nu
 ##SBATCH --account=neutrino:ml-dev
 
 #SBATCH --job-name=diffsim
@@ -14,14 +14,16 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=32g
 #SBATCH --gpus-per-node=a100:1
-#SBATCH --time=2:00:00
-#SBATCH --array=0,1,2,3,4,5,6,7,8
+#SBATCH --time=4:00:00
+#SBATCH --array=0,1,2,3,4,5
+##SBATCH --array=0,1,2,3,4,5,6,7,8
 
 
 # --- CONFIGURATION SELECTION ---
 # Example format: A1-B1-C1-D1
 # Change this variable or pass it as an argument
-CONFIG="A2-B2-C2-D5"
+
+CONFIG="A2-B2-C2-D2"
 
 if [ -z "$SLURM_ARRAY_TASK_ID" ]; then
     SLURM_ARRAY_TASK_ID=1
@@ -41,6 +43,7 @@ MODE="lut"
 LR_SCHEDULER=warmup_exponential_decay_schedule
 SIGNAL_LENGTH=200
 DEDX_DENSITY_MODE=flow #flow #histogram
+FLOW_EXPECTATION_MODE=sample #grid #quadrature #sample
 
 # --- LOGIC FOR COMBINATIONS ---
 
@@ -85,9 +88,9 @@ elif [ "$CONF_A" == "A2" ]; then
         B_LABEL="closure"
     elif [ "$CONF_B" == "B2" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_reco_dE_range_0.05cm.h5
-        USE_DENSITY_FLAG="--use_dedx_density"
-        B_LABEL="dE_density"
-        # B_LABEL="reco_dE"
+        # USE_DENSITY_FLAG="--use_dedx_density"
+        # B_LABEL="dE_density"
+        B_LABEL="reco_dE_validation"
     elif [ "$CONF_B" == "B3" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_true_traj_start_end_reco_seg_step_0.01cm_range_0.05cm.h5
         B_LABEL="reco_traj_st_ed_pos_dE"
@@ -195,7 +198,7 @@ PARAMS=("Ab" "kb" "eField" "tran_diff" "long_diff" "lifetime" "shift_z" "shift_x
 PARAM=${PARAMS[$SLURM_ARRAY_TASK_ID]}
 
 # Generate Label
-LABEL="${PARAM}_${CONFIG}_${DX_LABEL}_${B_LABEL}_${D_LABEL}_${DEDX_DENSITY_MODE}_tgtsimsd${SEED_STRATEGY}_nngh${N_NEIGH}_${MODE}_esamp${SAMPLING_STEP}cm_sigL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_Qonly_${NORM}"
+LABEL="${PARAM}_${CONFIG}_${DX_LABEL}_${B_LABEL}_${D_LABEL}_${DEDX_DENSITY_MODE}_${FLOW_EXPECTATION_MODE}_tgtsimsd${SEED_STRATEGY}_nngh${N_NEIGH}_${MODE}_esamp${SAMPLING_STEP}cm_sigL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_Qonly_${NORM}"
 
 SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax.sif
 
@@ -243,5 +246,6 @@ python3 -m optimize.example_run \
     ${PROB_FLAG} \
     ${CHOP_FLAG} \
     ${USE_DENSITY_FLAG} \
-    --print_input
+    --print_input \
+    --flow_expectation_mode ${FLOW_EXPECTATION_MODE} \
 "

@@ -357,6 +357,14 @@ if __name__ == '__main__':
     parser.add_argument('--dedx_density_mode', type=str, default='histogram',
                         choices=['histogram', 'flow'],
                         help='dE/dx density model. histogram (default) or flow (trained CNF).')
+    parser.add_argument('--flow_expectation_mode', type=str, default='sample',
+                        choices=['grid', 'quadrature', 'sample'],
+                        help='Flow-mode expectation method. sample=Monte Carlo draws from p(dEdx|R) (default), quadrature=deterministic Gauss-Legendre, grid=legacy bin-center integration.')
+    parser.add_argument('--flow_quadrature_nodes', type=int, default=16,
+                        choices=[8, 12, 16, 24, 32],
+                        help='Number of Gauss-Legendre nodes for flow quadrature mode.')
+    parser.add_argument('--flow_quadrature_y_clip', type=float, default=5.0,
+                        help='Half-range in normalized flow latent y integrated by quadrature ([-clip, clip]).')
     parser.add_argument('--profile', default=False, action='store_true', help='Should run some xprof execution profiling')
     parser.add_argument('--no_chop', default=False, action='store_true', help='Disable chopping in data loading')
     parser.add_argument('--no_pad', default=False, action='store_true', help='Disable padding in data loading')
