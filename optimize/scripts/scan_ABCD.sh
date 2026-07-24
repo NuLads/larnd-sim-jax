@@ -17,10 +17,11 @@
 #SBATCH --time=2:00:00
 #SBATCH --array=0,1,2,3,4,5,6,7,8
 
+
 # --- CONFIGURATION SELECTION ---
 # Example format: A1-B1-C1-D1
 # Change this variable or pass it as an argument
-CONFIG="A6-B2-C2-D2"
+CONFIG="A2-B2-C2-D5"
 
 if [ -z "$SLURM_ARRAY_TASK_ID" ]; then
     SLURM_ARRAY_TASK_ID=1
@@ -33,7 +34,7 @@ ITERATIONS=50
 MAX_CLIP_NORM_VAL=1
 DATA_SEED=1
 #LOSS=mse_adc 
-SEED_STRATEGY=different #same #different 
+SEED_STRATEGY=same #same #different 
 SAMPLING_STEP=0.01 
 N_NEIGH=4
 MODE="lut"
@@ -91,8 +92,12 @@ elif [ "$CONF_A" == "A2" ]; then
         INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_true_traj_start_end_reco_seg_step_0.01cm_range_0.05cm.h5
         B_LABEL="reco_traj_st_ed_pos_dE"
     elif [ "$CONF_B" == "B4" ]; then
-	INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_max_evt_37815_reco_pos_dE_seg_step_0.01cm_range_0.05cm.h5
-        B_LABEL="reco_pos_dE"
+	    INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_max_evt_37815_reco_pos_dE_seg_step_0.01cm_range_0.05cm.h5
+        B_LABEL="reco_posdE"
+    elif [ "$CONF_B" == "B5" ]; then
+	    INPUT_FILE_SIM=/sdf/data/neutrino/cyifan/dunend_train_prod/prod_mod0_mpvmpr/production_884072/job_23771825_0000/output_23771825_0000-edepsim_lbl_trklen2cm_containment2cm_costheta0.966_max_evt_37815_reco_pos_dE_seg_step_0.01cm_range_0.05cm.h5
+        USE_DENSITY_FLAG="--use_dedx_density"
+        B_LABEL="reco_posdEdensity"
     fi
 elif [ "$CONF_A" == "A3" ]; then
     if [ "$CONF_B" == "B1" ]; then
@@ -149,14 +154,39 @@ elif [ "$CONF_C" == "C3" ]; then
 fi
 
 # D: Noise / Probabilistic Flag
+# LOSS_KW is a JSON blob passed via --loss_fn_kw. Keys inside must be double-quoted
+# and escaped (\") because this string is embedded in the bash -c "..." block later.
 if [ "$CONF_D" == "D1" ]; then
     PROB_FLAG=""
     D_LABEL="stoc_noise"
     LOSS=mse_adc
+    LOSS_KW="{}"
 elif [ "$CONF_D" == "D2" ]; then
     PROB_FLAG="--probabilistic_sim"
     D_LABEL="prob_noise"
     LOSS=llhd
+    LOSS_KW="{}"
+elif [ "$CONF_D" == "D3" ]; then
+    PROB_FLAG="--probabilistic_sim"
+    D_LABEL="prob_noise_dqdt"
+    LOSS=dqdt_radial
+    LOSS_KW="{\"mask_empty\": false}"
+elif [ "$CONF_D" == "D4" ]; then
+    PROB_FLAG=""
+    D_LABEL="stoc_noise_dqdt"
+    LOSS=dqdt_radial
+    LOSS_KW="{\"mask_empty\": false}"
+elif [ "$CONF_D" == "D5" ]; then
+    # Stochastic sim + dqdt_radial + MMD distributional comparison.
+    # No per-slice pairing: MMD compares (Q_hit, tick_hit) 2D point clouds.
+    # Bandwidths scale the two axes to O(1) so the RBF kernel (sigma=1) is
+    # sensible; retune mmd_sigma_Q_ke ~ typical Q-hit scale (ke),
+    # mmd_sigma_drift_tick ~ typical drift-tick spread if the loss looks
+    # too flat or too spiky.
+    PROB_FLAG=""
+    D_LABEL="stoc_noise_dqdt_mmd"
+    LOSS=dqdt_radial
+    LOSS_KW="{\"distance_metric\": \"mmd\", \"mmd_sigma_Q_ke\": 5.0, \"mmd_sigma_drift_tick\": 500.0}"
 fi
 
 #PARAMS=optimize/scripts/param_list_${CONFIG}.yaml
@@ -165,7 +195,7 @@ PARAMS=("Ab" "kb" "eField" "tran_diff" "long_diff" "lifetime" "shift_z" "shift_x
 PARAM=${PARAMS[$SLURM_ARRAY_TASK_ID]}
 
 # Generate Label
-LABEL="${PARAM}_${CONFIG}_${DX_LABEL}_${B_LABEL}_${D_LABEL}_${DEDX_DENSITY_MODE}_tgtsim_seed_${SEED_STRATEGY}_n_neigh${N_NEIGH}_${MODE}_e_sampling_${SAMPLING_STEP}cm_signalL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_${NORM}"
+LABEL="${PARAM}_${CONFIG}_${DX_LABEL}_${B_LABEL}_${D_LABEL}_${DEDX_DENSITY_MODE}_tgtsimsd${SEED_STRATEGY}_nngh${N_NEIGH}_${MODE}_esamp${SAMPLING_STEP}cm_sigL${SIGNAL_LENGTH}_gradclip${MAX_CLIP_NORM_VAL}_${LR_SCHEDULER}_bt${BATCH_SIZE}_nbtach${MAX_NBATCH}_dtsd${DATA_SEED}_adam_${LOSS}_Qonly_${NORM}"
 
 SIF_FILE=/sdf/group/neutrino/pgranger/larnd-sim-jax.sif
 
@@ -202,6 +232,7 @@ python3 -m optimize.example_run \
     --mode ${MODE} \
     --lut_file src/larndsim/detector_properties/response_44_v2a_full_tick.npz \
     --loss_fn ${LOSS} \
+    --loss_fn_kw '${LOSS_KW}' \
     --sim_seed_strategy ${SEED_STRATEGY} \
     --clip_from_range \
     --lr_scheduler ${LR_SCHEDULER} \

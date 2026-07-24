@@ -338,6 +338,7 @@ class ParamFitter:
             "sdtw_time_adc": (sdtw_time_adc, {'gamma': 1., 'alpha': 0.5}),
             "nll": (nll_loss, {'adc_norm': adc_norm, 'sigma': 1.0}),
             "llhd": (llhd_loss, {}),
+            "dqdt_radial": (None, {}),
             #"sinkhorn_loss": (sinkhorn_loss, {})
         }
 
@@ -367,6 +368,10 @@ class ParamFitter:
         if loss_fn == 'llhd':
             from .strategies import ProbabilisticLossStrategy
             self.loss_strategy = ProbabilisticLossStrategy(loss_fn=llhd_loss, **self.loss_fn_kw)
+        elif loss_fn == 'dqdt_radial':
+            from .strategies import DQDtRadialLossStrategy
+            self.loss_strategy = DQDtRadialLossStrategy(**self.loss_fn_kw)
+            logger.info(f"Using DQDtRadialLossStrategy with kwargs {self.loss_fn_kw}")
         elif self.probabilistic_sim:
             # Use CollapsedProbabilisticLossStrategy for probabilistic simulation with deterministic losses
             from .strategies import CollapsedProbabilisticLossStrategy
