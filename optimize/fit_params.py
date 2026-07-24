@@ -252,6 +252,9 @@ class ParamFitter:
         self.signal_length = config.signal_length
         self.use_dedx_density = bool(getattr(config, "use_dedx_density", False))
         self.dedx_density_mode = getattr(config, "dedx_density_mode", "histogram")
+        self.flow_expectation_mode = getattr(config, "flow_expectation_mode", "sample")
+        self.flow_quadrature_nodes = int(getattr(config, "flow_quadrature_nodes", 16))
+        self.flow_quadrature_y_clip = float(getattr(config, "flow_quadrature_y_clip", 5.0))
         self.probabilistic_sim = probabilistic_sim
         self.sz_mini_bt = sz_mini_bt
         self.shuffle_bt = shuffle_bt
@@ -259,7 +262,13 @@ class ParamFitter:
         self.sim_track_fields = sim_track_fields
         self.tgt_track_fields = tgt_track_fields
 
-        print(f"Using dE/dx density propagation: {self.use_dedx_density}, mode: {self.dedx_density_mode}")
+        print(
+            "Using dE/dx density propagation: "
+            f"{self.use_dedx_density}, mode: {self.dedx_density_mode}, "
+            f"flow_expectation_mode: {self.flow_expectation_mode}, "
+            f"flow_quadrature_nodes: {self.flow_quadrature_nodes}, "
+            f"flow_quadrature_y_clip: {self.flow_quadrature_y_clip}"
+        )
 
         if self.normalization_scheme not in ("sigmoid", "exp_log", "divide"):
             raise ValueError(
@@ -449,6 +458,9 @@ class ParamFitter:
             "mc_diff",
             "use_dedx_density",
             "dedx_density_mode",
+            "flow_expectation_mode",
+            "flow_quadrature_nodes",
+            "flow_quadrature_y_clip",
         ]
 
         ref_params = ref_params.replace(**{key: getattr(self, key) for key in params_to_apply})
