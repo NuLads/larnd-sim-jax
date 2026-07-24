@@ -106,7 +106,7 @@ python3 -m optimize.example_run \
     --probabilistic_sim \
     --sim_seed_strategy different \
     --non_deterministic \
-    --no-noise \
+    ${NOISEFLAG:---no-noise} \
     --fit_dedx \
     --dedx_lr ${DEDX_LR} \
     --dedx_start_iter ${DEDX_START_ITER} \

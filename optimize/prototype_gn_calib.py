@@ -82,6 +82,15 @@ def main():
                       dedx_density_mode=getattr(cfg, 'dedx_density_mode', 'histogram'))
     strategy = LUTProbabilisticSimulation(response)
 
+    # replicate the fitter's noise handling: --no-noise removes readout noise from BOTH
+    # the guess and the target params (missing this made the prototype fit noisy targets
+    # with a noise-smeared guess — a different problem than the Adam reference)
+    from optimize.fit_params import remove_noise_from_params
+    _no_noise = bool(getattr(cfg, 'no_noise', False))
+    # NOTE the fitter's exact convention under --no-noise: the LOSS path uses ref_params with
+    # noise sigma INTACT (the probabilistic guess divides by sigma), while only the TARGET
+    # params are stripped. Removing noise from the guess causes 1/sigma = 1/0.
+
     # truth + init values
     truth = {p: float(np.ravel(h[f'{p}_target'])[0]) for p in relevant}
     init = {p: float(getattr(ref, p)) for p in relevant}
@@ -109,6 +118,9 @@ def main():
     # rngkey=i+1 — the identical stochastic data throw of any standard run w/ this config) ──
     from optimize.strategies import LUTSimulation
     target_params = ref.replace(**truth)
+    if _no_noise or getattr(cfg, 'no_noise_target', False):
+        target_params = remove_noise_from_params(target_params)
+        print('[GN-PROTO] readout noise removed from target params')
     tgt_strategy = LUTSimulation(response)
     targets = {}
     for i in range(nb):
@@ -157,10 +169,24 @@ def main():
     loss_kw = dict(cfg.loss_fn_kw) if getattr(cfg, 'loss_fn_kw', None) else {}
     ppp_loss = ProbabilisticLossStrategy(**loss_kw)
 
-    def batch_nll(theta, tracks, tgt):
+    # static shapes per batch (unique_size = dynamic padded count at init params; ROI padded
+    # to 128-multiples +128 headroom since params move during the fit) -> NLL fully traceable
+    from larndsim.sim_jax import simulate_wfs as _sim_wfs, get_roi_counts as _roi_counts
+    _static = {}
+
+    def _batch_static(i, tracks):
+        if i not in _static:
+            wfs_e, _up = _sim_wfs(ref, response, tracks, fields)
+            ns, nl = _roi_counts(ref, wfs_e)
+            pad128 = lambda n: int(((int(n) + 127) // 128) * 128) + 128
+            _static[i] = (int(wfs_e.shape[0]), pad128(ns), pad128(nl))
+            print(f'[GN-PROTO] batch {i}: usize {_static[i][0]} roi {_static[i][1:]}')
+        return _static[i]
+
+    def batch_nll(theta, tracks, tgt, usize, roi):
         phys = {p: init[p] * jnp.exp(theta[k]) for k, p in enumerate(relevant)}
         params = ref.replace(**phys)
-        pred = strategy.predict(params, tracks, fields, None)
+        pred = strategy.predict(params, tracks, fields, None, unique_size=usize, roi_override=roi)
         tgt_data = {'pixel_id': jnp.asarray(tgt['pixel_id']), 'ticks': jnp.asarray(tgt['ticks']),
                     'adcs': jnp.asarray(tgt['adcs'])}
         nll, _aux = ppp_loss.compute(params, pred, tgt_data)
@@ -171,13 +197,53 @@ def main():
     batch_tracks = {}
     for i in range(nb):
         batch_tracks[i] = jnp.asarray(ds[i]).reshape(-1, len(fields))
-        if args.objective == 'ppp':
-            res_fns[i] = jax.grad(lambda th, i=i: batch_nll(th, batch_tracks[i], targets[i]))   # gradient (P,)
-            jac_fns[i] = jax.jacfwd(jax.grad(lambda th, i=i: batch_nll(th, batch_tracks[i], targets[i])))  # Hessian (P,P)
-            res_fns[i+10000] = (lambda th, i=i: batch_nll(th, batch_tracks[i], targets[i]))     # scalar loss
-        else:
-            res_fns[i] = (lambda th, i=i: batch_residual(th, batch_tracks[i], targets[i]))
-            jac_fns[i] = jax.jacfwd(lambda th, i=i: batch_residual(th, batch_tracks[i], targets[i]))
+
+    if args.objective == 'ppp':
+        # DATA-AS-ARGS: one jitted program shared by all batches (per-batch jitted closures bake
+        # data as device constants -> nb x programs+constants -> OOM). Pad to global max shapes;
+        # padded target hits use pixel_id=-1 (masked as irrelevant by the loss); padded track
+        # rows are all-zero (no charge).
+        for i in range(nb):
+            _batch_static(i, batch_tracks[i])
+        us_g = max(v[0] for v in _static.values())
+        rs_g = max(v[1] for v in _static.values())
+        rl_g = max(v[2] for v in _static.values())
+        Tmax = max(batch_tracks[i].shape[0] for i in range(nb))
+        Hmax = max(len(targets[i]['adcs']) for i in range(nb))
+        print(f'[GN-PROTO] data-as-args: usize {us_g} roi ({rs_g},{rl_g}) tracks {Tmax} hits {Hmax}')
+        tr_pad = {}; tg_pad = {}
+        for i in range(nb):
+            t = np.asarray(batch_tracks[i])
+            tp = np.zeros((Tmax, t.shape[1]), t.dtype); tp[:t.shape[0]] = t
+            tr_pad[i] = jnp.asarray(tp)
+            npad = Hmax - len(targets[i]['adcs'])
+            tg_pad[i] = (jnp.asarray(np.concatenate([targets[i]['pixel_id'], -np.ones(npad, targets[i]['pixel_id'].dtype)])),
+                         jnp.asarray(np.concatenate([targets[i]['ticks'], np.zeros(npad, targets[i]['ticks'].dtype)])),
+                         jnp.asarray(np.concatenate([targets[i]['adcs'], np.zeros(npad, targets[i]['adcs'].dtype)])))
+
+        def _nll_da(th, tracks, pid, ticks, adcs):
+            return batch_nll(th, tracks, {'pixel_id': pid, 'ticks': ticks, 'adcs': adcs},
+                             us_g, (rs_g, rl_g))
+        _g_da = jax.jit(jax.grad(_nll_da))
+        _hvp_da = jax.jit(lambda th, v, tracks, pid, ticks, adcs:
+                          jax.jvp(lambda t2: jax.grad(_nll_da)(t2, tracks, pid, ticks, adcs),
+                                  (th,), (v,))[1])
+        _l_da = jax.jit(_nll_da)
+        for i in range(nb):
+            res_fns[i] = (lambda th, i=i: _g_da(th, tr_pad[i], *tg_pad[i]))
+            def _hess_seq(th, i=i):
+                cols = [_hvp_da(th, jnp.eye(len(th))[k], tr_pad[i], *tg_pad[i]) for k in range(len(th))]
+                return jnp.stack(cols, axis=1)
+            jac_fns[i] = _hess_seq
+            res_fns[i+10000] = (lambda th, i=i: _l_da(th, tr_pad[i], *tg_pad[i]))
+    else:
+        for i in range(nb):
+            _r = (lambda th, i=i: batch_residual(th, batch_tracks[i], targets[i]))
+            res_fns[i] = _r
+            def _jac_seq(th, _r=_r):
+                cols = [jax.jvp(_r, (th,), (jnp.eye(len(th))[k],))[1] for k in range(len(th))]
+                return jnp.stack(cols, axis=1)
+            jac_fns[i] = _jac_seq
 
     P = len(relevant)
     theta = jnp.zeros(P)
@@ -204,17 +270,24 @@ def main():
                         num = float(ad @ fd); den = float(np.linalg.norm(ad) * np.linalg.norm(fd) + 1e-30)
                         line.append(f'h={hfd:g}: cos={num/den:+.3f} |fd|/|ad|={np.linalg.norm(fd)/(np.linalg.norm(ad)+1e-30):.2f}')
                     print(f'[FD-SWEEP] {relevant[k]:10s} ' + ' | '.join(line))
-        H = np.zeros((P, P)); g = np.zeros(P); loss = 0.0
+        H = np.zeros((P, P)); g = np.zeros(P); loss = 0.0; n_bad = 0
         for i in range(nb):
             r = np.asarray(res_fns[i](theta))
             if args.objective == 'ppp':
-                H += Jc[i]                       # cached per-batch Hessian (P,P)
-                g += r                           # r IS the gradient here
-                loss += float(res_fns[i+10000](theta))
+                Hi = np.asarray(Jc[i]); gi = r
+                li = float(res_fns[i+10000](theta))
             else:
-                H += Jc[i].T @ Jc[i]
-                g += Jc[i].T @ r
-                loss += float(r @ r)
+                Hi = Jc[i].T @ Jc[i]; gi = Jc[i].T @ r
+                li = float(r @ r)
+            if not (np.all(np.isfinite(Hi)) and np.all(np.isfinite(gi)) and np.isfinite(li)):
+                n_bad += 1
+                if s == 0:
+                    print(f'[GN-WARN] batch {i} NON-FINITE: g finite={np.isfinite(gi).tolist()} '
+                          f'Hdiag finite={np.isfinite(np.diag(Hi)).tolist()} loss={li}')
+                continue
+            H += Hi; g += gi; loss += li
+        if n_bad:
+            print(f'[GN-WARN] step {s}: skipped {n_bad}/{nb} non-finite batches')
         Pinv = ridge_inverse(H, ridge=args.ridge, mu=args.mu)
         dth = -np.clip(Pinv @ g, -args.step_max, args.step_max)
         theta = theta + jnp.asarray(dth)
