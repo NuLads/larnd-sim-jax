@@ -118,6 +118,10 @@ def main(config):
     logger.info(f"Param list: {param_list}")
 
     # Merge individual loss-width overrides into loss_fn_kw (clean CLI, avoids JSON quoting).
+    _set_params_dict = {}
+    for _kv in (getattr(config, 'set_params', None) or []):
+        _k, _v = _kv.split('=', 1)
+        _set_params_dict[_k] = float(_v)
     _lkw = dict(config.loss_fn_kw or {})
     for _a, _k in [('loss_sigma_charge', 'sigma_charge'), ('loss_time_window', 'time_window'), ('loss_sigma_time', 'sigma_time'),
                    ('loss_spatial_moment_weight', 'spatial_moment_weight'), ('loss_spatial_moment_nslices', 'spatial_moment_nslices')]:
@@ -139,7 +143,7 @@ def main(config):
                                 lr_scheduler=config.lr_scheduler, lr_kw=config.lr_kw,
                                 loss_fn=config.loss_fn, loss_fn_kw=config.loss_fn_kw, shift_no_fit=config.shift_no_fit,
                                 set_target_vals=config.set_target_vals, set_init_params=config.set_init_params, vary_init=config.vary_init, compute_target_hessian=config.compute_target_hessian,
-                                config = config, epoch_size=len(tracks_dataloader_sim), keep_in_memory=config.keep_in_memory,
+                                config = config, set_params=_set_params_dict, epoch_size=len(tracks_dataloader_sim), keep_in_memory=config.keep_in_memory,
                                 diffusion_in_current_sim=config.diffusion_in_current_sim,
                                 mc_diff=config.mc_diff,
                                 adc_norm=config.chamfer_adc_norm, match_z=config.chamfer_match_z,
@@ -191,7 +195,7 @@ def main(config):
                                 lr_scheduler=config.lr_scheduler, lr_kw=config.lr_kw,
                                 loss_fn=config.loss_fn, loss_fn_kw=config.loss_fn_kw, shift_no_fit=config.shift_no_fit,
                                 set_target_vals=config.set_target_vals, set_init_params=config.set_init_params, vary_init=config.vary_init,
-                                config = config, epoch_size=len(tracks_dataloader_sim), keep_in_memory=config.keep_in_memory,
+                                config = config, set_params=_set_params_dict, epoch_size=len(tracks_dataloader_sim), keep_in_memory=config.keep_in_memory,
                                 diffusion_in_current_sim=config.diffusion_in_current_sim,
                                 mc_diff=config.mc_diff,
                                 adc_norm=config.chamfer_adc_norm, match_z=config.chamfer_match_z,
@@ -241,7 +245,7 @@ def main(config):
                                 out_label=config.out_label, test_name=config.test_name,
                                 loss_fn=config.loss_fn, loss_fn_kw=config.loss_fn_kw, shift_no_fit=config.shift_no_fit,
                                 set_target_vals=config.set_target_vals, set_init_params=config.set_init_params, vary_init=config.vary_init,
-                                config = config, keep_in_memory=config.keep_in_memory,
+                                config = config, set_params=_set_params_dict, keep_in_memory=config.keep_in_memory,
                                 diffusion_in_current_sim=config.diffusion_in_current_sim,
                                 mc_diff=config.mc_diff,
                                 adc_norm=config.chamfer_adc_norm, match_z=config.chamfer_match_z,
@@ -261,7 +265,7 @@ def main(config):
                                 out_label=config.out_label, test_name=config.test_name,
                                 loss_fn=config.loss_fn, loss_fn_kw=config.loss_fn_kw, shift_no_fit=config.shift_no_fit,
                                 set_target_vals=config.set_target_vals, set_init_params=config.set_init_params, vary_init=config.vary_init,
-                                config = config, keep_in_memory=config.keep_in_memory,
+                                config = config, set_params=_set_params_dict, keep_in_memory=config.keep_in_memory,
                                 diffusion_in_current_sim=config.diffusion_in_current_sim,
                                 mc_diff=config.mc_diff,
                                 adc_norm=config.chamfer_adc_norm, match_z=config.chamfer_match_z,
@@ -282,7 +286,7 @@ def main(config):
                                 out_label=config.out_label, test_name=config.test_name,
                                 loss_fn=config.loss_fn, loss_fn_kw=config.loss_fn_kw, shift_no_fit=config.shift_no_fit,
                                 set_target_vals=config.set_target_vals, vary_init=config.vary_init,
-                                config = config, keep_in_memory=config.keep_in_memory,
+                                config = config, set_params=_set_params_dict, keep_in_memory=config.keep_in_memory,
                                 diffusion_in_current_sim=config.diffusion_in_current_sim,
                                 mc_diff=config.mc_diff,
                                 adc_norm=config.chamfer_adc_norm, match_z=config.chamfer_match_z,
@@ -446,6 +450,8 @@ if __name__ == '__main__':
     parser.add_argument("--loss_sigma_charge", default=None, type=float, help="Override ProbabilisticLoss sigma_charge (wider = less per-hit-noise-sensitive).")
     parser.add_argument("--loss_time_window", default=None, type=int, help="Override ProbabilisticLoss time_window (wider = marginalize more ticks).")
     parser.add_argument("--loss_sigma_time", default=None, type=float, help="Override ProbabilisticLoss sigma_time.")
+    parser.add_argument('--set_params', nargs='*', default=[],
+                        help="Global parameter overrides as KEY=VALUE (e.g. DISCRIMINATION_THRESHOLD=2500)")
     parser.add_argument("--loss_spatial_moment_weight", default=None, type=float, help="Weight of the spatial-moment (poor-man's OT) term: matches transverse charge centroid per drift slice. 0 = off.")
     parser.add_argument("--loss_spatial_moment_nslices", default=None, type=int, help="Number of drift-tick slices for the spatial-moment term (default 16).")
     parser.add_argument("--max_batch_len", dest="max_batch_len", default=None, type=float,
