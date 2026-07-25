@@ -40,7 +40,12 @@ def ridge_inverse(H, ridge=0.02, mu=0.3):
     m = mu * base
     A = H + ridge * np.diag(dg) + m * np.eye(n) + 1e-12 * (np.abs(H).max() + 1e-30) * np.eye(n)
     ev, V = np.linalg.eigh(A)
-    ev = np.clip(ev, 0.5 * m, None)
+    # SADDLE-FREE: |eigenvalues|. The true NLL Hessian is INDEFINITE far from the minimum;
+    # clipping negative curvature to a tiny positive floor turns those directions into huge
+    # steps that ASCEND the true function (the observed runaway). |ev| preserves the scale
+    # of the curvature while forcing descent (Dauphin et al.; LUCiD avoids this by using
+    # PSD JtJ, which we cannot for the NLL objective).
+    ev = np.clip(np.abs(ev), 0.5 * m, None)
     return V @ np.diag(1.0 / ev) @ V.T
 
 
