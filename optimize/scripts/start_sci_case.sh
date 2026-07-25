@@ -102,7 +102,7 @@ python3 -m optimize.example_run \
     --signal_length 150 \
     --mode ${MODE} \
     --lut_file src/larndsim/detector_properties/response_44.npy \
-    --loss_fn ${LOSS} \
+    --loss_fn ${LOSS} ${SCISETP:+--set_params $SCISETP} \
     --probabilistic_sim \
     --sim_seed_strategy different \
     --non_deterministic \
