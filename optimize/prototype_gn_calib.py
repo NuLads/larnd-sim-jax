@@ -293,8 +293,31 @@ def main():
             H += Hi; g += gi; loss += li
         if n_bad:
             print(f'[GN-WARN] step {s}: skipped {n_bad}/{nb} non-finite batches')
-        Pinv = ridge_inverse(H, ridge=args.ridge, mu=args.mu)
-        dth = -np.clip(Pinv @ g, -args.step_max, args.step_max)
+        # Levenberg-Marquardt lambda adaptation with accept/reject on the ACCUMULATED loss:
+        # flat directions get large raw Newton steps (eigen-floor), which descend a long shallow
+        # valley right past the deep basin. LM rejects steps that don't reduce the true loss and
+        # raises lambda until they do — the flat-direction step size becomes self-limiting.
+        if not hasattr(main, '_lm_lambda'): main._lm_lambda = args.mu
+        lam = main._lm_lambda
+        def total_loss(th):
+            return sum(float(res_fns[i+10000](th)) for i in range(nb)) if args.objective=='ppp'                    else sum(float(np.asarray(res_fns[i](th)) @ np.asarray(res_fns[i](th))) for i in range(nb))
+        L0 = loss
+        accepted = False
+        for _try in range(6):
+            Pinv = ridge_inverse(H, ridge=args.ridge, mu=lam)
+            dth_raw = -(Pinv @ g)
+            nrm = np.linalg.norm(dth_raw)
+            dth = dth_raw * min(1.0, args.step_max*np.sqrt(P)/max(nrm,1e-30))   # NORM trust region (not elementwise)
+            L1 = total_loss(theta + jnp.asarray(dth))
+            if L1 < L0:
+                accepted = True
+                lam = max(lam/3.0, 1e-4)
+                break
+            lam *= 10.0
+        main._lm_lambda = lam
+        if not accepted:
+            print(f'[GN {s:3d}] no acceptable step (lam={lam:.1e}) — stopping')
+            break
         theta = theta + jnp.asarray(dth)
         cur = {p: init[p] * float(np.exp(theta[k])) for k, p in enumerate(relevant)}
         errs = {p: (cur[p] - truth[p]) / truth[p] * 100 for p in relevant}
