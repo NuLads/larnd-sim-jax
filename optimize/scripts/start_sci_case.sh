@@ -31,7 +31,7 @@ MODE=lut
 LR_SCHEDULER=warmup_exponential_decay_schedule
 
 # dEdx settings (identical across modes)
-DEDX_PRIOR_WEIGHT=0.5
+DEDX_PRIOR_WEIGHT=${SCIDEDXPRIOR:-0.5}
 DEDX_DRIFT_PROFILE_WEIGHT=${SCIDPW:-0.0}
 DEDX_LR=1e-2
 DEDX_START_ITER=0
@@ -125,7 +125,7 @@ python3 -m optimize.example_run \
     --chain_lr ${CHAIN_LR} \
     --chain_start_iter ${CHAIN_START_ITER} \
     --chain_update_freq ${CHAIN_UPDATE_FREQ} \
-    --chain_decay_rate 0.999 \
+    --chain_decay_rate ${SCICHDECAY:-0.999} \
     --mcs_prior_weight ${MCS_PRIOR_WEIGHT} \
     --chain_step_len ${CHAIN_STEP_LEN} \
     --chain_momentum_GeV ${CHAIN_MOMENTUM_GEV} \
