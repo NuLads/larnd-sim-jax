@@ -188,8 +188,13 @@ def main():
             print(f'[GN-PROTO] batch {i}: usize {_static[i][0]} roi {_static[i][1:]}')
         return _static[i]
 
+    # BOUNDED parametrization — the fitter's own sigmoid map (theta=0 <-> nominal init).
+    # Unbounded log-space let GN descend the tau->infinity plateau that Adam's sigmoid
+    # walls make unreachable; same space => same reachable minima.
+    from optimize.fit_params import map_norm_to_phys, map_phys_to_norm
+
     def batch_nll(theta, tracks, tgt, usize, roi):
-        phys = {p: init[p] * jnp.exp(theta[k]) for k, p in enumerate(relevant)}
+        phys = {p: map_norm_to_phys(theta[k], p, scheme='sigmoid', scale=1.0) for k, p in enumerate(relevant)}
         params = ref.replace(**phys)
         pred = strategy.predict(params, tracks, fields, None, unique_size=usize, roi_override=roi)
         tgt_data = {'pixel_id': jnp.asarray(tgt['pixel_id']), 'ticks': jnp.asarray(tgt['ticks']),
@@ -251,7 +256,7 @@ def main():
             jac_fns[i] = _jac_seq
 
     P = len(relevant)
-    theta = jnp.zeros(P)
+    theta = jnp.asarray([float(map_phys_to_norm(init[p], p, scheme='sigmoid', scale=1.0)) for p in relevant])
     Jc = {}
     hist = []
     acc = np.zeros(P); n_acc = 0
@@ -319,7 +324,7 @@ def main():
             print(f'[GN {s:3d}] no acceptable step (lam={lam:.1e}) — stopping')
             break
         theta = theta + jnp.asarray(dth)
-        cur = {p: init[p] * float(np.exp(theta[k])) for k, p in enumerate(relevant)}
+        cur = {p: float(map_norm_to_phys(theta[k], p, scheme='sigmoid', scale=1.0)) for k, p in enumerate(relevant)}
         errs = {p: (cur[p] - truth[p]) / truth[p] * 100 for p in relevant}
         hist.append({'step': s, 'loss': loss, 'params': cur, 'errs': errs})
         print(f'[GN {s:3d}] loss {loss:.1f} | ' + ' '.join(f'{p}{errs[p]:+.1f}%' for p in relevant))
@@ -327,7 +332,7 @@ def main():
             acc += np.array(theta); n_acc += 1
 
     theta_out = acc / n_acc if (args.polyak and n_acc) else np.array(theta)
-    final = {p: init[p] * float(np.exp(theta_out[k])) for k, p in enumerate(relevant)}
+    final = {p: float(map_norm_to_phys(jnp.asarray(theta_out)[k], p, scheme='sigmoid', scale=1.0)) for k, p in enumerate(relevant)}
     print('[GN-PROTO] FINAL:', ' '.join(f'{p} {final[p]:.5g} ({(final[p]-truth[p])/truth[p]*100:+.2f}%)' for p in relevant))
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     pickle.dump({'relevant': relevant, 'truth': truth, 'init': init, 'final': final,
