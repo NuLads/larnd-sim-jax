@@ -62,6 +62,8 @@ def main():
     ap.add_argument('--polyak', type=int, default=0)
     ap.add_argument('--fd_check', action='store_true', default=True)
     ap.add_argument('--max_batches', type=int, default=0, help='use only the first N batches (0=all)')
+    ap.add_argument('--warm_start', type=float, default=0.0,
+                    help='initialize theta from the history run at this fraction of its iterations (0=off; e.g. 0.2 = Adam@1000/5000). Tests GN-as-polisher.')
     ap.add_argument('--objective', choices=['residual', 'ppp'], default='residual',
                     help='residual: LUCiD-style sqrt-charge+time LSQ (JtJ). ppp: full-batch damped NEWTON on the exact PPP/llhd loss (5x5 Hessian via jacfwd(grad)) — same objective as the Adam fits.')
     ap.add_argument('--out', default='fit_result/gn_proto/result.pkl')
@@ -256,7 +258,13 @@ def main():
             jac_fns[i] = _jac_seq
 
     P = len(relevant)
-    theta = jnp.asarray([float(map_phys_to_norm(init[p], p, scheme='sigmoid', scale=1.0)) for p in relevant])
+    if args.warm_start > 0:
+        ws = {p: float(np.ravel(h[f'{p}_iter'])[int(args.warm_start * (len(np.ravel(h[f'{p}_iter'])) - 1))]) for p in relevant}
+        print('[GN-PROTO] warm start from Adam@%.0f%%:' % (100*args.warm_start),
+              {k: f'{v:.4g}' for k, v in ws.items()})
+        theta = jnp.asarray([float(map_phys_to_norm(ws[p], p, scheme='sigmoid', scale=1.0)) for p in relevant])
+    else:
+        theta = jnp.asarray([float(map_phys_to_norm(init[p], p, scheme='sigmoid', scale=1.0)) for p in relevant])
     Jc = {}
     hist = []
     acc = np.zeros(P); n_acc = 0
