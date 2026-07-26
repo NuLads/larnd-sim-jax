@@ -121,7 +121,7 @@ python3 -m optimize.example_run \
     --dedx_soft_barrier_weight 1.0 \
     --dedx_mean_constraint_weight 100000.0 \
     --dedx_drift_profile_weight ${DEDX_DRIFT_PROFILE_WEIGHT} \
-    ${CHAIN_FLAG} ${SCIBASIS:+--chain_basis $SCIBASIS --chain_spline_knot_cm 40} \
+    ${CHAIN_FLAG} ${SCIBASIS:+--chain_basis $SCIBASIS --chain_spline_knot_cm 40} ${SCIGEOMOPT:+--geom_optimizer $SCIGEOMOPT} \
     --chain_lr ${CHAIN_LR} \
     --chain_start_iter ${CHAIN_START_ITER} \
     --chain_update_freq ${CHAIN_UPDATE_FREQ} \
