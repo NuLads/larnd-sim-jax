@@ -3539,7 +3539,7 @@ class GradientDescentFitter(ParamFitter):
                                     if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
                                         os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
                                     if os.path.exists(self.target_dir):
-                                        shutil.rmtree(self.target_dir, ignore_errors=True)
+                                        (None if os.environ.get('LARND_KEEP_TARGETS') else shutil.rmtree(self.target_dir, ignore_errors=True))
                                     terminate_fit = True
                                     break
 
@@ -3586,7 +3586,7 @@ class GradientDescentFitter(ParamFitter):
                                 if os.path.exists(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl'):
                                     os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
                                 if os.path.exists(self.target_dir):
-                                    shutil.rmtree(self.target_dir, ignore_errors=True)
+                                    (None if os.environ.get('LARND_KEEP_TARGETS') else shutil.rmtree(self.target_dir, ignore_errors=True))
                                 terminate_fit = True
                                 break
                             
@@ -3621,7 +3621,7 @@ class GradientDescentFitter(ParamFitter):
                 os.remove(f'fit_result/{self.test_name}/history_iter{total_iter-save_freq}_{self.out_label}.pkl')
 
             if os.path.exists(self.target_dir):
-                shutil.rmtree(self.target_dir, ignore_errors=True)
+                (None if os.environ.get('LARND_KEEP_TARGETS') else shutil.rmtree(self.target_dir, ignore_errors=True))
 
             # libcudart.cudaProfilerStop()
 
@@ -3720,7 +3720,7 @@ class LikelihoodProfiler(ParamFitter):
                     os.remove(f'fit_result/{self.test_name}/history_{param}_batch{i-1}_{self.out_label}.pkl')
 
         if os.path.exists(self.target_dir):
-            shutil.rmtree(self.target_dir, ignore_errors=True)
+            (None if os.environ.get('LARND_KEEP_TARGETS') else shutil.rmtree(self.target_dir, ignore_errors=True))
 
 class MinuitFitter(ParamFitter):
     def __init__(self, separate_fits=True, minimizer_strategy=1, minimizer_tol=1e-5, **kwargs):
@@ -3927,7 +3927,7 @@ class HessianCalculator(ParamFitter):
                 os.remove(f'fit_result/{self.test_name}/history_batch{i-1}_{self.out_label}.pkl')
 
         if os.path.exists(self.target_dir):
-            shutil.rmtree(self.target_dir, ignore_errors=True)
+            (None if os.environ.get('LARND_KEEP_TARGETS') else shutil.rmtree(self.target_dir, ignore_errors=True))
 
 
 class GaussNewtonCalibFitter(GradientDescentFitter):
@@ -4362,7 +4362,7 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         with open(f'fit_result/{self.test_name}/history_iter{self.total_iter}_{self.out_label}.pkl', "wb") as fh:
             pickle.dump(self.training_history, fh)
         if os.path.exists(self.target_dir):
-            shutil.rmtree(self.target_dir, ignore_errors=True)
+            (None if os.environ.get('LARND_KEEP_TARGETS') else shutil.rmtree(self.target_dir, ignore_errors=True))
 
     def _report_covariance(self, cache):
         """H^-1 parameter errors at the current point (nuisances frozen if resuming)."""
