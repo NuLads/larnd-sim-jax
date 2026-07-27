@@ -2465,6 +2465,13 @@ class GradientDescentFitter(ParamFitter):
         # pad: tracks (+1 guaranteed zero-charge row for padded segments), coeffs, meta, target
         zero_row = int(tracks.shape[0])
         tracks_p = jnp.concatenate([tracks, jnp.zeros((1, tracks.shape[1]), tracks.dtype)], axis=0)
+        # parent_ids must grow with tracks_p (the extra zero-charge row): the dEdx reconstruction
+        # in loss_wrapper_combined broadcasts parent_ids against t -> shape mismatch otherwise.
+        # -1 marks it invalid so it keeps its (zero) track dEdx and injects no dEdx gradient.
+        if parent_ids is not None:
+            parent_ids = jnp.concatenate(
+                [jnp.asarray(parent_ids).ravel(),
+                 -jnp.ones(1, dtype=jnp.asarray(parent_ids).dtype)], axis=0)
         meta_p = _pad_spline_meta(meta, Tm, ncm, Km, Nm, zero_row)
         coeffs_p = _pad_spline_coeffs(coeffs, Tm, Km)
         tkeys = ['adcs', 'pixel_x', 'pixel_y', 'pixel_z', 'ticks', 'hit_prob', 'event', 'pixel_id']
