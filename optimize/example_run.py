@@ -131,6 +131,21 @@ def main(config):
     if _lkw:
         logger.info(f"Loss overrides: {_lkw}")
 
+    # Startup sanity checks (reviewer #9): silent no-ops where a freeze/start iter can never fire
+    _it = config.iterations
+    if _it:
+        for _n, _v in [('dedx_freeze_iter', getattr(config, 'dedx_freeze_iter', None)),
+                       ('dedx_start_iter', getattr(config, 'dedx_start_iter', None)),
+                       ('chain_start_iter', getattr(config, 'chain_start_iter', None)),
+                       ('LARND_CHAIN_FREEZE_ITER', os.environ.get('LARND_CHAIN_FREEZE_ITER')),
+                       ('LARND_CALIB_START_ITER', os.environ.get('LARND_CALIB_START_ITER'))]:
+            try:
+                _v = int(_v) if _v is not None else None
+            except (TypeError, ValueError):
+                continue
+            if _v is not None and _v >= _it:
+                logger.warning(f"SILENT NO-OP: {_n}={_v} >= iterations={_it} — it will NEVER trigger")
+
     if config.fit_type == "chain":
         param_fit = GradientDescentFitter(relevant_params=param_list,
                                 sim_track_fields=sim_track_fields, tgt_track_fields=tgt_track_fields,

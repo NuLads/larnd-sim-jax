@@ -951,6 +951,21 @@ class ParamFitter:
             self.training_history['hessian'] = []
             self.training_history['gradient'] = []
         self.training_history['size_history'] = []
+        # PROVENANCE (reviewer #9): LARND_* env vars change fit behaviour but were invisible in
+        # checkpoints; git SHA lets a result be tied to the code that produced it.
+        try:
+            import subprocess as _sp, socket as _sock, sys as _sys, time as _time
+            _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            _sha = _sp.check_output(['git', 'rev-parse', 'HEAD'], cwd=_root, stderr=_sp.DEVNULL).decode().strip()
+            _dirty = bool(_sp.check_output(['git', 'status', '--porcelain'], cwd=_root, stderr=_sp.DEVNULL).decode().strip())
+        except Exception:
+            _sha, _dirty = None, None
+        self.training_history['env_overrides'] = {k: v for k, v in os.environ.items() if k.startswith('LARND_')}
+        self.training_history['provenance'] = dict(
+            git_sha=_sha, git_dirty=_dirty, hostname=__import__('socket').gethostname(),
+            slurm_job_id=os.environ.get('SLURM_JOB_ID'),
+            slurm_array_task_id=os.environ.get('SLURM_ARRAY_TASK_ID'),
+            argv=list(sys.argv), timestamp=__import__('time').time())
         self.training_history['memory'] = []
 
         self.training_history['config'] = config
@@ -2267,8 +2282,17 @@ class GradientDescentFitter(ParamFitter):
             if _ckpt_path:
                 if not hasattr(self, '_chain_init_ckpt'):
                     with open(_ckpt_path, 'rb') as _f:
-                        self._chain_init_ckpt = pickle.load(_f).get('chain_cache', {})
-                    logger.info(f"[TWO-PASS] chain init from {_ckpt_path} ({len(self._chain_init_ckpt)} batches)")
+                        _ck = pickle.load(_f)
+                    # key by TRACK_ID (not list position): position matching silently transplants
+                    # another track's geometry if batching/ordering differs between passes.
+                    _cc, _cx = _ck.get('chain_cache', {}), _ck.get('chain_contexts', {})
+                    self._chain_init_ckpt = {}
+                    for _bi, _states in _cc.items():
+                        _ctxs = _cx.get(_bi, [])
+                        self._chain_init_ckpt[_bi] = {
+                            str(_c['track_id']): _s['angles']
+                            for _c, _s in zip(_ctxs, _states)} if _ctxs else None
+                    logger.info(f"[TWO-PASS] chain init from {_ckpt_path} ({len(self._chain_init_ckpt)} batches, keyed by track_id)")
                 _init_ckpt = self._chain_init_ckpt.get(batch_idx)
             ctxs = self._batch_chain_contexts.get(batch_idx, [])
             states = []
@@ -2301,13 +2325,17 @@ class GradientDescentFitter(ParamFitter):
                     angles[:n_c] = ctx.theta0_i   # all segments start aligned with initial direction
                     angles[n_c:] = ctx.phi0_i
                     params = jnp.array(angles)
-                if _init_ckpt is not None and _ci < len(_init_ckpt):
-                    _loaded = jnp.asarray(np.asarray(_init_ckpt[_ci]['angles'], dtype=np.float32))
-                    if _loaded.shape == params.shape:
-                        params = _loaded
+                if _init_ckpt:
+                    _tk = str(ctx.track_id)
+                    if _tk not in _init_ckpt:
+                        logger.warning(f"[TWO-PASS] batch {batch_idx}: track_id {_tk} absent in source — default init")
                     else:
-                        logger.warning(f"[TWO-PASS] batch {batch_idx} track {_ci}: shape mismatch "
-                                       f"{_loaded.shape} vs {params.shape} — keeping default init")
+                        _loaded = jnp.asarray(np.asarray(_init_ckpt[_tk], dtype=np.float32))
+                        if _loaded.shape == params.shape:
+                            params = _loaded
+                        else:
+                            logger.warning(f"[TWO-PASS] batch {batch_idx} track {_tk}: shape mismatch "
+                                           f"{_loaded.shape} vs {params.shape} — default init")
                 opt_state = self._chain_optimizer.init(params)
                 states.append({'angles': params, 'opt_state': opt_state})
             self._chain_cache[batch_idx] = states
