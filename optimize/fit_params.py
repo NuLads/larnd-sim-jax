@@ -2259,9 +2259,20 @@ class GradientDescentFitter(ParamFitter):
         MCS prior penalises jnp.diff(thetas) and jnp.diff(phis) — consecutive direction changes.
         """
         if batch_idx not in self._chain_cache:
+            # TWO-PASS (LARND_CHAIN_INIT_FROM=<checkpoint.pkl>): initialise chain coefficients from
+            # a previous fit's chain_cache — combined with LARND_CHAIN_FREEZE_ITER=1 this fits
+            # calib+dEdx against FROZEN fitted geometry (pass 2). Batches must match (same config).
+            _init_ckpt = None
+            _ckpt_path = os.environ.get('LARND_CHAIN_INIT_FROM')
+            if _ckpt_path:
+                if not hasattr(self, '_chain_init_ckpt'):
+                    with open(_ckpt_path, 'rb') as _f:
+                        self._chain_init_ckpt = pickle.load(_f).get('chain_cache', {})
+                    logger.info(f"[TWO-PASS] chain init from {_ckpt_path} ({len(self._chain_init_ckpt)} batches)")
+                _init_ckpt = self._chain_init_ckpt.get(batch_idx)
             ctxs = self._batch_chain_contexts.get(batch_idx, [])
             states = []
-            for ctx in ctxs:
+            for _ci, ctx in enumerate(ctxs):
                 if self._chain_basis == 'spline':
                     # 2K spline coefficients, initialised to zero = nominal (linear-guess) track
                     K = _spline_K(ctx.total_len, self._chain_spline_knot_cm)
@@ -2290,6 +2301,13 @@ class GradientDescentFitter(ParamFitter):
                     angles[:n_c] = ctx.theta0_i   # all segments start aligned with initial direction
                     angles[n_c:] = ctx.phi0_i
                     params = jnp.array(angles)
+                if _init_ckpt is not None and _ci < len(_init_ckpt):
+                    _loaded = jnp.asarray(np.asarray(_init_ckpt[_ci]['angles'], dtype=np.float32))
+                    if _loaded.shape == params.shape:
+                        params = _loaded
+                    else:
+                        logger.warning(f"[TWO-PASS] batch {batch_idx} track {_ci}: shape mismatch "
+                                       f"{_loaded.shape} vs {params.shape} — keeping default init")
                 opt_state = self._chain_optimizer.init(params)
                 states.append({'angles': params, 'opt_state': opt_state})
             self._chain_cache[batch_idx] = states
