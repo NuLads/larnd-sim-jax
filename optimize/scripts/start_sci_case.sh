@@ -95,7 +95,7 @@ python3 -m optimize.example_run \
     --lr 1e-1 \
     --optimizer_fn Adam \
     --lr_scheduler ${LR_SCHEDULER} \
-    --lr_kw '{\"decay_rate\" : 0.999, \"init_value\" : 0, \"warmup_steps\": 500}' \
+    --lr_kw '{\"decay_rate\" : '${SCILRDECAY:-0.999}', \"init_value\" : 0, \"warmup_steps\": 500}' \
     --max_clip_norm_val 100 \
     --electron_sampling_resolution 0.01 \
     --number_pix_neighbors ${N_NEIGH} \
