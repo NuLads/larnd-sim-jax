@@ -658,7 +658,7 @@ def simulate_wfs_static(params, response_template, tracks, fields, fixed_pixels)
 class ParamFitter:
     def __init__(self, relevant_params, set_init_params, sim_track_fields, tgt_track_fields,
                  detector_props, pixel_layouts,
-                 loss_fn=None, loss_fn_kw=None, readout_noise_target=True, readout_noise_guess=False, 
+                 loss_fn=None, loss_fn_kw=None, readout_noise_target=True, readout_noise_guess=True, 
                  out_label="", test_name="this_test",
                  shift_no_fit=[], set_target_vals=[], set_params={}, vary_init=False, keep_in_memory=False,
                  compute_target_hessian=False, sim_seed_strategy="different",
@@ -1066,7 +1066,12 @@ class ParamFitter:
         #Only do it now to not inpact current_params (ref_params?)
         #FIXME It's a problem if the noise parameters are to be fitted
         if not self.readout_noise_guess:
-            logger.info("Not simulating electronics noise for guesses")
+            # NOTE: for fit_type=chain/gn_calib the loss builds physical_params from ref_params
+            # (noise fields INTACT) — the probabilistic guess divides by sigma, so a zeroed sigma
+            # would be 1/0. This strip therefore affects only paths that use current_params
+            # (LikelihoodProfiler/Minuit/Hessian). The guess in the main fit KEEPS its noise model.
+            logger.info("Stripping noise from current_params (NOTE: chain/gn_calib guess still uses "
+                        "ref_params noise — this flag does not disable the guess noise model there)")
             self.current_params = remove_noise_from_params(self.current_params)
             self.params_normalization = remove_noise_from_params(self.params_normalization)
             self.norm_params = remove_noise_from_params(self.norm_params)
@@ -2190,6 +2195,36 @@ class GradientDescentFitter(ParamFitter):
 
     def apply_updates(self, params, update):
         setattr(self, params, getattr(self, params).replace(**{key: getattr(getattr(self, params), key) + val for key, val in update.items()}))
+
+    def _reinit_opt_state_keep_schedule(self):
+        """Reset Adam moments but PRESERVE the LR-schedule step count.
+
+        optax stores ScaleByScheduleState(count) in the same pytree as the moments, so a bare
+        optimizer.init() rewinds the schedule to step 0 — restarting warmup and the decay clock
+        mid-run. That silently confounds every staging/freeze experiment (the LR jumps back to
+        peak exactly at the freeze point)."""
+        import optax as _optax
+        old = self.opt_state
+        new = self.optimizer.init(extract_relevant_params(self.norm_params, self.relevant_params_list))
+
+        def _copy_counts(o, n):
+            if isinstance(o, _optax.ScaleByScheduleState) and isinstance(n, _optax.ScaleByScheduleState):
+                return n._replace(count=o.count)
+            if isinstance(o, tuple) and isinstance(n, tuple) and type(o) is type(n) and len(o) == len(n):
+                vals = [_copy_counts(a, b) for a, b in zip(o, n)]
+                try:
+                    return type(n)(*vals)
+                except TypeError:
+                    return tuple(vals)
+            if isinstance(o, dict) and isinstance(n, dict):
+                return {k: (_copy_counts(o[k], v) if k in o else v) for k, v in n.items()}
+            return n
+
+        try:
+            return _copy_counts(old, new)
+        except Exception as e:
+            logger.warning(f"schedule-count preservation failed ({e}); falling back to plain init")
+            return new
 
     def process_grads(self, grads):
         # We extract only the relevant parameters to pass to the optimizer
@@ -3429,9 +3464,7 @@ class GradientDescentFitter(ParamFitter):
                         logger.info(
                             f"dEdx activated at iteration {total_iter}: resetting calibration Adam state."
                         )
-                        self.opt_state = self.optimizer.init(
-                            extract_relevant_params(self.norm_params, self.relevant_params_list)
-                        )
+                        self.opt_state = self._reinit_opt_state_keep_schedule()
                         self._dedx_adam_reset_done = True
 
                     # Reset calibration Adam state once when dEdx is frozen so the
@@ -3441,9 +3474,7 @@ class GradientDescentFitter(ParamFitter):
                             f"dEdx frozen at iteration {total_iter}: resetting calibration Adam state "
                             f"for fine-tuning phase."
                         )
-                        self.opt_state = self.optimizer.init(
-                            extract_relevant_params(self.norm_params, self.relevant_params_list)
-                        )
+                        self.opt_state = self._reinit_opt_state_keep_schedule()
                         self._dedx_freeze_adam_reset_done = True
 
                     if _use_dedx and i in self._batch_parent_ids:
@@ -3456,16 +3487,19 @@ class GradientDescentFitter(ParamFitter):
 
                     # Chain position local state for this batch
                     # Allow position-only mode (fit_dedx=False) as well as joint mode
-                    _chain_active = (self.fit_chain_positions and
+                    # WARP-vs-UPDATE separation (all gates): the warp must be APPLIED on every
+                    # iteration once a chain state exists, otherwise calibration gradients are
+                    # computed against the NOMINAL straight line (silent geometry revert). Only the
+                    # chain UPDATE is gated by chain_update_freq / chain_start_iter / freeze.
+                    _chain_available = (self.fit_chain_positions and
+                                        i in self._batch_chain_contexts and
+                                        (_log_dedx is not None or not self.fit_dedx
+                                         or total_iter < self.dedx_start_iter))
+                    _chain_active = (_chain_available and
                                      total_iter >= self._chain_start_iter and
-                                     total_iter % self._chain_update_freq == 0 and
-                                     i in self._batch_chain_contexts and
-                                     (_log_dedx is not None or not self.fit_dedx
-                                      or total_iter < self.dedx_start_iter))
-                    # Freeze gates the UPDATE only — the warp must still be APPLIED with the frozen
-                    # angles (gating _chain_active would silently revert geometry to the nominal line).
+                                     total_iter % self._chain_update_freq == 0)
                     _chain_frozen_now = (self._chain_freeze_iter > 0 and total_iter >= self._chain_freeze_iter)
-                    if _chain_active:
+                    if _chain_available:
                         _chain_states   = self._get_or_init_chain_state(i)
                         _chain_angles_pt = [s['angles'] for s in _chain_states]
                     else:
