@@ -273,7 +273,7 @@ def main():
         if s % args.refresh == 0:
             for i in range(nb):
                 Jc[i] = np.asarray(jac_fns[i](theta))
-            if s == 0 and args.fd_check and args.objective == 'residual':
+            if s == 0 and args.fd_check and args.objective == 'residual':  # NOTE: ppp mode checked via the separate 3-point objective test
                 i0 = 0
                 r0 = np.asarray(res_fns[i0](theta))
                 for k in range(P):
@@ -328,6 +328,15 @@ def main():
                 break
             lam *= 10.0
         main._lm_lambda = lam
+        # BOUND-SATURATION GUARD (ported from GaussNewtonCalibFitter._run_gn_loop, fit_params.py):
+        # the sigmoid bounds the PHYSICAL value but nothing stops the pre-sigmoid theta drifting to
+        # |theta|>>1 via many individually-legitimate descent steps — the parameter then sits pinned
+        # at its range bound while the loss keeps decreasing along other directions. THIS is the
+        # observed 'runaway': a real descent into a corner, not an ascending/failed step.
+        _sat = float(np.max(np.abs(np.asarray(theta + jnp.asarray(dth)))))
+        if _sat > 3.5:
+            print(f'[GN {s:3d}] norm-space saturation {_sat:.2f} > 3.5 — parameters pinning at bounds; stopping')
+            break
         if not accepted:
             print(f'[GN {s:3d}] no acceptable step (lam={lam:.1e}) — stopping')
             break

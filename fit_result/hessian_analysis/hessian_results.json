@@ -32,7 +32,8 @@
     },
     "nll_truth": 166735.7,
     "grad_norm_truth": 45658.73,
-    "config": "S2@400 noise-ON seed0, 20 batches, sigmoid-normalized params, H^-1 with 1e-9 ridge"
+    "config": "S2@400 noise-ON seed0, 20 batches, sigmoid-normalized params, H^-1 with 1e-9 ridge",
+    "precision_caveat": "PRECISION CAVEAT (reviewer #6): assembled in float32 (~7 decimal digits) while the condition number is ~4e6 (5x5) / ~1e8 (8x8). The smallest-curvature direction \u2014 precisely the (lifetime,long_diff) plane of interest \u2014 may be affected by rounding leakage from the stiff eField direction. Re-run with jax_enable_x64 before quoting sigmas to 2 significant figures."
   },
   "calib_plus_geom8x8": {
     "source_log": "logs/gn_proto/geomhess-33159932.out",
@@ -75,6 +76,7 @@
     "amplification": "Abx1.1 eFieldx119.4 tran_diffx2.2 long_diffx1.1 lifetimex1.0",
     "geom_mode_sigmas": "dz_cm=0.0001279 zscale=0.000697 dx_cm=4.971e-05",
     "config": "S2@400 noise-ON seed0, 12 batches; geom modes = rigid dz(cm), z-scale, dx(cm); H^-1 with 1e-6 ridge",
-    "caveat": "near-singular Hessian: sigmas from inversion are regularization-sensitive; condition number ~1e8 (8x8)"
+    "caveat": "near-singular Hessian: sigmas from inversion are regularization-sensitive; condition number ~1e8 (8x8)",
+    "precision_caveat": "PRECISION CAVEAT (reviewer #6): assembled in float32 (~7 decimal digits) while the condition number is ~4e6 (5x5) / ~1e8 (8x8). The smallest-curvature direction \u2014 precisely the (lifetime,long_diff) plane of interest \u2014 may be affected by rounding leakage from the stiff eField direction. Re-run with jax_enable_x64 before quoting sigmas to 2 significant figures."
   }
 }
