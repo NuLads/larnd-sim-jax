@@ -1,0 +1,80 @@
+{
+  "calib5x5": {
+    "source_log": "logs/gn_proto/hessmap-33091161.out",
+    "eigen": [
+      {
+        "value": 3287.0,
+        "composition": "Ab:-0.02 eField:-0.00 tran_diff:-0.00 long_diff:+0.56 lifetime:+0.83"
+      },
+      {
+        "value": 6134.0,
+        "composition": "Ab:-0.03 eField:-0.00 tran_diff:+0.01 long_diff:-0.83 lifetime:+0.56"
+      },
+      {
+        "value": 388000.0,
+        "composition": "Ab:-0.03 eField:+0.00 tran_diff:-1.00 long_diff:-0.01 lifetime:+0.00"
+      },
+      {
+        "value": 7953000.0,
+        "composition": "Ab:-1.00 eField:+0.00 tran_diff:+0.03 long_diff:+0.01 lifetime:-0.04"
+      },
+      {
+        "value": 12850000000.0,
+        "composition": "Ab:-0.00 eField:-1.00 tran_diff:-0.00 long_diff:-0.00 lifetime:-0.00"
+      }
+    ],
+    "sigma_pct_logspace": {
+      "Ab": 0.06,
+      "eField": 0.0,
+      "tran_diff": 0.16,
+      "long_diff": 1.44,
+      "lifetime": 1.61
+    },
+    "nll_truth": 166735.7,
+    "grad_norm_truth": 45658.73,
+    "config": "S2@400 noise-ON seed0, 20 batches, sigmoid-normalized params, H^-1 with 1e-9 ridge"
+  },
+  "calib_plus_geom8x8": {
+    "source_log": "logs/gn_proto/geomhess-33159932.out",
+    "eigen": [
+      {
+        "value": 426.6,
+        "composition": "Ab:+0.17 long_diff:-0.81 lifetime:-0.55"
+      },
+      {
+        "value": 710.2,
+        "composition": "Ab:-0.42 long_diff:-0.57 lifetime:+0.70"
+      },
+      {
+        "value": 3044.0,
+        "composition": "Ab:-0.23 eField:+0.77 tran_diff:+0.55 lifetime:-0.20"
+      },
+      {
+        "value": 9482.0,
+        "composition": "Ab:-0.71 tran_diff:-0.60 lifetime:-0.33"
+      },
+      {
+        "value": 19210.0,
+        "composition": "Ab:+0.49 eField:+0.61 tran_diff:-0.57 lifetime:+0.22"
+      },
+      {
+        "value": 69140000.0,
+        "composition": "dz_cm:+0.99"
+      },
+      {
+        "value": 1362000000.0,
+        "composition": "dx_cm:-0.99"
+      },
+      {
+        "value": 39460000000.0,
+        "composition": "zscale:+1.00"
+      }
+    ],
+    "sigma_geom_fixed": "Ab=1.88% eField=0.01% tran_diff=0.58% long_diff=4.22% lifetime=3.75%",
+    "sigma_geom_marginalized": "Ab=2.02% eField=1.56% tran_diff=1.29% long_diff=4.48% lifetime=3.79%",
+    "amplification": "Abx1.1 eFieldx119.4 tran_diffx2.2 long_diffx1.1 lifetimex1.0",
+    "geom_mode_sigmas": "dz_cm=0.0001279 zscale=0.000697 dx_cm=4.971e-05",
+    "config": "S2@400 noise-ON seed0, 12 batches; geom modes = rigid dz(cm), z-scale, dx(cm); H^-1 with 1e-6 ridge",
+    "caveat": "near-singular Hessian: sigmas from inversion are regularization-sensitive; condition number ~1e8 (8x8)"
+  }
+}
