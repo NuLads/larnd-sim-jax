@@ -2376,6 +2376,30 @@ class GradientDescentFitter(ParamFitter):
             self._chain_cache[batch_idx] = states
         return self._chain_cache[batch_idx]
 
+    def _freq_gate(self, tag, batch_idx, freq):
+        """Every-`freq`-VISITS gate, counted PER BATCH.
+
+        Replaces `total_iter % freq == 0`, which is a global-iteration gate and is broken under
+        sequential batching: batch b is always visited at total_iter == b (mod nbatch), so
+        `total_iter % freq == 0` is a FIXED function of the batch index. With freq > 1 a fixed
+        subset of batches receives EVERY update and the rest receive NONE, ever. Measured at
+        nbatch=100: freq=2 -> 50/100 batches never update, freq=4 -> 75/100, freq=5 -> 80/100,
+        freq=10 -> 90/100. Shuffling the batch order accidentally repairs it, which also makes the
+        two orderings incomparable. Counting each batch's own visits makes the gate mean what it
+        says and removes the order dependence.
+
+        freq <= 1 fires on every visit, identical to the old behaviour (which was already correct
+        at freq == 1, the default -- so no existing run changes).
+        """
+        if freq is None or freq <= 1:
+            return True
+        if not hasattr(self, '_freq_counters'):
+            self._freq_counters = {}
+        key = (tag, int(batch_idx))
+        n = self._freq_counters.get(key, 0)
+        self._freq_counters[key] = n + 1
+        return n % int(freq) == 0
+
     def _chain_lr_scale(self, total_iter):
         """Exponential decay factor for the chain-position learning rate.
 
@@ -3497,7 +3521,7 @@ class GradientDescentFitter(ParamFitter):
                                          or total_iter < self.dedx_start_iter))
                     _chain_active = (_chain_available and
                                      total_iter >= self._chain_start_iter and
-                                     total_iter % self._chain_update_freq == 0)
+                                     self._freq_gate('chain', i, self._chain_update_freq))
                     _chain_frozen_now = (self._chain_freeze_iter > 0 and total_iter >= self._chain_freeze_iter)
                     if _chain_available:
                         _chain_states   = self._get_or_init_chain_state(i)
@@ -3554,10 +3578,17 @@ class GradientDescentFitter(ParamFitter):
                                     max_iter=self._geom_lbfgs_steps)
                         else:
                             self._process_chain_grads(i, _grads_chain, total_iter)
-                        if total_iter % self._pos_residual_freq == 0:
+                        if self._freq_gate('posres', i, self._pos_residual_freq):
                             _pos_res = self._compute_pos_residual_batch(i)
                             if _pos_res is not None:
                                 self.training_history.setdefault('pos_residual_iter', []).append(_pos_res)
+                                # Record WHICH batch this residual belongs to. pos_residual is a
+                                # per-batch quantity and batches differ enormously (individual
+                                # batches span 62-3051 um around an 881 um median), so a bare time
+                                # series is only interpretable if the visit order is known. Without
+                                # this a --shuffle_bt run cannot be compared against a sequential
+                                # one at all. Additive; one int per recorded residual.
+                                self.training_history.setdefault('pos_residual_batch', []).append(int(i))
                         # env-gated: snapshot this batch's chain angles for oscillation viz
                         if os.environ.get('LARND_SNAPSHOT'):
                             self.training_history.setdefault('chain_snapshots', []).append(
@@ -3773,6 +3804,18 @@ class LikelihoodProfiler(ParamFitter):
             for param in self.relevant_params_list:
                 lower = ranges[param]['down']
                 upper = ranges[param]['up']
+                # LARND_SCAN_WINDOW (default unset = full ranges.py interval, bit-identical to
+                # before) narrows the grid to nom*(1 +/- w) so the SAME number of steps resolves
+                # the minimum far better. Needed because the full-range grid is much coarser than
+                # the likelihood width (the lifetime step is 10.2% of truth against a 0.88% Fisher
+                # sigma), so the parabola vertex is an extrapolation and shifts ~2.4 points between
+                # a 3- and a 5-point fit. Cost is steps x batches and does NOT depend on the span,
+                # so resolution is free.
+                _w = float(os.environ.get('LARND_SCAN_WINDOW', 0) or 0)
+                if _w > 0:
+                    nom = ranges[param]['nom']
+                    lower = max(nom * (1.0 - _w), ranges[param]['down'])
+                    upper = min(nom * (1.0 + _w), ranges[param]['up'])
                 param_step = (upper - lower)/(nb_steps - 1)
 
                 for iter in tqdm(range(nb_steps)):
