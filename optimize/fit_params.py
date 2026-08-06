@@ -40,6 +40,123 @@ from ctypes import cdll
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+# ---------------------------------------------------------------------------
+# Structured Newton solve for the per-segment log-dEdx block.
+#
+# The dEdx Hessian is (measured, see the GN report):
+#     H = H_band(bandwidth 2)  +  diag(student-t + barrier + mean-constraint residual term)
+#         +  q q^T           with q = sqrt(2 w_mean) * g,  g_i = l_i * dedx_i / L
+# The banded part is recovered from EXACTLY 2*bw+1 = 5 Hessian-vector products regardless of N
+# (structurally-orthogonal "mod-P" probing): for probe v_c with v_c[j]=1 iff j % P == c,
+#     (H_band v_c)[i] = sum_{|i-j|<=bw, j==c mod P} H[i,j]
+# and since {i-bw..i+bw} are P consecutive integers exactly ONE of them is == c (mod P),
+# so each band entry is read off uniquely. The dense rank-1 part is subtracted analytically
+# (it would otherwise break the structural orthogonality) and restored by Sherman-Morrison.
+# ---------------------------------------------------------------------------
+# (scale, shape) reparametrisation of the per-segment dEdx block.
+#
+#   dedx_i = M * s_i      with   M = exp(mu)      and    sum_i l_i s_i / L = 1
+#   s_i    = exp(a_i) / Z          Z = sum_j l_j exp(a_j) / L
+#   =>  log_dedx_i = mu + a_i - log Z
+#   =>  mean_dedx  = sum_i l_i dedx_i / L = exp(mu)   EXACTLY, by construction.
+#
+# Why this matters: the mean-dEdx constraint w(mean - t)^2 becomes a function of the SINGLE
+# parameter mu. Its Hessian contribution collapses to one (mu,mu) entry -- the dense rank-1
+# q q^T coupling across all N segments (which sets kappa ~ 2.4e4 and cancels short-segment
+# curvature, see the GN report) DISAPPEARS from the shape block entirely.
+#
+# The loss itself is UNCHANGED: it still receives log_dedx. Only the parametrisation and the
+# gradient mapping change, which keeps the blast radius small.
+#
+# Gauge: a_i -> a_i + c leaves s_i (and hence the loss) exactly invariant. The induced gradient
+# satisfies sum_k dL/da_k = 0 identically (see below), so the optimiser never moves along it.
+
+
+def _dedx_scale_shape_forward(mu, a, seg_dx):
+    """(mu, a) -> log_dedx.  seg_dx = per-segment physical length l_i."""
+    l = seg_dx
+    ea = jnp.exp(a - jnp.max(a))                 # shift for numerical safety; cancels in the ratio
+    Zl = jnp.sum(l * ea)
+    L = jnp.sum(l)
+    # log Z with the max-shift undone:  Z = sum(l e^a)/L
+    logZ = jnp.log(Zl) + jnp.max(a) - jnp.log(L)
+    return mu + a - logZ
+
+
+def _dedx_scale_shape_grads(g, a, seg_dx):
+    """Map dL/dlog_dedx -> (dL/dmu, dL/da).
+
+    log_dedx_i = mu + a_i - log Z,  Z = sum_j l_j e^{a_j} / L
+      dlog_dedx_i/dmu  = 1                   -> dL/dmu  = sum_i g_i
+      dlog_dedx_i/da_k = delta_ik - p_k      -> dL/da_k = g_k - p_k * sum_i g_i
+    with p_k = l_k e^{a_k} / sum_j l_j e^{a_j}  (sum_k p_k = 1).
+    Note sum_k dL/da_k = sum g - 1*sum g = 0 exactly: the gauge direction gets zero gradient.
+    """
+    l = np.asarray(seg_dx, dtype=np.float64)
+    aa = np.asarray(a, dtype=np.float64)
+    w = l * np.exp(aa - aa.max())
+    sw = w.sum()
+    p = w / sw if sw > 0 else np.zeros_like(w)
+    gs = float(np.sum(g))
+    return gs, np.asarray(g, dtype=np.float64) - p * gs
+
+
+_DEDX_GN_BW = 2
+
+
+def _dedx_probe_matrix(N, bw=_DEDX_GN_BW):
+    """P x N array whose row c is the probe vector v_c."""
+    P = 2 * bw + 1
+    idx = np.arange(N)
+    return np.stack([(idx % P == c).astype(np.float32) for c in range(P)], axis=0)
+
+
+def _dedx_band_from_probes(probes, N, bw=_DEDX_GN_BW):
+    """Assemble scipy 'matrix diagonal ordered form' ab from the P probe results.
+
+    probes[c][i] == H_band[i, j] for the unique j in [i-bw, i+bw] with j % P == c.
+    scipy convention: ab[u + i - j, j] == a[i, j], here u = l = bw.
+    """
+    P = 2 * bw + 1
+    ab = np.zeros((P, N), dtype=np.float64)
+    i = np.arange(N)
+    for d in range(-bw, bw + 1):
+        j = i + d
+        ok = (j >= 0) & (j < N)
+        ab[bw - d, j[ok]] = probes[j[ok] % P, i[ok]]
+    return ab
+
+
+def _dedx_banded_sm_solve(ab, q, rhs, lam, bw=_DEDX_GN_BW):
+    """Solve (B + lam*I + q q^T) x = rhs with B banded.
+
+    Sherman-Morrison is unconditionally stable here: the rank-1 enters with a PLUS sign
+    (w_mean > 0), so the denominator 1 + q^T B^-1 q > 1 and there is no cancellation.
+    Returns (x, ok).
+    """
+    from scipy.linalg import solve_banded
+    abl = ab.copy()
+    abl[bw, :] += lam
+    try:
+        y = solve_banded((bw, bw), abl, rhs)
+        if q is None:
+            return y, True
+        z = solve_banded((bw, bw), abl, q)
+        denom = 1.0 + float(q @ z)
+        if not np.isfinite(denom) or denom <= 0:
+            return None, False
+        x = y - z * (float(q @ y) / denom)
+        return (x, True) if np.all(np.isfinite(x)) else (None, False)
+    except Exception:
+        return None, False
+
+
+# Change-of-variables term for the dEdx prior (see compute_loss). Default OFF -> the objective
+# is bit-identical to prior behaviour. Read once at import so it stays static under jit.
+_DEDX_LOG_JACOBIAN = os.environ.get('LARND_DEDX_LOG_JACOBIAN', '0') == '1'
+# Evaluate the dEdx shape prior at scale-normalised dEdx so it says nothing about the mean.
+_DEDX_SHAPE_PRIOR = os.environ.get('LARND_DEDX_SHAPE_PRIOR', '0') == '1'
+
 # ── Chain kinematics helpers (used by fit_chain_positions mode) ───────────────
 
 def _highland_sigma_mcs(step_cm, momentum_GeV=3.0):
@@ -227,8 +344,44 @@ def _dir_from_angles(theta, phi):
     return np.array([st * np.cos(phi), st * np.sin(phi), np.cos(theta)], dtype=np.float32)
 
 
-def _transverse_frame(u0):
-    """Two orthonormal vectors spanning the plane perpendicular to unit vector u0."""
+# Drift axis in the fitter's coordinate convention. dataio.py swaps x<->z on load
+# (swap_xz=True by default), so the drift direction in the track table that the chain warp
+# writes is +z -- consistent with detsim_jax's z_anode = tpc_borders[..., 2, 0] and
+# hit_z = z_anode + ticks * t_sampling * vdrift.
+_DRIFT_AXIS = np.array([0., 0., 1.], np.float32)
+
+# Frame convention for the spline transverse basis. "drift" aligns e1 with the wire plane
+# so the drift-axis sensitivity is isolated in e2; "legacy" is the original arbitrary frame.
+_CHAIN_FRAME = os.environ.get('LARND_CHAIN_FRAME', 'drift').strip().lower()
+
+
+def _transverse_frame(u0, frame=None):
+    """Two orthonormal vectors spanning the plane perpendicular to unit vector u0.
+
+    With frame='drift' (default) the basis is chosen so that e1 lies entirely in the wire
+    plane (e1 . zhat == 0 exactly) and e2 carries the whole drift-axis sensitivity
+    (|e2 . zhat| = sin(angle between u0 and the drift axis)).
+
+    Why this matters: the drift coordinate is measured by hit TIMING, not inferred by the
+    position fit. In the legacy arbitrary frame the drift component is smeared across both
+    basis vectors, so the geometry fit can slide charge along drift and manufacture apparent
+    attenuation -- degenerate with lifetime. Measured on an S4 fit: 379 um of the fitted
+    displacement lay along the drift axis (59% of its magnitude), with |e2 . zhat| = 0.83.
+    Isolating it in one basis vector makes it separately penalizable (see
+    _chain_drift_penalty) and decouples the penalized direction from the free one, which a
+    diagonal preconditioner like Adam would otherwise fight.
+
+    For a track (nearly) parallel to the drift axis, zhat x u0 -> 0; there BOTH transverse
+    directions already lie in the wire plane, so the legacy frame is used and no drift
+    penalty applies -- which is the physically correct behaviour.
+    """
+    if (frame or _CHAIN_FRAME) == 'drift':
+        e1 = np.cross(_DRIFT_AXIS, u0)
+        n1 = float(np.linalg.norm(e1))
+        if n1 > 1e-3:                                  # track not parallel to drift
+            e1 = (e1 / n1).astype(np.float32)
+            e2 = np.cross(u0, e1); e2 /= (np.linalg.norm(e2) + 1e-12)
+            return e1.astype(np.float32), e2.astype(np.float32)
     ref = np.array([0., 0., 1.], np.float32)
     if abs(float(np.dot(u0, ref))) > 0.9:
         ref = np.array([1., 0., 0.], np.float32)
@@ -272,6 +425,11 @@ def _build_chain_meta_spline(ctxs, knot_cm):
         'Ks_np': np.asarray(Ks, np.int32),
         'nominal': jnp.asarray(nominal_p), 'Bmat': jnp.asarray(B_p),
         'e1': jnp.asarray(np.stack(e1s)), 'e2': jnp.asarray(np.stack(e2s)),
+        # Drift-axis (z) components of the two transverse basis vectors. Under the default
+        # 'drift' frame e1z == 0 and |e2z| = sin(theta_to_drift); kept general so the
+        # penalty is also correct in the legacy frame.
+        'e1z': jnp.asarray(np.stack(e1s)[:, 2].astype(np.float32)),
+        'e2z': jnp.asarray(np.stack(e2s)[:, 2].astype(np.float32)),
         'step': jnp.asarray(np.asarray([float(c.step_len) for c in ctxs], np.float32)),
         'sigma': jnp.asarray(np.asarray([float(c.sigma_mcs) for c in ctxs], np.float32)),
         'seg_rows': jnp.asarray(np.concatenate(seg_rows).astype(np.int32)),
@@ -301,6 +459,7 @@ def _pad_spline_meta(meta, Tm, ncm, Km, Nm, zero_row):
         'nominal': jnp.pad(meta['nominal'], [(0, Tm - T), (0, ncm - nc), (0, 0)]),
         'Bmat': jnp.pad(meta['Bmat'], [(0, Tm - T), (0, ncm - nc), (0, Km - K)]),
         'e1': pT(meta['e1']), 'e2': pT(meta['e2']),
+        'e1z': pT(meta['e1z']), 'e2z': pT(meta['e2z']),
         'step': pT(meta['step'], 1.0), 'sigma': pT(meta['sigma'], 1.0),
         'seg_rows': pS(meta['seg_rows'], zero_row), 'seg_track': pS(meta['seg_track'], 0),
         'seg_am': pS(meta['seg_am'], 0.0), 'seg_as': pS(meta['seg_as'], 0.0), 'seg_ae': pS(meta['seg_ae'], 0.0),
@@ -361,6 +520,55 @@ def _chain_warp_spline(t, coeffs_pt, meta, col_map):
     return t, disp
 
 
+# ── GN curvature perf-investigation knobs (env-gated; default OFF => identical behaviour) ──
+# LARND_GN_PROFILE=1: log wall time + GPU peak_bytes_in_use around each curvature/gradient
+#                      sweep in _full_batch_lgh. Pure logging -- never changes computed values.
+# LARND_GN_REMAT=1:   wrap the forward simulate call (predict) of the plain-calibration
+#                      loss_wrapper in jax.checkpoint, trading recompute for activation memory
+#                      in both the gradient and (via _hess_by_hvp's inner jax.grad) Hessian
+#                      passes. Numerically identical to the unwrapped call.
+_GN_PROFILE = os.environ.get('LARND_GN_PROFILE', '0') == '1'
+_GN_REMAT = os.environ.get('LARND_GN_REMAT', '0') == '1'
+
+
+def _gn_mem_peak():
+    """Best-effort GPU peak_bytes_in_use in GiB; 0.0 if unavailable (e.g. CPU-only)."""
+    try:
+        stats = jax.devices('gpu')[0].memory_stats()
+        return stats.get('peak_bytes_in_use', 0) / (1024.0 ** 3)
+    except Exception:
+        return 0.0
+
+
+def _hess_by_hvp(f_with_aux, params, keys):
+    """Hessian of a scalar (loss, aux) function w.r.t. the named params, built column by
+    column with Hessian-vector products.
+
+    Returns an object supporting ``hess.<ka>.<kb>`` so it is a drop-in for the
+    jacfwd(jacrev(.)) result the callers already index that way.
+
+    Why: jacfwd(jacrev(f)) evaluates all P tangents through one reverse-mode tape at once,
+    so peak memory scales as P x (gradient tape). At 400 cm batches that reached a 129 GB
+    allocation request. P separate jvp-of-grad calls need ~1 x gradient tape each.
+    """
+    from types import SimpleNamespace
+    zero = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), params)
+
+    def _scalar(p):
+        return f_with_aux(p)[0]
+
+    grad_fn = jax.grad(_scalar)
+    cols = {}
+    for kb in keys:
+        tangent = zero.replace(**{kb: jnp.ones_like(getattr(params, kb))})
+        _, hv = jax.jvp(grad_fn, (params,), (tangent,))
+        cols[kb] = hv                       # hv.<ka> = d(grad_ka)/d(eps along kb) = H[ka, kb]
+    hess = SimpleNamespace(**{
+        ka: SimpleNamespace(**{kb: getattr(cols[kb], ka) for kb in keys}) for ka in keys})
+    _, aux = f_with_aux(params)
+    return hess, aux
+
+
 def _chain_mcs_spline(disp, meta, mcs_weight):
     """MCS prior in displacement basis: penalize the discrete curvature (second difference)
     of the transverse displacement, = the per-node deflection angle ~ |Delta^2 d| / step_len."""
@@ -371,6 +579,30 @@ def _chain_mcs_spline(disp, meta, mcs_weight):
     ang2 = jnp.sum(d2 ** 2, axis=-1) / (meta['step'][:, None] ** 2)
     mcs = jnp.sum(mask * ang2 / (2.0 * (meta['sigma'][:, None] ** 2)))
     return mcs_weight * mcs / max(1, T)
+
+
+def _chain_drift_penalty(disp, meta, weight):
+    """Penalize the component of the fitted transverse displacement that lies along the
+    DRIFT axis.
+
+    The drift coordinate is reconstructed from hit timing, not from the position fit, so
+    fitted motion along it is unphysical -- and worse, it is directly degenerate with charge
+    attenuation: shifting a segment along drift changes how much lifetime attenuation the
+    forward model applies to it, letting geometry absorb (or manufacture) apparent
+    attenuation and bias the lifetime. Measured on an S4 fit: 379 um of the fitted
+    displacement lay along drift, 59% of its magnitude.
+
+    disp is (T, max_nc+1, 2) = displacement along (e1, e2); the drift component is
+    d1*(e1.zhat) + d2*(e2.zhat), which reduces to d2*sin(theta) in the default drift frame.
+    Units: cm^2, averaged per track (matching _chain_mcs_spline's normalization).
+    """
+    if weight is None or float(weight) <= 0.:
+        return jnp.float32(0.)
+    T, max_nc, ncs = meta['T'], meta['max_nc'], meta['ncs']
+    dz = disp[..., 0] * meta['e1z'][:, None] + disp[..., 1] * meta['e2z'][:, None]
+    j = jnp.arange(max_nc + 1)
+    mask = (j[None, :] <= ncs[:, None]).astype(disp.dtype)
+    return weight * jnp.sum(mask * dz ** 2) / max(1, T)
 
 
 class _ChainTrackCtx:
@@ -742,6 +974,16 @@ class ParamFitter:
         # Decay begins at chain_decay_start (defaults to when chain fitting starts).
         self._chain_decay_start = int(chain_decay_start) if chain_decay_start is not None else int(chain_start_iter)
         self._mcs_prior_weight = float(mcs_prior_weight)
+        # Weight on the drift-projected component of the fitted geometry displacement.
+        # 0 (default) reproduces previous behaviour; see _chain_drift_penalty.
+        self._chain_drift_weight = float(os.environ.get('LARND_CHAIN_DRIFT_W', '0') or 0.)
+        if self._chain_drift_weight > 0. and str(chain_basis) != 'spline':
+            logger.warning("LARND_CHAIN_DRIFT_W is only implemented for the spline chain "
+                           "basis; ignoring it for basis=%s", chain_basis)
+            self._chain_drift_weight = 0.
+        if str(chain_basis) == 'spline':
+            logger.info("[CHAIN] transverse frame=%s, drift penalty weight=%g",
+                        _CHAIN_FRAME, self._chain_drift_weight)
         self._chain_step_len = float(chain_step_len)
         self._chain_momentum_GeV = float(chain_momentum_GeV)
         self._chain_basis = str(chain_basis)              # 'angle' | 'spline'
@@ -1569,6 +1811,18 @@ class ParamFitter:
         )
         if hasattr(self, 'opt_state'):
             self.training_history['opt_state'] = self.opt_state
+        # In (scale, shape) mode the live state is (mu, a); mirror the DERIVED log_dedx into
+        # _dedx_cache so every existing consumer (checkpoint format, MAE diagnostics, the
+        # analysis scripts) keeps working unchanged.
+        if getattr(self, '_dedx_param_mode', 'perseg') == 'scale_shape' and getattr(self, '_dedx_ss', None):
+            for _b, _st in self._dedx_ss.items():
+                _sd = self._batch_seg_dx.get(_b)
+                if _sd is None:
+                    continue
+                _ld = _dedx_scale_shape_forward(_st['mu'], _st['a'],
+                                                jnp.asarray(np.asarray(_sd)[:len(_st['a'])], dtype=jnp.float32))
+                self._dedx_cache[_b] = {'log_dedx': _ld, 'opt_state': _st['opt_state']}
+            self.training_history['dedx_ss_mu'] = {int(k): float(v['mu']) for k, v in self._dedx_ss.items()}
         if hasattr(self, '_dedx_cache') and self._dedx_cache:
             # Convert JAX arrays to plain numpy so pickle round-trips cleanly
             dedx_cache_np = {
@@ -1581,6 +1835,16 @@ class ParamFitter:
                 int(k): np.asarray(v) for k, v in self._batch_parent_ids.items()
             }
             self.training_history['true_dedx_cache'] = true_dedx_np
+            # The arc-length-matched TARGET reference, kept separate from true_dedx_cache (which is
+            # the SIM input) so an offline reader can tell the two apart.
+            if getattr(self, '_batch_true_dedx_matched', None):
+                self.training_history['true_dedx_matched_cache'] = {
+                    int(k): np.asarray(v) for k, v in self._batch_true_dedx_matched.items()
+                }
+            if getattr(self, '_batch_seg_dx', None):
+                self.training_history['seg_dx_cache'] = {
+                    int(k): np.asarray(v) for k, v in self._batch_seg_dx.items()
+                }
             self.training_history['dedx_student_nu']    = float(self.dedx_student_nu)
             self.training_history['dedx_student_loc']   = float(self.dedx_student_loc)
             self.training_history['dedx_student_scale'] = float(self.dedx_student_scale)
@@ -1720,7 +1984,11 @@ class ParamFitter:
                 grads, aux = grad(loss_wrapper, has_aux=True)(self.current_params)
 
             if with_hess:
-                hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.current_params)
+                if getattr(self, '_hess_via_hvp', False):
+                    hess, aux_hess = _hess_by_hvp(loss_wrapper, self.current_params,
+                                                  self.relevant_params_list)
+                else:
+                    hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.current_params)
 
         elif (log_dedx is not None and parent_ids is not None) or (self.fit_chain_positions and chain_angles_per_track is not None):
             # ── Joint fit: norm_params (global) + optionally log_dedx (per-segment) + optionally chain angles ──
@@ -1819,13 +2087,34 @@ class ParamFitter:
                 else:
                     length_scale_factor = 1.0
 
+                # SHAPE-ONLY prior (LARND_DEDX_SHAPE_PRIOR=1, default OFF).
+                # Problem it solves: MAP shrinkage toward the split-t MODE (1.8740) biases the
+                # length-weighted MEAN low, because the prior's gradient reaches the scale as well
+                # as the shape. Evaluating the prior at SCALE-NORMALISED dEdx --
+                #     dedx_shape_i = dedx_i * (M_ref / mean_dedx)
+                # -- makes it exactly invariant to the overall scale, so it carries NO information
+                # about the mean and its gradient w.r.t. the scale is identically zero. The scale
+                # is then set solely by the mean constraint, which is a proper prior on M whose
+                # width should come from the measured batch-to-batch spread (see the GN report).
+                # Works in BOTH parametrisations: it only uses dedx and dx.
+                # NB the soft barrier is deliberately NOT normalised -- it is a delta-ray cap on
+                # the PHYSICAL dEdx (8.5 MeV/cm), not a statement about shape.
+                _dedx_for_prior = dedx_sample
+                if _DEDX_SHAPE_PRIOR:
+                    _dxw0 = t[:, dx_idx]
+                    _sv0 = valid_mask & (_dxw0 > 0)
+                    _tot_dx0 = jnp.sum(_dxw0 * _sv0)
+                    _mean0 = jnp.sum(dedx_sample * _dxw0 * _sv0) / jnp.maximum(_tot_dx0, 1e-6)
+                    _dedx_for_prior = dedx_sample * (self._dedx_shape_prior_ref
+                                                     / jnp.maximum(_mean0, 1e-6))
+
                 # Student-t prior on per-step dEdx values.
                 # Weighted by physical step length (dx) to ensure that the regularization
                 # strength is invariant to the sampling resolution.
                 # The location (expected dEdx) is scaled by length_scale_factor.
                 if self.dedx_use_split_t:
                     dedx_prior = split_student_t_nll(
-                        dedx_sample,
+                        _dedx_for_prior,
                         self.dedx_student_nu_l,
                         self.dedx_student_nu_r,
                         self.dedx_student_loc * length_scale_factor,
@@ -1835,7 +2124,7 @@ class ParamFitter:
                     ) * self.dedx_prior_weight
                 else:
                     dedx_prior = student_t_nll(
-                        dedx_sample,
+                        _dedx_for_prior,
                         self.dedx_student_nu,
                         self.dedx_student_loc * length_scale_factor,
                         self.dedx_student_scale,
@@ -1846,6 +2135,21 @@ class ParamFitter:
                 # Weighted by physical step length (dx) and mask out invalid segments (dx <= 0)
                 dx_weights = t[:, dx_idx]
                 valid_step_mask = (dx_weights > 0)
+
+                # Optional change-of-variables (Jacobian) term -- LARND_DEDX_LOG_JACOBIAN=1,
+                # default OFF (bit-identical to prior behaviour).
+                # The split-t is evaluated on the LINEAR dEdx while the fitted parameter is
+                # log_dedx, so -log p_d(e^theta) is NOT a proper prior in theta: it omits
+                # -log|d(dedx)/dtheta| = -theta. Omitting it biases the MAP DOWN; including it
+                # moves the mode 1.8740 -> 1.8780, i.e. ~38% of the way to the prior's mean
+                # (1.8847), which is the gap dedx_mean_constraint exists to repair.
+                # Weighted identically to the split-t itself (dx * mask * prior_weight) so the
+                # two stay on the same footing.
+                if _DEDX_LOG_JACOBIAN:
+                    dedx_prior = dedx_prior - self.dedx_prior_weight * jnp.sum(
+                        jnp.log(_dedx_for_prior) * dx_weights * valid_step_mask
+                    )
+
                 dedx_barrier = self.dedx_soft_barrier_weight * jnp.sum(
                     dx_weights * valid_step_mask * jnp.square(jnp.maximum(0., dedx_sample - self.dedx_soft_barrier_threshold))
                 )
@@ -1891,12 +2195,17 @@ class ParamFitter:
                 if chain_angles_pt is not None and _meta_use is not None:
                     if _meta_use.get('basis') == 'spline':
                         _mcs_loss = _chain_mcs_spline(_chain_warp_aux, _meta_use, self._mcs_prior_weight)
+                        _drift_loss = _chain_drift_penalty(
+                            _chain_warp_aux, _meta_use, self._chain_drift_weight)
+                        _mcs_loss = _mcs_loss + _drift_loss
                     else:
+                        _drift_loss = jnp.float32(0.)
                         _mcs_loss = _chain_mcs_vectorized(
                             _chain_thetas, _chain_phis, _meta_use, self._mcs_prior_weight)
                     total_loss = total_loss + _mcs_loss
                 else:
                     _mcs_loss = jnp.float32(0.)
+                    _drift_loss = jnp.float32(0.)
 
                 aux_out = dict(hit_aux) if hit_aux is not None else {}
                 aux_out['dedx_prior'] = dedx_prior
@@ -1905,6 +2214,9 @@ class ParamFitter:
                 aux_out['dedx_drift_penalty'] = dedx_drift_penalty
                 aux_out['mean_dedx'] = mean_dedx
                 aux_out['mcs_prior'] = _mcs_loss
+                # Logged separately from mcs_prior (which now includes it) so the
+                # drift-projected geometry component is directly diagnosable.
+                aux_out['chain_drift_penalty'] = _drift_loss
                 # Saturation guard for the static-unique jit path: number of genuinely active pixels.
                 # If this reaches unique_size, jnp.unique(size=...) may be silently truncating.
                 aux_out['n_active_pixels'] = jnp.sum(prediction['unique_pixels'] >= 0)
@@ -1921,6 +2233,17 @@ class ParamFitter:
                     _np = self.norm_params if norm_params_in is None else norm_params_in
                     return loss_wrapper_combined(_np, log_dedx, chain_angles_pt, data_over=data_over)[0]
                 return _chain_only_loss
+            if return_loss_closure and _dedx_active and not _chain_angles_active:
+                # Additive branch (dEdx-Hessian investigation): pure, differentiable
+                # loss(log_dedx_pt[, norm_params])->scalar for this batch, with chain angles
+                # inactive (position fitting off). Mirrors _chain_only_loss above. Never taken by
+                # any existing call site: every current return_loss_closure=True caller passes a
+                # non-None chain_angles_per_track (so _chain_angles_active is True and the branch
+                # above returns first) -- verified by grep over all return_loss_closure=True sites.
+                def _dedx_only_loss(log_dedx_pt, norm_params_in=None, data_over=None):
+                    _np = self.norm_params if norm_params_in is None else norm_params_in
+                    return loss_wrapper_combined(_np, log_dedx_pt, None, data_over=data_over)[0]
+                return _dedx_only_loss
             # ── Optional jitted value_and_grad (LARND_JIT_LOSS=1) ──
             # The eager path re-traces the whole loss every iteration and runs it op-by-op with all
             # intermediates materialized. Jitting requires static shapes: unique_size is set to the
@@ -2012,7 +2335,15 @@ class ParamFitter:
                     return loss_wrapper_combined(
                         np_, log_dedx if _dedx_active else None,
                         chain_angles_per_track if _chain_angles_active else None)
-                hess, aux_hess = jax.jacfwd(jax.jacrev(_np_only, has_aux=True), has_aux=True)(self.norm_params)
+                if getattr(self, '_hess_via_hvp', False):
+                    # Column-by-column via Hessian-vector products. jacfwd(jacrev(.)) pushes all
+                    # P tangents through the reverse-mode tape SIMULTANEOUSLY (~P x gradient
+                    # memory), which OOMs on a 400 cm batch (measured: 129 GB request for one
+                    # batch). P sequential jvp-of-grad passes cost ~1 x gradient memory each.
+                    hess, aux_hess = _hess_by_hvp(_np_only, self.norm_params,
+                                                  self.relevant_params_list)
+                else:
+                    hess, aux_hess = jax.jacfwd(jax.jacrev(_np_only, has_aux=True), has_aux=True)(self.norm_params)
 
         else:
             def loss_wrapper(norm_params_input):
@@ -2028,7 +2359,18 @@ class ParamFitter:
                         for key in self.relevant_params_list
                     }
                 physical_params = self.ref_params.replace(**new_phys)
-                prediction = self.sim_strategy.predict(physical_params, tracks, self.sim_track_fields, rngkey)
+                if _GN_REMAT:
+                    # Wrap the forward sim in jax.checkpoint: don't retain its internal
+                    # activations on the tape, recompute them on demand during the backward
+                    # (and, for _hess_by_hvp, the forward-over-reverse) pass. Trades compute
+                    # for the dominant (Npix, MAX_ADC_VALUES, Nticks) activation memory.
+                    # Numerically identical to the unwrapped call; only the memory/time
+                    # profile changes.
+                    def _predict_call(pp):
+                        return self.sim_strategy.predict(pp, tracks, self.sim_track_fields, rngkey)
+                    prediction = jax.checkpoint(_predict_call)(physical_params)
+                else:
+                    prediction = self.sim_strategy.predict(physical_params, tracks, self.sim_track_fields, rngkey)
                 return self.loss_strategy.compute(physical_params, prediction, target_data)
 
             # Differentiate with respect to norm_params
@@ -2040,7 +2382,11 @@ class ParamFitter:
                 grads, aux = grad(loss_wrapper, has_aux=True)(self.norm_params)
  
             if with_hess:
-                hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.norm_params)
+                if getattr(self, '_hess_via_hvp', False):
+                    hess, aux_hess = _hess_by_hvp(loss_wrapper, self.norm_params,
+                                                  self.relevant_params_list)
+                else:
+                    hess, aux_hess = jax.jacfwd(jax.jacrev(loss_wrapper, has_aux=True), has_aux=True)(self.norm_params)
 
         return loss_val, grads, grads_dedx, grads_chain_per_track, aux, hess, aux_hess
 
@@ -2072,6 +2418,9 @@ class ParamFitter:
             self.training_history['dedx_mean_penalty_iter'] = []
             self.training_history['mean_dedx_iter'] = []
             self.training_history['dedx_mae_iter'] = []
+            # MAE against the TARGET file, arc-length matched. dedx_mae_iter is against the SIM
+            # input, so it only equals a truth error when sim file == target file (S1/S2).
+            self.training_history['dedx_mae_truth_iter'] = []
 
         # Include initial value in training history (if haven't loaded a checkpoint)
         for param in self.relevant_params_list:
@@ -2163,8 +2512,79 @@ class GradientDescentFitter(ParamFitter):
         self._dedx_cache: dict = {}
         self._batch_parent_ids: dict = {}
         self._batch_true_dedx: dict = {}   # batch_idx → np.array of true (input) dEdx per orig segment
+        self._batch_seg_dx: dict = {}      # batch_idx → np.array of per-segment physical dx (cm)
+        # batch_idx → per-parent TRUE dEdx matched from the TARGET by arc length (see
+        # _build_true_dedx_matched). Distinct from _batch_true_dedx, which is the SIM input.
+        self._batch_true_dedx_matched: dict = {}
+        # Structured Newton for the dEdx block (LARND_DEDX_OPT=gn). Default 'adam' = unchanged.
+        self._dedx_opt_mode   = os.environ.get('LARND_DEDX_OPT', 'adam').lower()
+        # (scale, shape) reparametrisation: 'perseg' (default, unchanged) | 'scale_shape'
+        self._dedx_param_mode = os.environ.get('LARND_DEDX_PARAM', 'perseg').lower()
+        self._dedx_mu_lr_mult = float(os.environ.get('LARND_DEDX_MU_LR_MULT', '1.0'))
+        self._dedx_ss: dict = {}   # batch_idx -> {'mu':float, 'a':array, 'opt_state':...}
+        self._dedx_min_dx = float(os.environ.get('LARND_DEDX_MIN_DX', '0.0'))
+        self._dedx_frozen_mask: dict = {}
+        # reference mean the shape prior normalises to; default = the mean-constraint target,
+        # so the shape prior and the scale prior agree about where the mean should be.
+        self._dedx_shape_prior_ref = float(os.environ.get(
+            'LARND_DEDX_SHAPE_PRIOR_REF', self.dedx_mean_constraint_target))
+        self._dedx_gn_lam0    = float(os.environ.get('LARND_DEDX_GN_LAMBDA0', '1.0'))
+        self._dedx_gn_step_cap= float(os.environ.get('LARND_DEDX_GN_STEP_CAP', '0.5'))
+        self._dedx_gn_max_bt  = int(os.environ.get('LARND_DEDX_GN_MAXBT', '4'))
+        self._dedx_gn_lam: dict = {}
+        self._dedx_gn_stats   = {'ok': 0, 'fallback': 0}
+        self._dedx_gn_validate = os.environ.get('LARND_DEDX_GN_VALIDATE', '0') == '1'
+        self._dedx_gn_validated = False
+        self._dedx_gn_chunk   = int(os.environ.get('LARND_DEDX_GN_CHUNK', '1'))
+        self._dedx_gn_refresh = int(os.environ.get('LARND_DEDX_GN_REFRESH', '1'))
+        self._dedx_gn_band: dict = {}
+        # Study 2 (see _eval_truth_point): evaluate the objective at constructed points instead
+        # of fitting. Unset = normal fit.
+        self._truthpoint_ckpt = os.environ.get('LARND_TRUTHPOINT', '').strip() or None
+        self._tp_loaded = None
+        self._truthpoint_done: set = set()
+
         _dedx_lr = self.dedx_lr if self.dedx_lr is not None else lr
-        self._dedx_optimizer = optax.adam(_dedx_lr) if self.fit_dedx else None
+        # ── dEdx learning-rate schedule (LARND_DEDX_LR_FINAL_FRAC) ────────────────────────────
+        # HISTORICALLY THE dEdx BLOCK NEVER ANNEALED. Calibration decays per EPOCH and geometry
+        # per ITERATION, but this was a bare optax.adam(constant) -- the one block that co-adapts
+        # with lifetime was the one that never cooled. LARND_DEDX_LR_FINAL_FRAC=f anneals it
+        # exponentially to f x its initial value by the END of the run. Unset => constant, i.e.
+        # bit-identical to the previous behaviour.
+        #
+        # TWO TRAPS, both avoided deliberately:
+        #  1. transition_steps=1, NOT epoch_size. The dEdx Adam state is stored PER BATCH
+        #     (_dedx_cache[batch]['opt_state']) and stepped once per visit, so its internal count
+        #     already advances once per EPOCH. Copying the calibration call, which uses
+        #     transition_steps=epoch_size against a global count, would decay 1/epoch_size as
+        #     fast -- a silent near-no-op.
+        #  2. The rate is derived from the ACTUAL epoch count rather than being given directly,
+        #     so the requested annealing is invariant to max_nbatch and iterations. The
+        #     calibration schedule is specified as a per-epoch rate and that is exactly why
+        #     raising max_nbatch silently un-annealed it and cost us a whole 4x-data run.
+        _dedx_sched = _dedx_lr
+        _ff_raw = os.environ.get('LARND_DEDX_LR_FINAL_FRAC', '').strip()
+        if _ff_raw and self.fit_dedx:
+            _ff = float(_ff_raw)
+            if not (0.0 < _ff <= 1.0):
+                raise ValueError(f"LARND_DEDX_LR_FINAL_FRAC must be in (0, 1], got {_ff}")
+            _cfg = self.training_history.get('config')
+            _iters = int(getattr(_cfg, 'iterations', 0) or 0)
+            _esz = max(1, int(epoch_size))
+            _nep = max(1, int(np.ceil(_iters / _esz))) if _iters > 0 else 1
+            if _iters <= 0:
+                logger.warning("[dEdx-LR] iterations unknown; cannot derive a decay rate — "
+                               "leaving the dEdx LR CONSTANT")
+            elif _ff == 1.0:
+                logger.info("[dEdx-LR] final fraction 1.0 requested — LR stays constant")
+            else:
+                _rate = float(_ff ** (1.0 / _nep))
+                _dedx_sched = optax.exponential_decay(
+                    init_value=_dedx_lr, transition_steps=1, decay_rate=_rate, staircase=False)
+                logger.info(f"[dEdx-LR] annealing {_dedx_lr:g} -> {_ff:g}x over {_nep} epochs "
+                            f"({_iters} iters / epoch_size {_esz}); decay_rate={_rate:.6f} per "
+                            f"epoch, applied per-batch (transition_steps=1)")
+        self._dedx_optimizer = optax.adam(_dedx_sched) if self.fit_dedx else None
         # Flag to reset calibration Adam state exactly once when dEdx activates
         self._dedx_adam_reset_done = False
         # Flag to reset calibration Adam state exactly once when dEdx is frozen
@@ -2278,6 +2698,195 @@ class GradientDescentFitter(ParamFitter):
     def add_grads(self, g1, g2):
         return jax.tree_util.tree_map(lambda a, b: a + b, g1, g2)
 
+    # ── Study 2: is the minimum misplaced, or merely unreachable? ────────────────────────────
+    #
+    # LARND_TRUTHPOINT=<a completed history_*.pkl> evaluates the objective at a handful of
+    # constructed points instead of fitting, and writes them to training_history['truthpoint'].
+    #
+    #   P0 fit    : calib/dEdx/geometry all taken from that checkpoint  (where the fit ended up)
+    #   P1 truth  : all three at the BEST their parameterisation can represent given truth
+    #   P2/P3/P4  : exactly ONE block moved to truth, the other two left at the fit
+    #
+    # Reading:  loss(P1) < loss(P0) => the minimum is in the right place and we fail to reach it
+    #           (an optimiser problem).  loss(P1) > loss(P0) => the fit found a genuinely better
+    #           point than truth, so the minimum is displaced (an objective problem) and no
+    #           optimiser change can fix it. P2-P4 say WHICH block the objective disagrees about.
+    #
+    # The full aux decomposition is stored at every point, so the LIKELIHOOD-ONLY comparison
+    # (log_likelihood_tick + no_match_penalty + expected_total_hits) can be made offline
+    # alongside the total objective. That distinction matters: if truth loses on the total but
+    # wins on the likelihood, the defect is in our PRIORS, not in the physics model. The
+    # decomposition was verified exact to 4.5e-7 relative, so this needs no separate prior-off run.
+    def _truth_spline_coeffs(self, batch_idx):
+        """Least-squares projection of the TRUE positions onto the spline basis.
+
+        This is the best our geometry parameterisation can do with perfect knowledge -- the
+        REPRESENTATION FLOOR. Identical construction to LARND_INIT_FROM_TRUTH.
+        """
+        ctxs = self._batch_chain_contexts.get(batch_idx, [])
+        tp = self._batch_true_positions.get(batch_idx, {})
+        out = []
+        for ctx in ctxs:
+            K = _spline_K(ctx.total_len, self._chain_spline_knot_cm)
+            params = np.zeros(2 * K, dtype=np.float32)
+            true_pts = tp.get(ctx.track_id)
+            if true_pts is not None:
+                u0 = _dir_from_angles(ctx.theta0_i, ctx.phi0_i)
+                e1, e2 = _transverse_frame(u0)
+                L = float(ctx.total_len)
+                al = np.asarray(ctx.alpha_mid, float)
+                tr = np.asarray(true_pts, float)
+                m = min(len(al), len(tr))
+                al, tr = al[:m], tr[:m]
+                nom = np.asarray(ctx.x0_fixed)[None, :] + al[:, None] * L * u0[None, :]
+                d = tr - nom
+                B = np.sin(np.outer(al, np.pi * np.arange(1, K + 1)))
+                b1 = np.linalg.lstsq(B, d @ e1, rcond=None)[0]
+                b2 = np.linalg.lstsq(B, d @ e2, rcond=None)[0]
+                params = np.concatenate([b1, b2]).astype(np.float32)
+            out.append(jnp.asarray(params))
+        return out
+
+    def _load_truthpoint_ckpt(self):
+        """Fitted geometry / dEdx / calibration from a completed run."""
+        if getattr(self, '_tp_loaded', None) is not None:
+            return self._tp_loaded
+        with open(self._truthpoint_ckpt, 'rb') as f:
+            ck = pickle.load(f)
+        # Geometry keyed by TRACK_ID, never by list position: position matching silently
+        # transplants another track's geometry whenever batching or ordering differs between
+        # runs (the trap LARND_CHAIN_INIT_FROM already documents).
+        cc, cx = ck.get('chain_cache', {}), ck.get('chain_contexts', {})
+        geom = {}
+        for bi, states in cc.items():
+            ctxs = cx.get(bi, [])
+            geom[int(bi)] = ({str(c['track_id']): np.asarray(s['angles'])
+                              for c, s in zip(ctxs, states)} if ctxs else None)
+        dedx = {int(bi): np.asarray(v['log_dedx'])
+                for bi, v in ck.get('dedx_cache', {}).items() if 'log_dedx' in v}
+        calib = {p: float(np.ravel(ck[p + '_iter'])[-1]) for p in self.relevant_params_list}
+        truth = {p: float(np.ravel(ck[p + '_target'])[0]) for p in self.relevant_params_list}
+        logger.info(f"[TRUTHPOINT] loaded {self._truthpoint_ckpt}: {len(geom)} geometry batches, "
+                    f"{len(dedx)} dEdx batches; fit calib {calib}; target {truth}")
+        self._tp_loaded = (geom, dedx, calib, truth)
+        return self._tp_loaded
+
+    def _set_calib_physical(self, phys):
+        """Write PHYSICAL calibration values into norm_params, the exact inverse of
+        update_params(). The joint branch of compute_loss reads norm_params, not
+        current_params, so setting current_params directly would be a silent no-op."""
+        if self.normalization_scheme == "divide":
+            upd = {k: float(v) / float(getattr(self.params_normalization, k))
+                   for k, v in phys.items()}
+        else:
+            upd = {k: float(map_phys_to_norm(float(v), k, scheme=self.normalization_scheme,
+                                             scale=self._norm_scale_for_scheme()))
+                   for k, v in phys.items()}
+        self.norm_params = self.norm_params.replace(**upd)
+        self.update_params()
+
+    def _eval_truth_point(self, i, tracks, ref, log_dedx_live, parent_ids, epoch):
+        """Evaluate the objective at the fit point, the truth point, and the three one-block
+        hybrids, for batch *i*. Appends one record to training_history['truthpoint']."""
+        geom_fit, dedx_fit, calib_fit, calib_truth = self._load_truthpoint_ckpt()
+        ctxs = self._batch_chain_contexts.get(i, [])
+
+        # geometry: fit (from the checkpoint, matched by track_id) and truth-projected
+        g_truth = self._truth_spline_coeffs(i)
+        g_map = geom_fit.get(i)
+        if g_map:
+            g_fit, missing = [], 0
+            for k, ctx in enumerate(ctxs):
+                a = g_map.get(str(ctx.track_id))
+                if a is None:
+                    missing += 1
+                    a = np.zeros_like(np.asarray(g_truth[k]))
+                g_fit.append(jnp.asarray(np.asarray(a, dtype=np.float32)))
+            if missing:
+                logger.warning(f"[TRUTHPOINT] batch {i}: {missing}/{len(ctxs)} tracks absent from "
+                               f"the checkpoint geometry; using the nominal straight line there")
+        else:
+            logger.warning(f"[TRUTHPOINT] batch {i}: no checkpoint geometry, using nominal")
+            g_fit = [jnp.zeros_like(c) for c in g_truth]
+
+        # dEdx: fit (checkpoint) and truth (arc-length-matched target)
+        d_live = np.asarray(log_dedx_live) if log_dedx_live is not None else None
+        d_fit = dedx_fit.get(i)
+        if d_fit is None or (d_live is not None and len(d_fit) != len(d_live)):
+            logger.warning(f"[TRUTHPOINT] batch {i}: checkpoint dEdx missing or mis-shaped; "
+                           f"falling back to the live state")
+            d_fit = d_live
+        tm = self._batch_true_dedx_matched.get(i)
+        d_truth = None
+        if tm is not None and d_fit is not None and len(tm) == len(d_fit):
+            tm = np.asarray(tm, dtype=np.float64)
+            # matched truth can carry zeros where no target segment matched; keep the fit there
+            # rather than taking log(0).
+            good = tm > 0
+            d_truth = np.asarray(d_fit, dtype=np.float32).copy()
+            d_truth[good] = np.log(tm[good]).astype(np.float32)
+            if not good.all():
+                logger.info(f"[TRUTHPOINT] batch {i}: {int((~good).sum())}/{len(tm)} segments have "
+                            f"no matched truth dEdx; left at the fit value")
+        elif tm is not None:
+            logger.warning(f"[TRUTHPOINT] batch {i}: matched-truth dEdx length {len(tm)} != "
+                           f"{len(d_fit) if d_fit is not None else None}; skipping dEdx-truth points")
+        d_fit_j = jnp.asarray(d_fit) if d_fit is not None else None
+        d_truth_j = jnp.asarray(d_truth) if d_truth is not None else None
+
+        # representation floor: how well can the spline basis represent truth AT ALL?
+        floor_um = None
+        _saved = self._chain_cache.get(i)
+        try:
+            self._chain_cache[i] = [{'angles': c} for c in g_truth]
+            _f = self._compute_pos_residual_batch(i)
+            floor_um = float(_f) * 1e4 if _f is not None else None
+        except Exception as e:
+            logger.warning(f"[TRUTHPOINT] batch {i}: representation floor failed: {e}")
+        finally:
+            if _saved is not None:
+                self._chain_cache[i] = _saved
+            else:
+                self._chain_cache.pop(i, None)
+
+        POINTS = [('P0_fit',        calib_fit,   d_fit_j,   g_fit),
+                  ('P1_truth',      calib_truth, d_truth_j, g_truth),
+                  ('P2_calib_true', calib_truth, d_fit_j,   g_fit),
+                  ('P3_dedx_true',  calib_fit,   d_truth_j, g_fit),
+                  ('P4_geom_true',  calib_fit,   d_fit_j,   g_truth)]
+        rec = {'batch': int(i), 'repr_floor_um': floor_um,
+               'n_tracks': len(ctxs), 'points': {}}
+        _norm_saved, _cur_saved = self.norm_params, self.current_params
+        try:
+            for name, cal, ld, gg in POINTS:
+                if ld is None:
+                    logger.warning(f"[TRUTHPOINT] batch {i}: point {name} unavailable, skipped")
+                    continue
+                # NOTE use_physical_params MUST stay False. That flag selects a branch which
+                # ignores log_dedx and chain_angles_per_track entirely -- passing them alongside
+                # it silently evaluates the nominal geometry and the input-file dEdx, which
+                # would make every point here identical apart from the calibration values.
+                self._set_calib_physical(cal)
+                lv, _, _, _, aux, _, _ = self.compute_loss(
+                    tracks, i, *ref, epoch=epoch, with_loss=True, with_grad=False,
+                    use_physical_params=False, log_dedx=ld, parent_ids=parent_ids,
+                    chain_angles_per_track=gg)
+                rec['points'][name] = {
+                    'loss': float(lv),
+                    'aux': {k: serialize_value(v) for k, v in (aux or {}).items()},
+                    'calib': dict(cal)}
+                logger.info(f"[TRUTHPOINT] batch {i:3d} {name:14s} loss = {float(lv):.4f}")
+        finally:
+            self.norm_params, self.current_params = _norm_saved, _cur_saved
+        p0 = rec['points'].get('P0_fit', {}).get('loss')
+        p1 = rec['points'].get('P1_truth', {}).get('loss')
+        if p0 is not None and p1 is not None:
+            rec['delta_truth_minus_fit'] = p1 - p0
+            logger.info(f"[TRUTHPOINT] batch {i:3d} SUMMARY  truth - fit = {p1 - p0:+.4f}  "
+                        f"({'truth is BETTER -> optimiser-limited' if p1 < p0 else 'fit is BETTER -> objective displaced'})"
+                        f"  repr_floor = {floor_um if floor_um is None else round(floor_um, 1)} um")
+        self.training_history.setdefault('truthpoint', []).append(rec)
+
     def _get_or_init_dedx_state(self, batch_idx, n_orig_segs):
         """Lazily initialise per-segment log-dEdx and its Adam state for *batch_idx*.
 
@@ -2291,6 +2900,50 @@ class GradientDescentFitter(ParamFitter):
         entry = self._dedx_cache[batch_idx]
         return entry['log_dedx'], entry['opt_state']
 
+    def _get_or_init_dedx_ss(self, batch_idx, n_orig_segs, seg_dx):
+        """State for the (scale, shape) parametrisation: scalar mu plus shape vector a.
+
+        Initialised at mu = log(dedx_student_loc), a = 0  ->  log_dedx == log(loc) for every
+        segment, i.e. bit-identical to the per-segment initialisation.
+        """
+        if batch_idx not in self._dedx_ss:
+            mu = jnp.asarray(np.log(float(self.dedx_student_loc)), dtype=jnp.float32)
+            a = jnp.zeros((n_orig_segs,), dtype=jnp.float32)
+            flat = jnp.concatenate([mu[None], a])
+            self._dedx_ss[batch_idx] = {'mu': mu, 'a': a,
+                                        'opt_state': self._dedx_optimizer.init(flat)}
+        return self._dedx_ss[batch_idx]
+
+    def _dedx_ss_log_dedx(self, batch_idx, n_orig_segs, seg_dx):
+        """Current log_dedx implied by (mu, a) for this batch."""
+        st = self._get_or_init_dedx_ss(batch_idx, n_orig_segs, seg_dx)
+        return _dedx_scale_shape_forward(st['mu'], st['a'], jnp.asarray(seg_dx, dtype=jnp.float32))
+
+    def _process_dedx_grads_ss(self, batch_idx, grads_dedx, seg_dx):
+        """Adam step in (mu, a) coordinates.
+
+        The loss is untouched; only the chain rule changes. mu carries the length-weighted MEAN
+        (exactly), a carries the SHAPE -- so the mean constraint acts on mu alone and no longer
+        couples the shape parameters (see _dedx_scale_shape_* and test_dedx_reparam.py).
+        """
+        st = self._dedx_ss[batch_idx]
+        gmu, ga = _dedx_scale_shape_grads(np.asarray(grads_dedx, dtype=np.float64),
+                                          np.asarray(st['a'], dtype=np.float64),
+                                          np.asarray(seg_dx, dtype=np.float64))
+        flat_g = jnp.concatenate([jnp.asarray([gmu], dtype=jnp.float32),
+                                  jnp.asarray(ga, dtype=jnp.float32)])
+        updates, new_opt = self._dedx_optimizer.update(flat_g, st['opt_state'])
+        # Scale mu's UPDATE, not its gradient. Adam is scale-invariant per coordinate
+        # (it divides by the running second moment), so multiplying the GRADIENT is a no-op --
+        # that was a real defect in the first version of this code.
+        mu_new = st['mu'] + updates[0] * self._dedx_mu_lr_mult
+        a_new = st['a'] + updates[1:]
+        # fix the gauge (a -> a + c is exactly flat): re-centre so sum_i l_i a_i = 0.
+        l = jnp.asarray(seg_dx, dtype=jnp.float32)
+        a_new = a_new - jnp.sum(l * a_new) / jnp.maximum(jnp.sum(l), 1e-6)
+        self._dedx_ss[batch_idx] = {'mu': mu_new, 'a': a_new, 'opt_state': new_opt}
+        return _dedx_scale_shape_forward(mu_new, a_new, l)
+
     def _process_dedx_grads(self, batch_idx, grads_dedx, current_log_dedx):
         """Apply one Adam step for per-segment log-dEdx of *batch_idx*."""
         _, opt_state = self._get_or_init_dedx_state(batch_idx, len(current_log_dedx))
@@ -2298,6 +2951,127 @@ class GradientDescentFitter(ParamFitter):
         new_log_dedx = current_log_dedx + updates
         self._dedx_cache[batch_idx] = {'log_dedx': new_log_dedx, 'opt_state': new_opt_state}
         return new_log_dedx
+
+    def _dedx_gn_step(self, batch_idx, log_dedx, loss_fn, grads_dedx, seg_dx, total_iter=0):
+        """One structured Newton step for the per-segment log-dEdx of *batch_idx*.
+
+        H = band(bw 2) + q q^T. The band comes from 5 HVPs via mod-P probing (cost independent
+        of N); the rank-1 mean-constraint term is analytic and is subtracted from the probes,
+        then restored by Sherman-Morrison. Levenberg-Marquardt damping with backtracking.
+
+        Returns (new_log_dedx, info dict). Falls back to returning None on any failure so the
+        caller can use the Adam path instead.
+        """
+        N = int(log_dedx.shape[0])
+        if N < 2 * _DEDX_GN_BW + 1:
+            return None, {'why': 'N too small'}
+        x0 = np.asarray(log_dedx, dtype=np.float64)
+        g = np.asarray(grads_dedx, dtype=np.float64)
+        if not np.all(np.isfinite(g)):
+            return None, {'why': 'non-finite gradient'}
+
+        # ---- analytic rank-1 of the mean constraint:  q = sqrt(2w) * l_i exp(x_i) / L ----
+        w = float(self.dedx_mean_constraint_weight)
+        q = None
+        if w > 0 and seg_dx is not None:
+            l = np.asarray(seg_dx, dtype=np.float64)
+            if l.shape[0] >= N:
+                l = l[:N]
+                L = float(l.sum())
+                if L > 1e-6:
+                    q = np.sqrt(2.0 * w) * (l * np.exp(x0) / L)
+
+        # ---- band via 2*bw+1 HVPs (independent of N) ----
+        grad_fn = jax.grad(loss_fn)
+        V = _dedx_probe_matrix(N)
+        Vj = jnp.asarray(V)
+        # All 2*bw+1 probes in ONE vmapped forward-over-reverse pass: XLA then shares the primal
+        # forward/backward work across the probes instead of redoing it 5x (measured ~5x faster
+        # than the eager loop). Only 5 tangents, so this is nothing like the jacfwd(jacrev) blowup.
+        # HVPs. vmapping all P tangents at once is ~5x faster but holds P copies of the reverse
+        # tape (measured: OOM, 8.08 GiB request on an 11 GiB card) -- the same (P+1)x blowup that
+        # rules out jacfwd(jacrev) here. Default chunk=1 = sequential, ~1x tape. Raise only if the
+        # card has room.
+        # Do NOT jit-and-cache across iterations: loss_fn closes over THIS iteration's
+        # tracks/target/noise realisation, so a cached jit would silently reuse a stale loss.
+        cached = self._dedx_gn_band.get(batch_idx)
+        reuse = (cached is not None and self._dedx_gn_refresh > 1 and
+                 (total_iter - cached[1]) < self._dedx_gn_refresh and cached[0].shape[1] == N)
+        if reuse:
+            ab = cached[0]
+        else:
+            ch = max(1, int(self._dedx_gn_chunk))
+            probes = np.empty((V.shape[0], N), dtype=np.float64)
+            for c0 in range(0, V.shape[0], ch):
+                Vc = Vj[c0:c0 + ch]
+                if Vc.shape[0] == 1:
+                    hv = jax.jvp(grad_fn, (log_dedx,), (Vc[0],))[1][None, :]
+                else:
+                    hv = jax.vmap(lambda v: jax.jvp(grad_fn, (log_dedx,), (v,))[1])(Vc)
+                probes[c0:c0 + Vc.shape[0]] = np.asarray(hv, dtype=np.float64)
+            # contamination for probe c at row i is q_i * (q . V[c])  ->  shape (P, N).
+            # np.outer(q, V@q) would be (N, P): transposed. Guarded by a unit test.
+            probes = probes - (np.outer(V @ q, q) if q is not None else 0.0)
+            if not np.all(np.isfinite(probes)):
+                return None, {'why': 'non-finite HVP'}
+            ab = _dedx_band_from_probes(probes, N)
+            self._dedx_gn_band[batch_idx] = (ab, total_iter)
+
+        # ---- optional in-situ validation against the DENSE Hessian (LARND_DEDX_GN_VALIDATE=1) ----
+        # Costs N extra HVPs, so only for small-N diagnostic runs. This is the check that the
+        # bandwidth-2 assumption actually holds on REAL data at the REAL operating point --
+        # everything else only validates the linear algebra.
+        if self._dedx_gn_validate and not self._dedx_gn_validated:
+            Hd = np.empty((N, N), dtype=np.float64)
+            for k in range(N):
+                ek = np.zeros(N, dtype=np.float32); ek[k] = 1.0
+                _, hv = jax.jvp(grad_fn, (log_dedx,), (jnp.asarray(ek),))
+                Hd[:, k] = np.asarray(hv, dtype=np.float64)
+            Hb = Hd - (np.outer(q, q) if q is not None else 0.0)   # remove analytic rank-1
+            dref = np.abs(np.diag(Hb)).max()
+            iu = np.abs(np.subtract.outer(np.arange(N), np.arange(N)))
+            offband = np.abs(Hb[iu > _DEDX_GN_BW]).max() if (iu > _DEDX_GN_BW).any() else 0.0
+            rec = np.zeros((N, N))
+            ii = np.arange(N)
+            for d in range(-_DEDX_GN_BW, _DEDX_GN_BW + 1):
+                jj = ii + d; ok2 = (jj >= 0) & (jj < N)
+                rec[ii[ok2], jj[ok2]] = ab[_DEDX_GN_BW - d, jj[ok2]]
+            banderr = np.abs(rec[iu <= _DEDX_GN_BW] - Hb[iu <= _DEDX_GN_BW]).max()
+            asym = np.abs(Hb - Hb.T).max()
+            logger.info(
+                f"[DEDX-GN-VALIDATE] N={N} diag_max={dref:.4g} | "
+                f"max|off-band|={offband:.4g} (rel {offband/max(dref,1e-30):.3e}) | "
+                f"band recovery err={banderr:.4g} (rel {banderr/max(dref,1e-30):.3e}) | "
+                f"asym={asym:.3g} | 5 probes vs {N} dense HVPs")
+            self._dedx_gn_validated = True
+
+        # ---- LM loop with backtracking ----
+        f0 = float(loss_fn(log_dedx))
+        lam = float(self._dedx_gn_lam.get(batch_idx, self._dedx_gn_lam0))
+        cap = self._dedx_gn_step_cap
+        best = None
+        for _bt in range(self._dedx_gn_max_bt + 1):
+            step, ok = _dedx_banded_sm_solve(ab, q, -g, lam)
+            if ok:
+                mx = np.abs(step).max()
+                if cap > 0 and mx > cap:
+                    step = step * (cap / mx)
+                xn = x0 + step
+                fn = float(loss_fn(jnp.asarray(xn, dtype=log_dedx.dtype)))
+                if np.isfinite(fn) and fn < f0:
+                    best = (xn, fn, lam, mx, _bt)
+                    break
+            lam *= 4.0
+        if best is None:
+            self._dedx_gn_lam[batch_idx] = min(lam, 1e8)
+            return None, {'why': 'no descent', 'lam': lam, 'f0': f0}
+
+        xn, fn, lam_used, mx, nbt = best
+        self._dedx_gn_lam[batch_idx] = max(lam_used / 3.0, 1e-6)
+        return (jnp.asarray(xn, dtype=log_dedx.dtype),
+                {'f0': f0, 'f1': fn, 'dloss': f0 - fn, 'lam': lam_used,
+                 'step_max': mx, 'backtracks': nbt, 'N': N,
+                 'reused': bool(reuse)})
 
     def _get_or_init_chain_state(self, batch_idx):
         """Lazily initialise per-track chain angles and Adam state for batch_idx.
@@ -2375,6 +3149,118 @@ class GradientDescentFitter(ParamFitter):
                 states.append({'angles': params, 'opt_state': opt_state})
             self._chain_cache[batch_idx] = states
         return self._chain_cache[batch_idx]
+
+    def _build_true_dedx_matched(self, batch_idx, batch_flat, raw_pids, n_orig, target):
+        """Per-parent-segment TRUE dE/dx, matched from the TARGET file by arc length.
+
+        WHY THIS EXISTS. `_batch_true_dedx` is read from `dataloader_sim`, i.e. from
+        `--input_file_sim`. Whenever that is not the target file -- which is every S3/S4 run, where
+        the sim side is the straight-line guess -- the logged `dedx_mae_iter` is NOT an error
+        against truth. It is |fitted - starting values|, i.e. how far the fit has moved from its own
+        initialisation. Since the guess file's dE/dx is known to be bad (40% of the true spread,
+        mean -0.44%), MOVING AWAY from it is what a working fit should do, and the long-standing
+        "the dE/dx MAE ends worse than it starts" observation may be measuring exactly that.
+        This builds the reference the diagnostic should have used.
+
+        THE MATCHING PROBLEM. Sim and target have different segmentations (10.08M vs 3.03M
+        segments), so there is no row correspondence and no per-segment index to join on. What is
+        shared is the trajectory. So for each track we compare in normalised arc length:
+
+          * sim side:    parent segment p occupies [a0, a1] of the track, from cumsum of the
+                         per-parent lengths already computed in `_batch_seg_dx`.
+          * target side: build cumulative length s(a) and cumulative energy E(a) over the true
+                         segments, then
+                             dEdx_true(p) = [E(a1) - E(a0)] / [(a1 - a0) * L_true].
+
+        Integrating dE over the span (rather than point-sampling dEdx at a midpoint) is the
+        physically correct reduction: dE/dx is an average over a finite length, and the spans differ
+        by ~3.3x between the two files. Point sampling would alias the true fluctuations instead of
+        averaging them, and would report spurious MAE driven purely by segmentation.
+
+        Falls back to leaving the batch absent (rather than guessing) whenever the target lacks the
+        id fields or a track cannot be matched -- a missing entry is skipped downstream, which is
+        safer than silently comparing against the wrong thing, the very bug this method fixes.
+        """
+        if self.read_target or target is None:
+            return
+        tf = self.tgt_track_fields
+        if 'eventID' not in tf or 'trackID' not in tf or 'dEdx' not in tf or 'dx' not in tf:
+            return
+        sf = self.sim_track_fields
+        if self.evt_id not in sf or 'dx' not in sf:
+            return
+        trk_name = 'trackID' if 'trackID' in sf else ('traj_id' if 'traj_id' in sf else None)
+        if trk_name is None:
+            return
+        seg_dx = self._batch_seg_dx.get(batch_idx)
+        if seg_dx is None:
+            return
+
+        s_ev, s_tr = sf.index(self.evt_id), sf.index(trk_name)
+        t_ev, t_tr = tf.index('eventID'), tf.index('trackID')
+        t_dedx, t_dx = tf.index('dEdx'), tf.index('dx')
+
+        valid = raw_pids >= 0
+        rows = np.flatnonzero(valid)
+        uniq, first = np.unique(raw_pids[valid], return_index=True)
+        # (event, track) of each parent segment, taken from its first sub-step
+        p_ev = np.zeros(n_orig); p_tr = np.zeros(n_orig)
+        p_ev[uniq] = batch_flat[rows[first], s_ev]
+        p_tr[uniq] = batch_flat[rows[first], s_tr]
+
+        tgt = np.asarray(target[batch_idx].reshape(-1, len(tf)))
+        out = np.full(n_orig, np.nan, dtype=np.float32)
+
+        for ev, tr in {(float(a), float(b)) for a, b in zip(p_ev[uniq], p_tr[uniq])}:
+            sel = np.flatnonzero((np.abs(p_ev - ev) < 0.5) & (np.abs(p_tr - tr) < 0.5))
+            sel = np.array([p for p in sel if p in set(uniq.tolist())], dtype=int)
+            if len(sel) == 0:
+                continue
+            sel = np.sort(sel)                       # parent index order == along-track order
+            L = seg_dx[sel].astype(np.float64)
+            if L.sum() <= 0:
+                continue
+            edges = np.concatenate([[0.0], np.cumsum(L)]) / L.sum()      # normalised spans
+
+            m = (np.abs(tgt[:, t_ev] - ev) < 0.5) & (np.abs(tgt[:, t_tr] - tr) < 0.5)
+            tdx = tgt[m, t_dx].astype(np.float64)
+            tde = tgt[m, t_dedx].astype(np.float64) * tdx
+            if len(tdx) < 2 or tdx.sum() <= 0:
+                continue
+            a_true = np.concatenate([[0.0], np.cumsum(tdx)]) / tdx.sum()
+            E_true = np.concatenate([[0.0], np.cumsum(tde)])
+            Ltot = tdx.sum()
+            E0 = np.interp(edges[:-1], a_true, E_true)
+            E1 = np.interp(edges[1:], a_true, E_true)
+            span = (edges[1:] - edges[:-1]) * Ltot
+            good = span > 1e-9
+            out[sel[good]] = ((E1 - E0)[good] / span[good]).astype(np.float32)
+
+        if np.isfinite(out).any():
+            self._batch_true_dedx_matched[batch_idx] = out
+
+    def _freq_gate(self, tag, batch_idx, freq):
+        """Every-`freq`-VISITS gate, counted PER BATCH.
+
+        Replaces `total_iter % freq == 0`, which is a global-iteration gate and is broken under
+        sequential batching: batch b is always visited at total_iter == b (mod nbatch), so
+        `total_iter % freq == 0` is a FIXED function of the batch index. With freq > 1 a fixed
+        subset of batches receives EVERY update and the rest receive NONE, ever -- and shuffling
+        the batch order accidentally repairs it, which makes the two orderings incomparable.
+        Counting each batch's own visits makes the gate mean what it says and removes the
+        order dependence.
+
+        freq <= 1 fires on every visit, identical to the old behaviour (which was already correct
+        at freq == 1, the default -- so no existing run changes).
+        """
+        if freq is None or freq <= 1:
+            return True
+        if not hasattr(self, '_freq_counters'):
+            self._freq_counters = {}
+        key = (tag, int(batch_idx))
+        n = self._freq_counters.get(key, 0)
+        self._freq_counters[key] = n + 1
+        return n % int(freq) == 0
 
     def _chain_lr_scale(self, total_iter):
         """Exponential decay factor for the chain-position learning rate.
@@ -3240,6 +4126,165 @@ class GradientDescentFitter(ParamFitter):
                     f"L-BFGS resid {results['lbfgs']['hist'][0][2]:.0f}->{results['lbfgs']['hist'][-1][2]:.0f}µm in {l_t:.1f}s. Saved {out_path}")
         return results
 
+    def analyze_dedx_hessian(self, dataloader_sim, target, batch_idx=0, n_cols=12,
+                              diag_chunk=8, max_diag=None, out_path=None):
+        """Measure diagonal dominance of the per-segment log-dEdx Hessian on ONE batch.
+
+        Position fitting must be off (self.fit_chain_positions False) and self.fit_dedx True.
+        Calibration (norm_params) is held FIXED at self.norm_params (its current/initial value);
+        only the per-segment log-dEdx array is differentiated.
+
+        Computes, via forward-over-reverse HVPs (jax.jvp(jax.grad(f), (x,), (e_k,)), the same
+        pattern as the module-level _hess_by_hvp helper but for a flat array param instead of a
+        calibration pytree):
+          - the FULL diagonal H_ii of the TOTAL loss (hit_loss + all active dEdx regularizers)
+            w.r.t. log-dEdx, for the first `max_diag` segments (all of them if None)
+          - full Hessian COLUMNS at `n_cols` indices spread across the segment range
+          - the same two things for the PRIOR-ONLY loss (student-t + soft barrier + mean
+            constraint [+ drift-profile penalty if its weight > 0]), so the analytic-prior
+            curvature can be separated from the data/likelihood curvature.
+
+        HVPs are computed diag_chunk columns at a time via jax.vmap (shares the primal
+        forward/backward pass across the chunk) to bound memory -- doing all columns in one
+        vmap would be the OOM-prone jacfwd(jacrev(.)) this whole investigation is trying to
+        avoid computing at full 4000-parameter scale.
+
+        Results (numpy arrays + metadata) are pickled to `out_path`
+        (default fit_result/dedx_hessian_b{batch_idx}.pkl) and returned.
+        """
+        import pickle as _pickle
+        i = int(batch_idx)
+        tracks_np = dataloader_sim[i].reshape(-1, len(self.sim_track_fields))
+        selected_tracks_sim = jax.device_put(tracks_np)
+        evts_sim = self.get_batch_global_event_ids(dataloader_sim, i, selected_tracks_sim)
+        this_target = jax.device_put(target[i].reshape(-1, len(self.tgt_track_fields)))
+        (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks,
+         ref_hit_prob, ref_event, ref_pixel_id) = self.get_simulated_target(this_target, i, evts_sim, regen=False)
+
+        _ds = getattr(dataloader_sim, 'dataset', None)
+        if _ds is None or not hasattr(_ds, 'get_parent_segment_ids'):
+            raise RuntimeError("dataloader_sim.dataset has no get_parent_segment_ids; cannot run dEdx-Hessian analysis")
+        pids = _ds.get_parent_segment_ids(i)
+        parent_ids = jax.device_put(jnp.asarray(pids, dtype=jnp.int32))
+        n_orig = int(jnp.max(parent_ids).item()) + 1
+        log_dedx, _ = self._get_or_init_dedx_state(i, n_orig)
+
+        dx_idx = self.sim_track_fields.index('dx')
+        total_len_cm = float(jnp.sum(jnp.where(parent_ids >= 0, selected_tracks_sim[:, dx_idx], 0.0)))
+        logger.info(f"[DEDX-HESS] batch {i}: n_segments={n_orig} n_steps={selected_tracks_sim.shape[0]} "
+                    f"total_track_len_cm={total_len_cm:.2f}")
+
+        loss_fn = self.compute_loss(
+            selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks,
+            ref_hit_prob, ref_event, ref_pixel_id, log_dedx=log_dedx, parent_ids=parent_ids,
+            chain_angles_per_track=None, return_loss_closure=True)
+        # loss_fn(log_dedx_pt) -> scalar TOTAL loss (hit_loss + dEdx regularizers), calib fixed.
+
+        N = n_orig
+        N_eff = min(N, int(max_diag)) if max_diag is not None else N
+        n_cols = min(int(n_cols), N_eff)
+        col_indices = sorted(set(int(round(x)) for x in np.linspace(0, N_eff - 1, n_cols)))
+
+        def _sweep(fn, tag):
+            grad_fn = jax.grad(fn)
+            diag = np.full(N_eff, np.nan, dtype=np.float64)
+            cols = {}
+            t0 = time()
+            for start in range(0, N_eff, int(diag_chunk)):
+                end = min(start + int(diag_chunk), N_eff)
+                idxs = np.arange(start, end)
+
+                def _hvp_e(k):
+                    e = jnp.zeros((N,), dtype=log_dedx.dtype).at[k].set(1.0)
+                    _, hv = jax.jvp(grad_fn, (log_dedx,), (e,))
+                    return hv
+
+                hv_batch = np.asarray(jax.vmap(_hvp_e)(jnp.asarray(idxs)))
+                for li, gi in enumerate(idxs):
+                    diag[gi] = hv_batch[li, gi]
+                    if int(gi) in col_indices:
+                        cols[int(gi)] = hv_batch[li]
+                logger.info(f"[DEDX-HESS] {tag}: chunk {start}:{end}/{N_eff} done ({time()-t0:.1f}s elapsed)")
+            return diag, cols
+
+        # Prior-only closure: re-evaluate JUST the analytic dEdx regularization terms as a
+        # function of log_dedx, reconstructing dedx_sample exactly as loss_wrapper_combined does.
+        # (norm_params / hit_loss do not enter here at all.)
+        dedx_idx = self.sim_track_fields.index('dEdx')
+        t_fields = self.sim_track_fields
+        _valid_mask = (parent_ids >= 0)
+        _safe_ids = jnp.clip(parent_ids, 0, N - 1)
+        _dx = selected_tracks_sim[:, dx_idx]
+        _lsf = (selected_tracks_sim[:, t_fields.index('length_scale_factor')]
+                if 'length_scale_factor' in t_fields else None)
+
+        def prior_only_fn(x):
+            dedx_fitted = jnp.maximum(jnp.exp(jnp.take(x, _safe_ids)), 1e-3)
+            dedx_sample = jnp.where(_valid_mask, dedx_fitted, selected_tracks_sim[:, dedx_idx])
+            length_scale_factor = _lsf if _lsf is not None else 1.0
+            if self.dedx_use_split_t:
+                dedx_prior = split_student_t_nll(
+                    dedx_sample, self.dedx_student_nu_l, self.dedx_student_nu_r,
+                    self.dedx_student_loc * length_scale_factor,
+                    self.dedx_student_scale_l, self.dedx_student_scale_r, weights=_dx
+                ) * self.dedx_prior_weight
+            else:
+                dedx_prior = student_t_nll(
+                    dedx_sample, self.dedx_student_nu, self.dedx_student_loc * length_scale_factor,
+                    self.dedx_student_scale, weights=_dx
+                ) * self.dedx_prior_weight
+            dx_weights = _dx
+            valid_step_mask = (dx_weights > 0)
+            dedx_barrier = self.dedx_soft_barrier_weight * jnp.sum(
+                dx_weights * valid_step_mask * jnp.square(jnp.maximum(0., dedx_sample - self.dedx_soft_barrier_threshold)))
+            segment_valid = _valid_mask & valid_step_mask
+            total_dx = jnp.sum(dx_weights * segment_valid)
+            total_dedx_len = jnp.sum(dedx_sample * dx_weights * segment_valid)
+            mean_dedx = total_dedx_len / jnp.maximum(total_dx, 1e-6)
+            if _lsf is not None:
+                mean_scale_factor = jnp.sum(length_scale_factor * dx_weights * segment_valid) / jnp.maximum(total_dx, 1e-6)
+                scaled_mean_target = self.dedx_mean_constraint_target * mean_scale_factor
+            else:
+                scaled_mean_target = self.dedx_mean_constraint_target
+            dedx_mean_penalty = self.dedx_mean_constraint_weight * jnp.square(mean_dedx - scaled_mean_target)
+            dedx_drift_penalty = jnp.float32(0.)
+            if self.dedx_drift_profile_weight > 0 and 'z' in t_fields:
+                _zc = jnp.abs(selected_tracks_sim[:, t_fields.index('z')])
+                _w = dx_weights * segment_valid
+                _W = jnp.sum(_w) + 1e-9
+                _y = jnp.log(jnp.maximum(dedx_sample, 1e-3))
+                _zb = jnp.sum(_w * _zc) / _W
+                _yb = jnp.sum(_w * _y) / _W
+                _cov = jnp.sum(_w * (_zc - _zb) * (_y - _yb)) / _W
+                _var = jnp.sum(_w * (_zc - _zb) ** 2) / _W + 1e-9
+                _trend = _cov / jnp.sqrt(_var)
+                dedx_drift_penalty = self.dedx_drift_profile_weight * jnp.square(_trend)
+            return dedx_prior + dedx_barrier + dedx_mean_penalty + dedx_drift_penalty
+
+        logger.info(f"[DEDX-HESS] batch {i}: computing TOTAL-loss diagonal/columns "
+                    f"({N_eff} of {N} segments, chunk={diag_chunk}, n_cols={len(col_indices)})...")
+        diag_total, cols_total = _sweep(loss_fn, 'total')
+        logger.info(f"[DEDX-HESS] batch {i}: computing PRIOR-only diagonal/columns...")
+        diag_prior, cols_prior = _sweep(prior_only_fn, 'prior')
+
+        results = {
+            'batch': i, 'n_segments': N, 'n_eff': N_eff, 'col_indices': col_indices,
+            'total_track_len_cm': total_len_cm,
+            'diag_total': diag_total, 'cols_total': cols_total,
+            'diag_prior': diag_prior, 'cols_prior': cols_prior,
+            'dedx_prior_weight': self.dedx_prior_weight,
+            'dedx_soft_barrier_weight': self.dedx_soft_barrier_weight,
+            'dedx_soft_barrier_threshold': self.dedx_soft_barrier_threshold,
+            'dedx_mean_constraint_weight': self.dedx_mean_constraint_weight,
+            'dedx_drift_profile_weight': self.dedx_drift_profile_weight,
+        }
+        out_path = out_path or f'fit_result/dedx_hessian_b{i}.pkl'
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, 'wb') as f:
+            _pickle.dump(results, f)
+        logger.info(f"[DEDX-HESS] batch {i}: saved {out_path}")
+        return results
+
     def _lbfgs_minimize(self, loss_fn, init_pytree, max_steps=80, grad_tol=1e-4,
                         plateau_tol=1e-6, plateau_k=8, resid_fn=None):
         """Eager L-BFGS (two-loop recursion + Armijo backtracking) with early stopping.
@@ -3391,6 +4436,23 @@ class GradientDescentFitter(ParamFitter):
                         _uniq, _first = np.unique(_raw_pids[_valid], return_index=True)
                         _true_dedx[_uniq] = _batch_flat[np.flatnonzero(_valid)[_first], _dedx_field_idx].astype(np.float32)
                         self._batch_true_dedx[_bi] = _true_dedx
+                        # Per-segment physical length: sum of the sub-step dx. Needed to
+                        # reconstruct the LENGTH-WEIGHTED mean dEdx offline -- that is the
+                        # quantity dedx_mean_constraint acts on, and without it the true mean
+                        # cannot be compared against the constraint target.
+                        _dx_field_idx = (self.sim_track_fields.index('dx')
+                                         if 'dx' in self.sim_track_fields else None)
+                        if _dx_field_idx is not None:
+                            self._batch_seg_dx[_bi] = np.bincount(
+                                _raw_pids[_valid],
+                                weights=_batch_flat[np.flatnonzero(_valid), _dx_field_idx],
+                                minlength=_n_orig).astype(np.float32)
+                            # Arc-length-matched truth reference, so the dEdx diagnostic can be
+                            # read against the TARGET rather than against the sim input file.
+                            try:
+                                self._build_true_dedx_matched(_bi, _batch_flat, _raw_pids, _n_orig, target)
+                            except Exception as _e:
+                                logger.warning(f"true-dEdx matching failed for batch {_bi}: {_e}")
             else:
                 logger.warning("TracksDataset does not support get_parent_segment_ids; disabling fit_dedx")
                 self.fit_dedx = False
@@ -3480,7 +4542,28 @@ class GradientDescentFitter(ParamFitter):
                     if _use_dedx and i in self._batch_parent_ids:
                         _parent_ids = jax.device_put(jnp.asarray(self._batch_parent_ids[i], dtype=jnp.int32))
                         _n_orig = int(jnp.max(_parent_ids).item()) + 1
-                        _log_dedx, _ = self._get_or_init_dedx_state(i, _n_orig)
+                        # MINIMUM-LENGTH CUT (LARND_DEDX_MIN_DX, default 0.0 = off).
+                        # Both the likelihood and the student-t prior are dx-weighted, so a
+                        # segment's curvature scales with its length: a 0.036 cm segment was
+                        # measured to have 1044x less curvature than the median and ran away to
+                        # -82% of truth, dominating the per-segment MAE. Such segments are not
+                        # identifiable; freeze them at the prior centre instead of fitting them.
+                        if self._dedx_min_dx > 0 and i not in self._dedx_frozen_mask:
+                            _sd_all = self._batch_seg_dx.get(i)
+                            if _sd_all is not None:
+                                _sd = np.asarray(_sd_all)[:_n_orig]
+                                _frozen = _sd < self._dedx_min_dx
+                                self._dedx_frozen_mask[i] = jnp.asarray(_frozen)
+                                if _frozen.any():
+                                    logger.info(
+                                        f"[DEDX-MINDX] batch {i}: freezing {int(_frozen.sum())}/{_n_orig} "
+                                        f"segments with dx < {self._dedx_min_dx} cm "
+                                        f"({100*_sd[_frozen].sum()/max(_sd.sum(),1e-9):.3f}% of the track length)")
+                        if self._dedx_param_mode == 'scale_shape' and self._batch_seg_dx.get(i) is not None:
+                            _sdx = np.asarray(self._batch_seg_dx[i])[:_n_orig]
+                            _log_dedx = self._dedx_ss_log_dedx(i, _n_orig, _sdx)
+                        else:
+                            _log_dedx, _ = self._get_or_init_dedx_state(i, _n_orig)
                     else:
                         _parent_ids = None
                         _log_dedx = None
@@ -3497,13 +4580,35 @@ class GradientDescentFitter(ParamFitter):
                                          or total_iter < self.dedx_start_iter))
                     _chain_active = (_chain_available and
                                      total_iter >= self._chain_start_iter and
-                                     total_iter % self._chain_update_freq == 0)
+                                     self._freq_gate('chain', i, self._chain_update_freq))
                     _chain_frozen_now = (self._chain_freeze_iter > 0 and total_iter >= self._chain_freeze_iter)
                     if _chain_available:
                         _chain_states   = self._get_or_init_chain_state(i)
                         _chain_angles_pt = [s['angles'] for s in _chain_states]
                     else:
                         _chain_angles_pt = None
+
+                    # ── Study 2 hook: evaluate the objective at the truth point vs the fit
+                    # point for this batch, then move on WITHOUT taking a step. Placed here
+                    # because _log_dedx / _parent_ids / _chain_angles_pt / selected_tracks_sim /
+                    # ref_* are all in scope and built exactly as a real fit builds them --
+                    # which is the whole point of hooking the loop rather than reimplementing it.
+                    if self._truthpoint_ckpt is not None:
+                        if i not in self._truthpoint_done:
+                            self._eval_truth_point(
+                                i, selected_tracks_sim,
+                                (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z,
+                                 ref_ticks, ref_hit_prob, ref_event, ref_pixel_id),
+                                _log_dedx, _parent_ids, epoch)
+                            self._truthpoint_done.add(i)
+                            _ndone, _ntot = len(self._truthpoint_done), len(dataloader_sim)
+                            if _ndone >= _ntot:
+                                logger.info(f"[TRUTHPOINT] all {_ntot} batches evaluated; saving")
+                                self.save_checkpoint(total_iter)
+                                terminate_fit = True
+                        if terminate_fit:
+                            break
+                        continue
 
                     # During the warm-up phase (fit_dedx=True but not yet active),
                     # replace the dEdx and dE columns with the prior centre so no
@@ -3532,9 +4637,46 @@ class GradientDescentFitter(ParamFitter):
                     # loss
                     loss_val, grads, _grads_dedx, _grads_chain, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True, log_dedx=_log_dedx, parent_ids=_parent_ids, chain_angles_per_track=_chain_angles_pt, diff_scale=_diff_scale)
 
-                    # Apply per-segment dEdx gradient immediately after every step.
+                    # Apply per-segment dEdx update immediately after every step.
+                    # Default = Adam (unchanged). LARND_DEDX_OPT=gn uses the structured Newton
+                    # step (banded + Sherman-Morrison); it falls back to Adam whenever the solve
+                    # fails to find descent, so the run can never stall on it.
+                    if (_grads_dedx is not None and _log_dedx is not None
+                            and self._dedx_min_dx > 0 and i in self._dedx_frozen_mask):
+                        # frozen segments keep their initial value: kill their gradient entirely
+                        _fm = self._dedx_frozen_mask[i]
+                        if _fm.shape[0] == _grads_dedx.shape[0]:
+                            _grads_dedx = jnp.where(_fm, 0.0, _grads_dedx)
                     if _grads_dedx is not None and _log_dedx is not None and not _dedx_frozen:
-                        self._process_dedx_grads(i, _grads_dedx, _log_dedx)
+                        _did_gn = False
+                        if self._dedx_opt_mode == 'gn' and not _chain_available:
+                            _lf = self.compute_loss(
+                                selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y,
+                                ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id,
+                                epoch=epoch, log_dedx=_log_dedx, parent_ids=_parent_ids,
+                                chain_angles_per_track=None, return_loss_closure=True)
+                            _newx, _info = self._dedx_gn_step(
+                                i, _log_dedx, _lf, _grads_dedx, self._batch_seg_dx.get(i),
+                                total_iter=total_iter)
+                            if _newx is not None:
+                                _, _ost = self._get_or_init_dedx_state(i, len(_log_dedx))
+                                self._dedx_cache[i] = {'log_dedx': _newx, 'opt_state': _ost}
+                                self._dedx_gn_stats['ok'] += 1
+                                _did_gn = True
+                                if total_iter % 50 == 0:
+                                    logger.info(
+                                        f"[DEDX-GN] it{total_iter} b{i} N={_info['N']} "
+                                        f"dloss={_info['dloss']:.4g} lam={_info['lam']:.3g} "
+                                        f"|step|max={_info['step_max']:.3g} bt={_info['backtracks']}")
+                            else:
+                                self._dedx_gn_stats['fallback'] += 1
+                        if not _did_gn:
+                            if (self._dedx_param_mode == 'scale_shape'
+                                    and self._batch_seg_dx.get(i) is not None):
+                                self._process_dedx_grads_ss(
+                                    i, _grads_dedx, np.asarray(self._batch_seg_dx[i])[:len(_log_dedx)])
+                            else:
+                                self._process_dedx_grads(i, _grads_dedx, _log_dedx)
 
                     # Geometry block: per-track chain-angle update. Default = Adam (unchanged path);
                     # 'lbfgs' = jitted L-BFGS geometry solve (calibration held at current, as a traced
@@ -3554,10 +4696,18 @@ class GradientDescentFitter(ParamFitter):
                                     max_iter=self._geom_lbfgs_steps)
                         else:
                             self._process_chain_grads(i, _grads_chain, total_iter)
-                        if total_iter % self._pos_residual_freq == 0:
+                        if self._freq_gate('posres', i, self._pos_residual_freq):
                             _pos_res = self._compute_pos_residual_batch(i)
                             if _pos_res is not None:
                                 self.training_history.setdefault('pos_residual_iter', []).append(_pos_res)
+                                # Record WHICH batch this residual belongs to. pos_residual is a
+                                # per-batch quantity and batches differ enormously (881 um median
+                                # vs individual batches spanning 62-3051 um), so a bare time series
+                                # is only interpretable if the visit order is known. Without this,
+                                # a --shuffle_bt run cannot be compared against a sequential one at
+                                # all -- which is exactly how the SHUFFLE-vs-ANNEALLONG comparison
+                                # went wrong. Additive; costs one int per recorded residual.
+                                self.training_history.setdefault('pos_residual_batch', []).append(int(i))
                         # env-gated: snapshot this batch's chain angles for oscillation viz
                         if os.environ.get('LARND_SNAPSHOT'):
                             self.training_history.setdefault('chain_snapshots', []).append(
@@ -3696,11 +4846,19 @@ class GradientDescentFitter(ParamFitter):
                             else:
                                 _mae = float(np.mean(np.abs(_cur_dedx - float(self.dedx_student_loc))))
                             self.training_history['dedx_mae_iter'].append(_mae)
+                            _tm = self._batch_true_dedx_matched.get(i)
+                            if _tm is not None and len(_tm) == len(_cur_dedx):
+                                _ok = np.isfinite(_tm)
+                                self.training_history['dedx_mae_truth_iter'].append(
+                                    float(np.mean(np.abs(_cur_dedx[_ok] - _tm[_ok]))) if _ok.any() else float('nan'))
+                            else:
+                                self.training_history['dedx_mae_truth_iter'].append(float('nan'))
                             if _dedx_frozen:
                                 logger.debug(f"dEdx FROZEN (iter {total_iter}): MAE vs truth = {_mae:.4f}")
                         else:
                             # Warm-up phase: dEdx not yet active — keep lists aligned with NaN
                             self.training_history['dedx_mae_iter'].append(float('nan'))
+                            self.training_history['dedx_mae_truth_iter'].append(float('nan'))
 
             self.save_checkpoint(total_iter)
 
@@ -3770,9 +4928,87 @@ class LikelihoodProfiler(ParamFitter):
                 this_target = target
             ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = self.get_simulated_target(this_target, i, evts_sim, regen=False)
 
+            # LARND_SCAN_2D="pA,pB" -> scan the TWO named parameters on a joint grid instead of
+            # doing the usual independent 1-D sweeps. Unset = previous behaviour exactly.
+            #
+            # WHY THIS MATTERS. Every scan so far is a 1-D SLICE with the other four parameters
+            # frozen, which is why they manufacture a ~25x sensitivity of lifetime to any charge
+            # normalisation error: lifetime is the only knob left that can change total charge, so
+            # it absorbs the whole thing. In a real fit A_b is free and absorbs it instead. A 2-D
+            # grid fixes this WITHOUT needing a minimiser: minimising the loss over pB at each pA
+            # gives the PROFILE likelihood in pA, which is the quantity a displaced minimum has to
+            # be measured on before it can be called a bias.
+            #
+            # Cost is nb_steps^2 x nbatch (vs nb_steps x 5 x nbatch), so use a smaller grid.
+            _scan2d = os.environ.get('LARND_SCAN_2D', '').strip()
+            if _scan2d:
+                # NOTE: accept ':' as well as ','. `sbatch --export` is itself a comma-separated
+                # list, so a value containing a comma is silently split in half before it ever
+                # reaches python -- use LARND_SCAN_2D="lifetime:Ab" from SLURM.
+                _norm = _scan2d.replace(';', ',').replace(':', ',')
+                _parts = [x.strip() for x in _norm.split(',') if x.strip()]
+                if len(_parts) < 2:
+                    raise ValueError(
+                        f"LARND_SCAN_2D needs two parameter names, got {_scan2d!r}. "
+                        f"From sbatch use a colon (LARND_SCAN_2D='lifetime:Ab') -- --export "
+                        f"splits on commas.")
+                _pA, _pB = _parts[:2]
+                _w2 = float(os.environ.get('LARND_SCAN_WINDOW', 0) or 0)
+                def _axis(pn):
+                    lo, hi = ranges[pn]['down'], ranges[pn]['up']
+                    if _w2 > 0:
+                        nm = ranges[pn]['nom']
+                        lo = max(nm * (1.0 - _w2), ranges[pn]['down'])
+                        hi = min(nm * (1.0 + _w2), ranges[pn]['up'])
+                    return np.linspace(lo, hi, nb_steps)
+                _gA, _gB = _axis(_pA), _axis(_pB)
+                logger.info(f"[SCAN-2D] batch {i}: {_pA} x {_pB} on a {nb_steps}x{nb_steps} grid "
+                            f"({_pA} {_gA[0]:.4g}..{_gA[-1]:.4g}, {_pB} {_gB[0]:.4g}..{_gB[-1]:.4g})")
+                for _ia in tqdm(range(nb_steps)):
+                    for _ib in range(nb_steps):
+                        start_time = time()
+                        self.current_params = self.ref_params.replace(
+                            **{_pA: float(_gA[_ia]), _pB: float(_gB[_ib])})
+                        loss_val, grads, _, _, aux, _, _ = self.compute_loss(
+                            selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y,
+                            ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id,
+                            with_loss=True, with_grad=True, use_physical_params=True)
+                        stop_time = time()
+                        for par in self.relevant_params_list:
+                            self.training_history[par+"_grad"].append(getattr(grads, par).item())
+                        self.training_history['step_time'].append(stop_time - start_time)
+                        self.training_history['losses_iter'].append(loss_val.item())
+                        _auxs = {k: serialize_value(v) for k, v in aux.items()} if aux is not None else {}
+                        self.training_history['aux_iter'].append(_auxs)
+                        # every parameter is logged each step, so the (pA, pB) grid position is
+                        # recoverable offline from <param>_iter alone -- no new storage format.
+                        for par in self.relevant_params_list:
+                            _v = getattr(self.current_params, par)
+                            self.training_history[par + '_iter'].append(
+                                _v if type(_v) == float else _v.item())
+                        self.training_history['size_history'].append(copy.deepcopy(get_size_history()))
+                        if jax.devices()[0].platform == 'gpu':
+                            self.training_history['memory'].append(jax.devices("gpu")[0].memory_stats())
+                with open(f'fit_result/{self.test_name}/history_scan2d_batch{i}_{self.out_label}.pkl', "wb") as f_history:
+                    pickle.dump(self.training_history, f_history)
+                if os.path.exists(f'fit_result/{self.test_name}/history_scan2d_batch{i-1}_{self.out_label}.pkl'):
+                    os.remove(f'fit_result/{self.test_name}/history_scan2d_batch{i-1}_{self.out_label}.pkl')
+                continue
+
             for param in self.relevant_params_list:
                 lower = ranges[param]['down']
                 upper = ranges[param]['up']
+                # LARND_SCAN_WINDOW (default unset = full ranges.py interval, bit-identical to
+                # before) narrows the grid to nom*(1 +/- w) so the SAME number of steps resolves
+                # the minimum far better. Needed because the full-range grid is ~11x coarser than
+                # the likelihood width (lifetime step 10.2% of truth vs a 0.88% Fisher sigma), so
+                # the parabola vertex is an extrapolation and shifts ~2.4 points between a 3- and
+                # a 5-point fit. Cost is unchanged: it scales as steps x batches, not as the span.
+                _w = float(os.environ.get('LARND_SCAN_WINDOW', 0) or 0)
+                if _w > 0:
+                    nom = ranges[param]['nom']
+                    lower = max(nom * (1.0 - _w), ranges[param]['down'])
+                    upper = min(nom * (1.0 + _w), ranges[param]['up'])
                 param_step = (upper - lower)/(nb_steps - 1)
 
                 for iter in tqdm(range(nb_steps)):
@@ -4051,6 +5287,152 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         self.gn_warmup_iters = int(gn_warmup_iters)
         self.gn_resume_joint = gn_resume_joint
         self._fisher_cache = {}
+        # Assemble the per-batch Hessian column-by-column via HVPs. Numerically identical to
+        # jacfwd(jacrev(.)) (unit-tested to 0.0 max abs difference) but ~P times less peak
+        # memory; the jacfwd path requested 129 GB for a single 400 cm batch.
+        self._hess_via_hvp = True
+        # Optional: restrict the GN step to the STIFF eigen-subspace of the Hessian, i.e.
+        # discard components along the flattest `gn_soft_modes` directions. Measured on the
+        # 60-step runaway of job 33123555: 99.3% of the total displacement lay in the 2-D soft
+        # plane, and every individual step was a median 98% soft. 0 disables (default).
+        self.gn_soft_modes = int(os.environ.get('LARND_GN_SOFT_MODES', '0'))
+        # Curvature refresh cadence: recompute the Hessian only every Nth accepted step and
+        # reuse it in between (loss and gradient are still recomputed every step). The
+        # standalone prototype has shipped this as `--refresh` (default 5) since the start; it
+        # was never ported here, so this fitter pays a full Hessian sweep over every batch
+        # after every accepted step. Default 1 == previous behaviour exactly.
+        self.gn_refresh = max(1, int(os.environ.get('LARND_GN_REFRESH', '1')))
+        # --- Diagnosis (job gnA_*): the first LM step overshoots the sigmoid bounds by ~10x,
+        # WORST when starting closest to truth. Root cause: Marquardt/diagonal damping
+        # `A = H + lam*diag(|H_ii|)` regularizes each parameter by its OWN curvature, but the
+        # softest eigen-directions here are a MIXED (lifetime, long_diff) plane (not axis
+        # aligned) with eigenvalues spanning 3.3e3..1.3e10 (condition ~4e6). Diagonal damping
+        # leaves the off-diagonal correlation that produces the near-null combination almost
+        # untouched, so the damped solve can still return a huge step along it even though
+        # every individual diag(H_ii) looks large. All three knobs below default OFF/'diag'
+        # == exactly the pre-existing behaviour.
+        #   LARND_GN_DAMP_MODE=identity  : A = H + lam*scale*I  (scale = lambda_max(H)), i.e.
+        #                                   isotropic damping that bounds ALL directions
+        #                                   uniformly instead of per-axis.
+        #   LARND_GN_DAMP_MODE=abseig    : saddle-free Newton — replace H by
+        #                                   V diag(max(|lambda|,floor)) V^T before damping, so a
+        #                                   negative-curvature direction becomes a descent
+        #                                   direction of the same magnitude instead of an ascent
+        #                                   one. Addresses the measured INDEFINITE Hessian at the
+        #                                   init point (eig -2.51 at 1% offset), which plain
+        #                                   Marquardt damping cannot fix without also destroying
+        #                                   the step. Diagonal damping is then applied on top.
+        #   LARND_GN_LAMBDA0_SCALE=1     : seed lam at loop start as gn_lambda0 * lambda_max(H)
+        #                                   instead of the bare fitter-wide constant, so the
+        #                                   initial damping tracks the Hessian's own scale
+        #                                   (which varies by >6 orders of magnitude with offset).
+        #   LARND_GN_STEP_CAP=<float>    : hard trust-region cap on the norm-space step length
+        #                                   (post soft-mode projection); step is rescaled, not
+        #                                   the iteration rejected. 0 = off.
+        self.gn_damp_mode = os.environ.get('LARND_GN_DAMP_MODE', 'diag')
+        self.gn_lambda0_scale = os.environ.get('LARND_GN_LAMBDA0_SCALE', '0') not in ('0', '', 'false', 'False')
+        self.gn_step_cap = float(os.environ.get('LARND_GN_STEP_CAP', '0'))
+        # --- Bound-aware stepping (jobs gnD_*). The measured failure is NOT that LM takes a
+        # bad step: the oversized step DOES decrease the loss, so LM accepts it, and only then
+        # does the post-hoc saturation guard fire and revert the whole run. Backtracking never
+        # engages because it only triggers on a loss INCREASE. The sigmoid box |theta| <= 3.5
+        # is therefore an unmodelled constraint. Two standard bound-constrained-Newton pieces,
+        # both default OFF (0 == exactly the pre-existing behaviour):
+        #   LARND_GN_BOUND_TR=<tau>  fraction-to-boundary: scale the step by the largest
+        #                            alpha <= 1 that keeps every |theta_j + alpha*step_j| <=
+        #                            tau*bound. Unlike LARND_GN_STEP_CAP this is scale-free and
+        #                            caps exactly the quantity the guard measures. Typical 0.95.
+        #   LARND_GN_ACTIVE_SET=1    active-set reduction: a coordinate already pressed against
+        #                            its bound whose step pushes it further OUT is removed from
+        #                            the solve and the Newton system re-solved on the remaining
+        #                            free block. Without this, fraction-to-boundary drives
+        #                            alpha->0 the moment one param parks at a bound and stalls
+        #                            the whole step. This is the saturation-aware replacement
+        #                            for rank-based LARND_GN_SOFT_MODES: it targets the
+        #                            directions that are actually blocked rather than the ones
+        #                            that merely have small eigenvalues (measured at the init
+        #                            point, those two sets coincide only within ~5% of truth).
+        #   LARND_GN_BOUND=<x>       the box half-width; must match the saturation guard (3.5).
+        # LARND_GN_STALL_PATIENCE=<K>: how many CONSECUTIVE iterations may fail to find a loss
+        # decrease before the loop gives up. 1 == exactly the pre-existing behaviour (terminate on
+        # the first stall). >1 refreshes loss/grad/Hessian and retries with lambda knocked back
+        # down, which recovers runs killed by a noise-level stall — see the long comment at the
+        # stall site for the two-run measurement that motivates this.
+        self.gn_stall_patience = max(1, int(os.environ.get('LARND_GN_STALL_PATIENCE', '1')))
+        self.gn_bound_tr = float(os.environ.get('LARND_GN_BOUND_TR', '0'))
+        self.gn_active_set = os.environ.get('LARND_GN_ACTIVE_SET', '0') not in ('0', '', 'false', 'False')
+        self.gn_bound = float(os.environ.get('LARND_GN_BOUND', '3.5'))
+
+    def _bounded_step(self, A, g, theta):
+        """Solve A step = -g subject to the sigmoid box |theta| <= gn_bound.
+
+        Returns (step, n_blocked). With both knobs off this is exactly `-solve(A, g)`.
+
+        Active set: iteratively drop coordinates that sit at a bound and whose Newton
+        component points further outward, re-solving the reduced system each time (at most
+        len(g) drops, so the loop always terminates). Then fraction-to-boundary rescales
+        the surviving step so it stops just short of the box face.
+        """
+        n = len(g)
+        free = np.ones(n, dtype=bool)
+        step = np.zeros(n)
+        lim = self.gn_bound
+        at_bound = np.abs(theta) >= (self.gn_bound_tr if self.gn_bound_tr > 0 else 1.0) * lim
+
+        for _ in range(n + 1):
+            step = np.zeros(n)
+            idx = np.where(free)[0]
+            if idx.size == 0:
+                break
+            step[idx] = -np.linalg.solve(A[np.ix_(idx, idx)], g[idx])
+            if not self.gn_active_set:
+                break
+            # Blocked = free, already against the bound, and pushed further out.
+            blocked = free & at_bound & (np.sign(step) == np.sign(theta)) & (step != 0.0)
+            if not blocked.any():
+                break
+            free = free & ~blocked
+
+        return step, int(n - free.sum())
+
+    def _frac_to_boundary(self, step, theta):
+        """Rescale `step` by the largest alpha <= 1 keeping every |theta_j + alpha*step_j|
+        inside gn_bound_tr*gn_bound. Applied LAST — after soft-mode projection and the norm
+        cap — since either of those can push an already-safe step back out of the box.
+        Returns `step` unchanged when the knob is off."""
+        if self.gn_bound_tr <= 0:
+            return step
+        step = np.array(step, dtype=float, copy=True)
+        edge = self.gn_bound_tr * self.gn_bound
+        _pre = float(np.linalg.norm(step))
+        # A coordinate that is ALREADY at/outside the edge and is pushed further out admits no
+        # positive alpha. Scaling the whole step by that alpha (<=0) would zero every other
+        # coordinate too — a silent stall. Zero only the offending component and keep the rest
+        # of the Newton direction. (With LARND_GN_ACTIVE_SET=1 these are dropped from the solve
+        # already, so this is the standalone-safety branch.)
+        _pinned = []
+        for j in range(len(step)):
+            if step[j] == 0.0:
+                continue
+            if abs(theta[j]) >= edge and np.sign(step[j]) == np.sign(theta[j]):
+                step[j] = 0.0
+                _pinned.append(j)
+        alpha = 1.0
+        for j in range(len(step)):
+            if step[j] == 0.0:
+                continue
+            if abs(theta[j] + step[j]) > edge:
+                face = edge if step[j] > 0 else -edge
+                _a = (face - theta[j]) / step[j]
+                if _a < alpha:
+                    alpha = max(_a, 0.0)
+        if alpha < 1.0:
+            step = step * alpha
+        if alpha < 1.0 or _pinned:
+            logger.info(f"[GN-BOUNDTR] fraction-to-boundary alpha={alpha:.4g} (edge {edge:.3g})"
+                        + (f", pinned coords {_pinned}" if _pinned else "")
+                        + f": |step| {_pre:.4g} -> {np.linalg.norm(step):.4g}")
+        return step
 
     def _preload(self, dataloader_sim, target):
         cache = []
@@ -4085,14 +5467,36 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         for i in sorted(set(list(dedx.keys()) + list(chain.keys()))):
             ld = jnp.asarray(dedx[i]['log_dedx']) if i in dedx else None
             pi = jnp.asarray(np.asarray(pids[i]), dtype=jnp.int32) if i in pids else None
+            # `parent_ids` is stored padded to max(batch_nsteps) over the batch set that the
+            # ORIGINAL run loaded (dataio.py:419). A run that loads fewer/shorter batches pads
+            # to a smaller max, so the stored vector is longer than this run's tracks array and
+            # the gather at ~line 1905 fails to broadcast. Batch composition is deterministic and
+            # independent of max_nbatch -- only the pad length differs -- so truncating is exact.
+            # The assertion refuses to drop anything that is not padding.
+            if pi is not None and i < len(dataloader_sim):
+                _cur = int(dataloader_sim[i].shape[0])
+                if _cur < int(pi.shape[0]):
+                    _dropped_real = int(jnp.sum(pi[_cur:] >= 0))
+                    if _dropped_real:
+                        raise ValueError(
+                            f"batch {i}: truncating parent_ids {int(pi.shape[0])}->{_cur} would "
+                            f"drop {_dropped_real} REAL segments - refusing (config mismatch)")
+                    pi = pi[:_cur]
             an = [jnp.asarray(s['angles']) for s in chain[i]] if i in chain else None
-            # cross-check restored angles against rebuilt chain contexts
+            # cross-check restored coefficients against rebuilt chain contexts. The expected
+            # count is basis-dependent: the angle basis stores 2*n_chain (theta,phi per node),
+            # the spline basis stores 2*K sine-mode coefficients with K=_spline_K(total_len).
             if an is not None and i in self._batch_chain_contexts:
-                ncs = [int(c.n_chain) for c in self._batch_chain_contexts[i]]
+                ctxs = self._batch_chain_contexts[i]
+                if self._chain_basis == 'spline':
+                    exp = [2 * _spline_K(c.total_len, self._chain_spline_knot_cm) for c in ctxs]
+                else:
+                    exp = [2 * int(c.n_chain) for c in ctxs]
                 got = [int(a.shape[0]) for a in an]
-                if [2 * n for n in ncs] != got:
-                    raise ValueError(f"batch {i}: checkpoint chain angles {got} do not match "
-                                     f"rebuilt contexts {[2*n for n in ncs]} — input data/config mismatch")
+                if exp != got:
+                    raise ValueError(f"batch {i}: checkpoint chain coefficients {got} do not match "
+                                     f"rebuilt contexts {exp} for basis '{self._chain_basis}' "
+                                     f"— input data/config mismatch")
             self._joint_fixed[i] = (ld, pi, an)
         logger.info(f"[GN-JOINT] restored {path}: calibration params + dEdx for {len(dedx)} "
                     f"batches + chain angles for {len(chain)} batches (all frozen)")
@@ -4195,23 +5599,40 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         self._fisher_cache[cache_key] = fn
         return fn
 
-    def _full_batch_lgh(self, cache):
+    def _full_batch_lgh(self, cache, with_hess=True):
+        """Accumulate loss, gradient and (optionally) Hessian over all cached batches.
+
+        with_hess=False returns H=None and skips the curvature work entirely -- used by the
+        refresh cadence to reuse a stale Hessian between recomputes. Default True preserves
+        the original behaviour for every existing caller.
+        """
         rl = self.relevant_params_list
         n = len(rl)
         tot = 0.0
         g = np.zeros(n)
-        H = np.zeros((n, n))
+        H = np.zeros((n, n)) if with_hess else None
         use_ggn = (self.gn_curvature == 'ggn')
+        _t0 = time() if _GN_PROFILE else None
         for (i, st, ref) in cache:
+            _tb0 = time() if _GN_PROFILE else None
             lv, grads, _, _, _, hess, _ = self.compute_loss(
-                st, i, *ref, with_loss=True, with_grad=True, with_hess=not use_ggn,
+                st, i, *ref, with_loss=True, with_grad=True,
+                with_hess=(with_hess and not use_ggn),
                 **self._nuis(i))
             tot += float(lv)
             g += np.array([float(getattr(grads, k)) for k in rl])
-            if use_ggn:
-                H += np.asarray(self._get_fisher_fn(i, st)(self._x5(), st))
-            else:
-                H += np.array([[float(getattr(getattr(hess, ka), kb)) for kb in rl] for ka in rl])
+            if with_hess:
+                if use_ggn:
+                    H += np.asarray(self._get_fisher_fn(i, st)(self._x5(), st))
+                else:
+                    H += np.array([[float(getattr(getattr(hess, ka), kb)) for kb in rl] for ka in rl])
+            if _GN_PROFILE:
+                logger.info(f"[GN-PROF] batch {i}: {time() - _tb0:.2f}s  "
+                            f"peak_mem {_gn_mem_peak():.2f} GiB  with_hess={with_hess and not use_ggn}")
+        if _GN_PROFILE:
+            logger.info(f"[GN-PROF] full sweep (with_hess={with_hess}, curvature={self.gn_curvature}, "
+                        f"nbatch={len(cache)}): {time() - _t0:.2f}s total, "
+                        f"peak_mem {_gn_mem_peak():.2f} GiB")
         return tot, g, H
 
     def _validate_fisher(self, cache):
@@ -4523,26 +5944,93 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
         loss, g, H = self._full_batch_lgh(cache)
         self._log_iter(loss, g)
         logger.info(f"GN init: loss {loss:.6f}  |g| {np.linalg.norm(g):.3e}  curvature={self.gn_curvature}")
+        # Diagnostics (cheap, always on): spectrum of the raw Hessian at the loop's entry
+        # point, to characterise the ill-conditioning / mixed-mode structure driving the
+        # oversized first step (see __init__ docstring for the env knobs that address it).
+        _w0 = np.linalg.eigvalsh(0.5 * (H + H.T))
+        logger.info(f"GN init Hessian: eig {np.array2string(_w0, precision=3)}  "
+                    f"diag {np.array2string(np.diag(H), precision=3)}  "
+                    f"cond {(_w0.max()/max(abs(_w0.min()),1e-300)):.3e}")
+        if self.gn_lambda0_scale:
+            lam = float(self.gn_lambda0) * float(np.abs(_w0).max())
+            logger.info(f"[GN-LAMBDA0] scaling lam0 by lambda_max(H)={np.abs(_w0).max():.3e} -> lam={lam:.3e}")
 
         last_snorm = np.inf
+        _stall = 0          # consecutive non-improving iterations (see gn_stall_patience)
         for it in range(self.gn_max_iter):
             Hs = 0.5 * (H + H.T)
+            if self.gn_damp_mode == 'abseig':
+                # Saddle-free Newton: replace Hs by V diag(max(|lambda|, floor)) V^T. The exact
+                # Hessian at the toy's init point is INDEFINITE (measured eigenvalue -2.51 at 1%
+                # offset), so along its negative-curvature eigenvector the Newton step ASCENDS.
+                # Marquardt damping can only cure that by growing lam until the sign flips, which
+                # is also the regime where the step is too short to be useful — hence damping
+                # alone cannot separate "wrong direction" from "too long". Flipping the sign of
+                # negative eigenvalues keeps the magnitude of the curvature information (so the
+                # step stays Newton-scaled) while guaranteeing a descent direction.
+                _w, _V = np.linalg.eigh(Hs)
+                _flr = 1e-8 * max(float(np.abs(_w).max()), 1.0)
+                _wf = np.maximum(np.abs(_w), _flr)
+                _nneg = int((_w < 0).sum())
+                Hs = (_V * _wf) @ _V.T
+                if _nneg:
+                    logger.info(f"[GN-ABSEIG] flipped {_nneg} negative eigenvalue(s) "
+                                f"(raw eig {np.array2string(_w, precision=3)})")
             dscale = np.abs(np.diag(Hs))
             # Floor the Marquardt scaling: directions with ~zero curvature (e.g. a param
             # saturating its sigmoid bound) must still be damped, otherwise the solve
             # shoots unbounded steps along the flat direction.
             dfloor = 1e-6 * max(dscale.max(), 1.0)
             dscale = np.maximum(dscale, dfloor)
+            # Isotropic alternative to Marquardt/diagonal damping: add lam*lambda_max(Hs)*I
+            # instead of lam*diag(|H_ii|). Diagonal damping regularizes each parameter by its
+            # OWN curvature and leaves near-null MIXED eigen-directions (large off-diagonal
+            # correlation, e.g. the measured (lifetime, long_diff) plane) almost untouched even
+            # when every individual H_ii looks large; isotropic damping bounds every direction,
+            # including mixed ones, by construction. See __init__ for the env knob.
+            if self.gn_damp_mode == 'identity':
+                _iso_scale = max(float(np.abs(np.linalg.eigvalsh(Hs)).max()), dfloor)
 
             accepted = False
             step = np.zeros(len(rl))
             for _bt in range(self.gn_max_backtrack):
-                A = Hs + lam * np.diag(dscale)
+                if self.gn_damp_mode == 'identity':
+                    A = Hs + (lam * _iso_scale) * np.eye(len(rl))
+                else:
+                    A = Hs + lam * np.diag(dscale)
                 try:
-                    step = -np.linalg.solve(A, g)
+                    _theta = np.array([float(getattr(self.norm_params, k)) for k in rl])
+                    step, _nblk = self._bounded_step(A, g, _theta)
+                    if _nblk:
+                        logger.info(f"[GN-ACTIVESET] {_nblk} coordinate(s) blocked at the bound; "
+                                    f"solved on the free {len(rl) - _nblk}-D block")
                 except np.linalg.LinAlgError:
                     lam *= self.gn_lambda_up
                     continue
+                if self.gn_soft_modes > 0:
+                    # Remove the components of the step along the flattest eigenvectors of the
+                    # (symmetrised) Hessian. These are the near-degenerate directions along
+                    # which the loss decreases almost freely, so LM's loss-based accept test
+                    # cannot police them.
+                    _w, _V = np.linalg.eigh(0.5 * (Hs + Hs.T))
+                    _soft = _V[:, :self.gn_soft_modes]              # eigh returns ascending
+                    _before = float(np.linalg.norm(step))
+                    step = step - _soft @ (_soft.T @ step)
+                    logger.info(f"[GN-PROJ] dropped {self.gn_soft_modes} soft mode(s) "
+                                f"(lambda_soft={_w[:self.gn_soft_modes]}): "
+                                f"|step| {_before:.4g} -> {np.linalg.norm(step):.4g}")
+                if self.gn_step_cap > 0:
+                    # Hard trust-region cap on the norm-space step length: rescale (don't
+                    # reject) an oversized step. Backstops the damping solve directly against
+                    # the measured failure mode (a single LM step landing at norm-space
+                    # distance ~9-46 when the sigmoid bound is at |theta|~3.5) regardless of
+                    # which damping scheme produced it.
+                    _snorm_pre = float(np.linalg.norm(step))
+                    if _snorm_pre > self.gn_step_cap:
+                        step = step * (self.gn_step_cap / _snorm_pre)
+                        logger.info(f"[GN-STEPCAP] |step| {_snorm_pre:.4g} -> "
+                                    f"{np.linalg.norm(step):.4g} (cap {self.gn_step_cap:.4g})")
+                step = self._frac_to_boundary(step, _theta)
                 saved = self.norm_params
                 self.apply_updates('norm_params',
                                    {k: jnp.array(step[j], dtype=jnp.float32) for j, k in enumerate(rl)})
@@ -4566,10 +6054,32 @@ class GaussNewtonCalibFitter(GradientDescentFitter):
                     logger.info(f"GN iter {it}: no decrease after backtracking with tiny last step "
                                 f"(|step| {last_snorm:.2e}) — converged at the numerical floor.")
                     return 'converged'
+                # A STALL IS NOT PROOF OF CONVERGENCE. Measured on two runs of an identical
+                # config at offset 0.05: at iter 1 the available improvement (~2e-4) was the same
+                # size as the loss's run-to-run reproducibility (~5e-4). One run got a favourable
+                # rounding, accepted a |step|=2.8e-07 no-op, and went on to reach loss 1995; the
+                # other found no decrease, escalated lam 8x to 2.18e+02 and terminated for good
+                # with 5584 -> 1939 of progress still on the table. Once lam is that large the
+                # step is tiny and the loss delta sits under the noise, so further backtracking
+                # cannot help — but a FRESH curvature/gradient evaluation can (that is precisely
+                # what the surviving run stumbled into). Retry up to gn_stall_patience times,
+                # re-solving from a re-evaluated landscape with lam knocked back down.
+                _stall += 1
+                if _stall < self.gn_stall_patience:
+                    lam = max(lam / (self.gn_lambda_up ** self.gn_max_backtrack), float(self.gn_lambda0))
+                    loss, g, H = self._full_batch_lgh(cache)
+                    logger.info(f"GN iter {it}: no decrease after backtracking; STALL "
+                                f"{_stall}/{self.gn_stall_patience} — refreshing curvature and "
+                                f"retrying with lambda {lam:.2e} (loss {loss:.6f}).")
+                    continue
                 logger.info(f"GN iter {it}: no decrease after backtracking (lambda {lam:.2e}); stopping.")
                 return 'stalled'
+            _stall = 0
 
-            loss, g, H = self._full_batch_lgh(cache)
+            if self.gn_refresh > 1 and ((it + 1) % self.gn_refresh) != 0:
+                loss, g, _ = self._full_batch_lgh(cache, with_hess=False)   # reuse stale H
+            else:
+                loss, g, H = self._full_batch_lgh(cache)
             self._log_iter(loss, g)
             snorm = float(np.linalg.norm(step))
             last_snorm = snorm
