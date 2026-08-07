@@ -60,6 +60,16 @@ SCIDEDXFF=${SCIDEDXFF:-}
 # dEdx mean-constraint TARGET (the value <dEdx> is pinned to). Distinct from SCIMEANW, which is
 # how hard it is pinned. Deliberately mis-setting this is the dedx-mean bias study.
 SCIDMEANTGT=${SCIDMEANTGT:-1.887}
+# Split student-t prior SHAPE. Defaults reproduce the previous hardcoded values exactly. These
+# parameters describe the true per-segment dEdx distribution AT A GIVEN SEGMENTATION and are not
+# transferable between grids: the defaults below are the MLE optimum on the TARGET file's
+# segmentation (dx 2.32 cm) and are badly mismatched on the guess file's (dx 0.99 cm), where the
+# true spread is 1.6x narrower. See fig 48(j).
+SCIDXNUL=${SCIDXNUL:-4.785}
+SCIDXNUR=${SCIDXNUR:-2.073}
+SCIDXSL=${SCIDXSL:-0.1204}
+SCIDXSR=${SCIDXSR:-0.1058}
+SCIDXLOC=${SCIDXLOC:-}
 
 # Chain position settings (only used when SCIMODE=full)
 CHAIN_LR=${SCICLR:-1e-4}
@@ -108,6 +118,7 @@ _KNOBTAG=""
 [ -n "${SCIDEDXFF}" ]           && _KNOBTAG="${_KNOBTAG}_dff${SCIDEDXFF}"
 [ "${SCIDEDXLR:-1e-2}" != "1e-2" ] && _KNOBTAG="${_KNOBTAG}_dlr${SCIDEDXLR}"
 [ -n "${SCIDEDXFREEZE}" ]       && _KNOBTAG="${_KNOBTAG}_dfz${SCIDEDXFREEZE}"
+[ "${SCIDXNUL}" != "4.785" ]    && _KNOBTAG="${_KNOBTAG}_refit"
 LABEL=sci_${SCIMODE}_b${MAX_NBATCH}_len${MAX_BATCH_LEN}${_KNOBTAG}_seed${SEED}
 
 mkdir -p /sdf/group/neutrino/pgranger/larnd-sim-jax/logs/sci_case
@@ -163,10 +174,11 @@ python3 -m optimize.example_run \
     --dedx_freeze_iter ${DEDX_FREEZE_ITER} \
     --dedx_prior_weight ${DEDX_PRIOR_WEIGHT} \
     --dedx_use_split_t True \
-    --dedx_student_nu_l 4.785 \
-    --dedx_student_nu_r 2.073 \
-    --dedx_student_scale_l 0.1204 \
-    --dedx_student_scale_r 0.1058 \
+    --dedx_student_nu_l ${SCIDXNUL} \
+    --dedx_student_nu_r ${SCIDXNUR} \
+    --dedx_student_scale_l ${SCIDXSL} \
+    --dedx_student_scale_r ${SCIDXSR} \
+    ${SCIDXLOC:+--dedx_student_loc ${SCIDXLOC}} \
     --dedx_soft_barrier_threshold 8.5 \
     --dedx_soft_barrier_weight 1.0 \
     --dedx_mean_constraint_weight ${SCIMEANW} \
