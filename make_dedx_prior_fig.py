@@ -40,6 +40,7 @@ different parameters and the glue and normalisation have to be redone. The numer
 up to the grid and avoids re-deriving that normaliser.
 """
 import glob, os, pickle
+from scipy.optimize import minimize
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -126,7 +127,7 @@ print(f'true field width {wt:.4f}   fitted field width {wf:.4f}   ratio {wf/wt:.
 print(f'weight at which the prior is exactly as wide as truth: {w_match:.2f}')
 print(f'  (loss-based crossover, independently, fig 46f: {LOSS_CROSSOVER:.2f})')
 
-fig, ax = plt.subplots(2, 4, figsize=(21.4, 8.8))
+fig, ax = plt.subplots(3, 4, figsize=(21.4, 13.4))
 
 # ---------------- (a) the three distributions ----------------
 a = ax[0, 0]
@@ -298,12 +299,114 @@ a.set_title('(h) CONFIRMED on two complete 3-seed ceiling arrays:\n'
 h1, l1 = a.get_legend_handles_labels(); h2, l2 = a2.get_legend_handles_labels()
 a.legend(h1 + h2, l1 + l2, fontsize=7.0, frameon=False, loc='upper center')
 
-fig.suptitle('Fig 48 — the dE/dx prior over-shrinks: the SHAPE is fine, the WEIGHT is not. As '
-             'written the prior is wider than truth;\nas applied (×5, length-weighted) it is '
-             'narrower, and the fitted field collapses to '
-             f'{100*wf/wt:.0f}% of the true spread, and its mean slides ~1% low. '
-             'Both are fixed by the same knob (h).', fontsize=10.4)
-fig.tight_layout(rect=[0, 0, 1, .92])
+
+# ================= (i) (j) (k): recalibrating rather than re-weighting =================
+# Tempering has ONE knob; the prior has four parameters. Matching the width with beta breaks the
+# mean (panel g). Refitting the split-t to the true field fixes both at beta = 1.
+def refit_split_t(T, p0=(4.785, 2.073, 1.874, 0.1204, 0.1058)):
+    def nll(q):
+        if min(q[0], q[1]) <= 2.02 or min(q[3], q[4]) <= 1e-4:
+            return 1e12
+        v = split_t_logpdf(T, q[0], q[1], q[2], q[3], q[4])
+        return -np.mean(v) if np.all(np.isfinite(v)) else 1e12
+    r = minimize(nll, p0, method='Nelder-Mead',
+                 options=dict(maxiter=60000, maxfev=60000, xatol=1e-7, fatol=1e-10))
+    return r.x, -r.fun
+
+
+def true_field(tag):
+    T, D = [], []
+    for f in sorted(glob.glob(f'fit_result/{tag}/history_iter10000_*.pkl')):
+        h = pickle.load(open(f, 'rb'))
+        tm, sd = h['true_dedx_matched_cache'], h['seg_dx_cache']
+        for b in sorted(tm):
+            tv = np.asarray(tm[b], float); dv = np.asarray(sd[b], float)
+            m = min(len(tv), len(dv)); tv, dv = tv[:m], dv[:m]
+            ok = np.isfinite(tv) & (tv > 0)
+            T.append(tv[ok]); D.append(dv[ok])
+    return np.concatenate(T), np.concatenate(D)
+
+
+CUR = (par['nu_L'], par['nu_R'], par['loc'], par['s_L'], par['s_R'])
+P_REFIT, LL_REFIT = refit_split_t(TRU)
+LL_CUR = split_t_logpdf(TRU, *CUR).mean()
+print(f'refit on the production grid: nu_L {P_REFIT[0]:.3f} nu_R {P_REFIT[1]:.3f} '
+      f'loc {P_REFIT[2]:.4f} s_L {P_REFIT[3]:.4f} s_R {P_REFIT[4]:.4f}')
+print(f'  log-density/segment  current {LL_CUR:+.4f} -> refit {LL_REFIT:+.4f}  (+{LL_REFIT-LL_CUR:.4f})')
+
+# ---------------- (i) the refit ----------------
+a = ax[2, 0]
+a.hist(TRU, bins=bins, density=True, color=C['green'], alpha=.55, label='TRUE field')
+lp_ref = split_t_logpdf(grid, *P_REFIT)
+a.plot(grid[sel], np.exp(lp_ref)[sel], color=C['ink'], lw=2.6,
+       label=f'REFIT prior, $\\beta$=1  (w = 1/dx = {1/np.median(DX):.2f})')
+a.plot(grid[sel], np.exp(lp)[sel], color=C['grey'], lw=2.0, ls='--', label='current prior, $\\beta$=1')
+d5 = np.exp(w_eff * (lp - lp.max())); d5 /= np.trapezoid(d5, grid)
+a.plot(grid[sel], d5[sel], color=C['red'], lw=2.0, label=f'current prior AS APPLIED ($\\beta$={w_eff:.1f})')
+a.set_xlabel('per-segment dE/dx  (MeV/cm)'); a.set_ylabel('density')
+a.set_title('(i) REFITTING beats re-weighting: at $\\beta$=1 the refit\n'
+            'matches the true width AND mean, which no $\\beta$ can', fontsize=9.3)
+a.legend(fontsize=6.8, frameon=False)
+
+# ---------------- (j) the grid mismatch — the actual diagnosis ----------------
+a = ax[2, 1]
+GRIDS = [('sci_full_ANNEALLONG2', 'production\n(guess file)\ndx = 0.99 cm', C['blue']),
+         ('sci_ceiling_CEILBASE', 'ceiling\n(target file)\ndx = 2.32 cm', C['green'])]
+gw, gg = [], []
+for tag, lab, col in GRIDS:
+    T, D = true_field(tag)
+    pr, ll = refit_split_t(T)
+    gw.append(((np.percentile(T, 84.135) - np.percentile(T, 15.865)) / 2, lab, col))
+    gg.append(ll - split_t_logpdf(T, *CUR).mean())
+xs3 = np.arange(len(GRIDS))
+a.bar(xs3 - .19, [g[0] for g in gw], width=.36, color=[g[2] for g in gw], edgecolor='white',
+      label='TRUE spread on this grid')
+a.bar(xs3 + .19, [rwidth(grid, np.exp(lp - lp.max()))] * len(GRIDS), width=.36,
+      color=C['grey'], edgecolor='white', label='the CURRENT prior')
+for k, g_ in enumerate(gw):
+    a.annotate(f'{g_[0]:.4f}', (k - .19, g_[0]), textcoords='offset points', xytext=(0, 4),
+               ha='center', fontsize=7.4)
+    a.annotate(f'refit gains\n{gg[k]:+.4f} nat', (k + .19, rwidth(grid, np.exp(lp - lp.max())) * .5),
+               ha='center', va='center', fontsize=7.4, color='white',
+               fontweight='bold' if gg[k] > 0.01 else 'normal')
+a.set_xticks(xs3); a.set_xticklabels([g[1] for g in gw], fontsize=7.4)
+a.set_ylabel('16–84% half-width')
+a.set_ylim(0, rwidth(grid, np.exp(lp - lp.max())) * 1.28)
+a.set_title('(j) THE DIAGNOSIS: the prior is right — for the OTHER\n'
+            'grid. On the target grid refitting gains nothing.', fontsize=9.3)
+a.legend(fontsize=7.2, frameon=False, loc='upper left')
+
+# ---------------- (k) ranking the options ----------------
+a = ax[2, 2]
+OPTS = []
+for lab, beta, prm, col in [(f'current, as applied\n($\\beta$={w_eff:.1f}, w=5)', w_eff, CUR, C['red']),
+                            ('current, w = 0.5', 0.5 * np.median(DX), CUR, C['purple']),
+                            (f'current, width-matched\n($\\beta$={w_match:.1f})', w_match, CUR, C['orange']),
+                            ('current, $\\beta$ = 1\n(w = 1/dx)', 1.0, CUR, C['grey']),
+                            ('REFIT, $\\beta$ = 1', 1.0, tuple(P_REFIT), C['green'])]:
+    lpg = split_t_logpdf(grid, *prm)
+    logZ = np.log(np.trapezoid(np.exp(beta * (lpg - lpg.max())), grid)) + beta * lpg.max()
+    OPTS.append((lab, float((beta * split_t_logpdf(TRU, *prm) - logZ).mean()), col))
+ys3 = np.arange(len(OPTS))
+a.barh(ys3, [o[1] for o in OPTS], color=[o[2] for o in OPTS], edgecolor='white', height=.62)
+for k, o in enumerate(OPTS):
+    a.text(o[1] + (0.02 if o[1] >= 0 else -0.02), k, f'{o[1]:+.3f}', va='center',
+           ha='left' if o[1] >= 0 else 'right', fontsize=7.6)
+a.axvline(0, color=C['ink'], lw=1.4)
+a.set_yticks(ys3); a.set_yticklabels([o[0] for o in OPTS], fontsize=7.0)
+a.invert_yaxis()
+a.set_xlabel('mean log-density assigned to the TRUE field  (higher = better prior)')
+a.set_title('(k) ranking every option on the same scale.\n'
+            'Production is the WORST of the five.', fontsize=9.3)
+
+ax[2, 3].axis('off')
+
+fig.suptitle('Fig 48 — the dE/dx prior is CORRECT FOR THE WRONG SEGMENTATION. It matches the true '
+             'spread on the target grid (dx 2.32 cm)\nbut is applied on the guess grid (dx 0.99 cm), '
+             f'where truth is 1.6× narrower. Weight 5 then over-corrects: the field collapses to '
+             f'{100*wf/wt:.0f}% of the true spread\nand its mean slides ~1% low. Re-weighting '
+             'trades one harm for the other (g); refitting fixes both (i, k).', fontsize=10.2)
+fig.tight_layout(rect=[0, 0, 1, .945])
 os.makedirs(OUT, exist_ok=True)
 fig.savefig(f'{OUT}/fig48_dedx_prior_shrinkage.png'); plt.close(fig)
 print('wrote', f'{OUT}/fig48_dedx_prior_shrinkage.png')
