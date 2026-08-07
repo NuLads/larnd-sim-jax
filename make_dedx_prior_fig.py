@@ -34,6 +34,7 @@ plt.rcParams.update({'font.size': 9, 'axes.grid': True, 'grid.alpha': .25,
                      'axes.spines.top': False, 'axes.spines.right': False,
                      'figure.dpi': 130, 'savefig.bbox': 'tight'})
 LOSS_CROSSOVER = 2.373       # from fig 46(f): where the objective stops preferring the fit
+MEAN_TARGET = 1.887          # dedx_mean_constraint_target, the OTHER dEdx prior
 
 
 def split_t_logpdf(x, nu_L, nu_R, loc, s_L, s_R):
@@ -104,7 +105,7 @@ print(f'true field width {wt:.4f}   fitted field width {wf:.4f}   ratio {wf/wt:.
 print(f'weight at which the prior is exactly as wide as truth: {w_match:.2f}')
 print(f'  (loss-based crossover, independently, fig 46f: {LOSS_CROSSOVER:.2f})')
 
-fig, ax = plt.subplots(2, 3, figsize=(16.4, 8.8))
+fig, ax = plt.subplots(2, 4, figsize=(21.4, 8.8))
 
 # ---------------- (a) the three distributions ----------------
 a = ax[0, 0]
@@ -201,10 +202,86 @@ a.set_title('(f) a UNIFORM compression toward the centre, not a\n'
             'tail artefact — every quantile moves by the same factor', fontsize=9.3)
 a.legend(fontsize=7.4, frameon=False, loc='upper left')
 
+# ---------------- (g) the SECOND harm: the mean moves too ----------------
+# Powering an ASYMMETRIC density changes its mean, not just its width. nu_R = 2.073 gives a heavy
+# right tail that p^w suppresses faster than the left branch, so the prior's mean slides DOWN as w
+# rises. This is a distinct defect from the over-shrinkage of panels (a)-(f).
+a = ax[0, 3]
+MU = np.array([float(np.trapezoid(grid * np.exp(np.float64(w) * (lp - lp.max())), grid) /
+                     np.trapezoid(np.exp(np.float64(w) * (lp - lp.max())), grid)) for w in WS])
+mu_true = float(np.sum(TRU * DX) / np.sum(DX)) if len(DX) == len(TRU) else float(TRU.mean())
+mu_fit = float(np.sum(FIT * DX) / np.sum(DX)) if len(DX) == len(FIT) else float(FIT.mean())
+a.plot(WS, MU, color=C['red'], lw=2.6, label="student-t mean under $p(x)^w$")
+a.axhline(mu_true, color=C['green'], lw=2.2, label=f'TRUE mean  {mu_true:.4f}')
+a.axhline(MEAN_TARGET, color=C['orange'], lw=1.8, ls=':',
+          label=f'mean-constraint target  {MEAN_TARGET:.4f}')
+a.axhline(mu_fit, color=C['blue'], lw=2.0, ls='--', label=f'FITTED mean  {mu_fit:.4f}')
+a.axvline(w_eff, color=C['ink'], lw=1.8)
+a.annotate(f'  production\n  w = {par["w"]:.0f}', (w_eff, 1.8575), fontsize=7.4, va='bottom')
+a.axvline(0.5, color=C['purple'], lw=1.6, ls=':')
+a.set_xscale('log')
+# The prior's mean blows up below w ~ 0.5 (the nu_R = 2.07 tail stops being suppressed and the
+# mean runs away toward the tail). Zoom on the region the fit actually lives in; the curve leaves
+# the frame at the top left and that is not the interesting part.
+a.set_ylim(1.855, 1.900)
+a.set_xlabel('dE/dx prior weight $w$')
+a.set_ylabel('mean of the prior / of the field')
+a.set_title('(g) the SECOND harm: powering an ASYMMETRIC density\n'
+            'also moves its MEAN. The two priors pull opposite ways.', fontsize=9.3)
+a.legend(fontsize=6.8, frameon=False, loc='upper right')
+
+# ---------------- (h) the empirical confirmation ----------------
+# Two COMPLETE 3-seed ceiling arrays differing in exactly one knob. Widths are compared as
+# fitted/true RATIOS within each run, never in absolute terms: the ceiling grid is the target's own
+# segmentation (median dx 2.32 cm) while production uses the guess file's (0.99 cm), so the two
+# have different true per-segment spreads and absolute widths are not comparable across them.
+a = ax[1, 3]
+CE = []
+for tag, wlab in [('sci_ceiling_CEILBASE', 'prior 5\n(production)'),
+                  ('sci_ceiling_CEILP05', 'prior 0.5\n(default)')]:
+    mus, wds, tmus, twds = [], [], [], []
+    for f in sorted(glob.glob(f'fit_result/{tag}/history_iter10000_*.pkl')):
+        h = pickle.load(open(f, 'rb'))
+        dc, tm, sd = h['dedx_cache'], h['true_dedx_matched_cache'], h['seg_dx_cache']
+        F, T, D = [], [], []
+        for b in sorted(dc):
+            fv = np.exp(np.asarray(dc[b]['log_dedx'], float))
+            tv = np.asarray(tm[b], float); dv = np.asarray(sd[b], float)
+            m = min(len(fv), len(tv), len(dv)); fv, tv, dv = fv[:m], tv[:m], dv[:m]
+            ok = np.isfinite(tv) & (tv > 0)
+            F.append(fv[ok]); T.append(tv[ok]); D.append(dv[ok])
+        F, T, D = np.concatenate(F), np.concatenate(T), np.concatenate(D)
+        mus.append(100 * ((np.sum(F * D) / np.sum(D)) / (np.sum(T * D) / np.sum(D)) - 1))
+        wds.append(rwidth(F) / rwidth(T))
+    CE.append((wlab, np.array(mus), np.array(wds)))
+xs2 = np.arange(len(CE))
+a.bar(xs2 - .19, [abs(c[1].mean()) for c in CE],
+      yerr=[c[1].std(ddof=1) for c in CE], width=.36, color=C['orange'], edgecolor='white',
+      capsize=4, label='|mean error| vs truth (%)')
+a2 = a.twinx()
+a2.bar(xs2 + .19, [c[2].mean() for c in CE], yerr=[c[2].std(ddof=1) for c in CE],
+       width=.36, color=C['green'], edgecolor='white', capsize=4,
+       label='width recovered / true')
+a2.axhline(1.0, color=C['ink'], lw=1.6, ls='--')
+a2.set_ylabel('fraction of the true spread recovered'); a2.grid(False)
+a2.set_ylim(0, 1.15)
+for k, c in enumerate(CE):
+    a.annotate(f'{abs(c[1].mean()):.3f}%', (k - .19, abs(c[1].mean())), textcoords='offset points',
+               xytext=(0, 4), ha='center', fontsize=7.4)
+    a2.annotate(f'{c[2].mean():.2f}', (k + .19, c[2].mean()), textcoords='offset points',
+                xytext=(0, 4), ha='center', fontsize=7.4)
+a.set_xticks(xs2); a.set_xticklabels([c[0] for c in CE], fontsize=8)
+a.set_ylabel('|mean error| vs truth (%)')
+a.set_title('(h) CONFIRMED on two complete 3-seed ceiling arrays:\n'
+            'one knob fixes BOTH harms', fontsize=9.3)
+h1, l1 = a.get_legend_handles_labels(); h2, l2 = a2.get_legend_handles_labels()
+a.legend(h1 + h2, l1 + l2, fontsize=7.0, frameon=False, loc='upper center')
+
 fig.suptitle('Fig 48 — the dE/dx prior over-shrinks: the SHAPE is fine, the WEIGHT is not. As '
              'written the prior is wider than truth;\nas applied (×5, length-weighted) it is '
              'narrower, and the fitted field collapses to '
-             f'{100*wf/wt:.0f}% of the true spread.', fontsize=10.4)
+             f'{100*wf/wt:.0f}% of the true spread, and its mean slides ~1% low. '
+             'Both are fixed by the same knob (h).', fontsize=10.4)
 fig.tight_layout(rect=[0, 0, 1, .92])
 os.makedirs(OUT, exist_ok=True)
 fig.savefig(f'{OUT}/fig48_dedx_prior_shrinkage.png'); plt.close(fig)
