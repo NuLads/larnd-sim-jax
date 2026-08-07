@@ -7,10 +7,18 @@ differently from the group they were lumped into:
   * `no_match_penalty` (targets with no simulated hit) falls 239.5 -> 110.5 when geometry alone
     moves to truth -- a 54% drop. It is a likelihood term and it carries a third of the geometry
     signal, so quoting only the hit log-intensity understates what geometry buys.
-  * `dedx_mean_penalty` RISES at truth (7.0 -> 11.3). Truth's length-weighted mean dEdx is 1.8851
-    against the fit's 1.8786 and a constraint target of 1.887 -- so truth is CLOSER to the target
-    and still pays more, because the penalty is quadratic in a quantity the fit has been pulled to
-    match exactly. It is small either way (+2.6 out of +565).
+  * `dedx_mean_penalty` RISES at truth (7.0 -> 11.3, higher in 59% of batches). The reason is
+    SPREAD, not offset: the fit's length-weighted mean dEdx is pinned in a 1.87683-1.88017 IQR
+    (width 0.0033) while truth's genuinely varies over 1.87662-1.89773 (width 0.021, 6x wider).
+    Per batch the true mean is closer to the 1.887 target in only 41% of cases, so the median
+    |deviation| is larger for truth (0.0106 vs 0.0084) even though the median truth mean (1.8851)
+    looks closer to target than the median fit mean (1.8786). Comparing medians of the mean is
+    misleading here; comparing per-batch deviations is not.
+
+    This is the SAME failure as the student-t prior, at 1/200 the size: a dEdx prior that is
+    tighter than the real physical variation it is meant to describe. The student-t is too tight
+    against per-segment Landau fluctuations (+562); the mean constraint is too tight against
+    batch-to-batch variation of the true mean (+2.6 of the +565 total).
 
 Four terms are identically zero throughout and are dropped: dedx_barrier, chain_drift_penalty,
 dedx_drift_penalty, spatial_moment. `log_likelihood_charge` is also zero, but that one is a
