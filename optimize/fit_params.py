@@ -2854,6 +2854,31 @@ class GradientDescentFitter(ParamFitter):
                   ('P2_calib_true', calib_truth, d_fit_j,   g_fit),
                   ('P3_dedx_true',  calib_fit,   d_truth_j, g_fit),
                   ('P4_geom_true',  calib_fit,   d_fit_j,   g_truth)]
+
+        # ── dEdx dispersion scan (LARND_TP_DEDX_ALPHA="0:0.25:0.5:...") ──────────────────────
+        # Walk the straight line from the fitted dEdx field to the true one, in LOG space (the
+        # coordinate the block is actually fitted in), holding calibration and geometry at the fit:
+        #     log_dedx(alpha) = log_fit + alpha * (log_true - log_fit)
+        # alpha=0 is the fit, alpha=1 is truth, alpha>1 over-shoots past truth.
+        #
+        # This is the decisive measurement for the over-shrinkage question. The per-segment field
+        # is under-dispersed (43% of the true spread), and the question is WHO wants it that way.
+        # Reading off where each term is minimised along alpha answers it directly:
+        #   * likelihood minimised near alpha=1  -> the DATA wants the true dispersion
+        #   * total minimised near alpha<1       -> a PRIOR is pulling the field flat, and the
+        #                                           argmin says by how much
+        # Because the aux decomposition is stored at every alpha and dedx_prior enters the total
+        # linearly in its weight, the total can be re-scored offline at ANY prior weight from this
+        # one scan -- no extra GPU passes to sweep the weight.
+        _alph = os.environ.get('LARND_TP_DEDX_ALPHA', '').strip()
+        if _alph and d_truth_j is not None and d_fit_j is not None:
+            # accept ':' and ';' as well as ',' -- sbatch --export splits its own list on commas
+            _vals = [float(x) for x in _alph.replace(';', ',').replace(':', ',').split(',') if x.strip()]
+            _lf = np.asarray(d_fit, dtype=np.float64)
+            _lt = np.asarray(d_truth, dtype=np.float64)
+            for _a in _vals:
+                POINTS.append((f'A{_a:g}', calib_fit,
+                               jnp.asarray((_lf + _a * (_lt - _lf)).astype(np.float32)), g_fit))
         rec = {'batch': int(i), 'repr_floor_um': floor_um,
                'n_tracks': len(ctxs), 'points': {}}
         _norm_saved, _cur_saved = self.norm_params, self.current_params
