@@ -27,8 +27,6 @@
 #                                             already produced one false finding this campaign)
 #   BT1  current prior, w=1/dx,   mean 2500   correct WEIGHT, wrong SHAPE
 #   BT2  REFIT prior,   w=1/dx,   mean 2500   <-- the headline
-#   BT3  REFIT prior,   w=1/dx,   mean 0      is the mean constraint still needed at all?
-#   BTC  REFIT-for-ceiling, w=1/dx, mean 2500 the calibration ceiling with everything correct
 #
 # ORACLE CAVEAT, stated plainly: the refit parameters are an MLE of the TRUE per-segment dEdx
 # distribution of this MC sample. That is a legitimate workflow -- the prior describes detector
@@ -55,9 +53,26 @@ ARMS=(
   "BT0|full|5.0|100000.0|||||"
   "BT1|full|${P_W}|${MEANW}|||||"
   "BT2|full|${P_W}|${MEANW}|${P_NUL}|${P_NUR}|${P_LOC}|${P_SL}|${P_SR}"
-  "BT3|full|${P_W}|0.0|${P_NUL}|${P_NUR}|${P_LOC}|${P_SL}|${P_SR}"
-  "BTC|ceiling|${C_W}|${MEANW}|${C_NUL}|${C_NUR}|${C_LOC}|${C_SL}|${C_SR}"
 )
+# CUT, and why -- three arms is the minimum that answers anything, so these two went first:
+#
+#   BTC (ceiling, refit-for-ceiling, w=1/dx=0.4318, mean 2500)
+#       Would mostly reproduce a result we already have. Fig 48(j) shows the ceiling refit
+#       (nu_L 4.220, nu_R 2.054, loc 1.8742, s_L 0.1173, s_R 0.1054) is within noise of the
+#       CURRENT defaults, and w = 0.5 on that grid is beta = 1.16, i.e. already ~beta = 1. So the
+#       completed sci_ceiling_CEILP05 arm IS approximately "everything correct at ceiling".
+#
+#   BT3 (refit, w=1/dx, mean weight 0)
+#       The question already has a quantitative answer: at beta = 1 the refit prior alone pins the
+#       batch mean to 0.224% against a genuine 0.747% batch-to-batch spread, so it over-constrains
+#       the mean 3.3x WITHOUT any help. The explicit term's remaining value is degeneracy-breaking
+#       robustness (its target is externally known physics; the refit's mean is bundled with a
+#       shape fitted to simulation), which a single ablation would not settle. Study 3's weight
+#       arms measure the stiffness axis independently. Revisit once BT2 has landed.
+#
+# The retained three still bracket everything that matters:
+#   BT0 -> BT1  what correcting the WEIGHT alone buys  (deployable today, no oracle)
+#   BT1 -> BT2  what the REFIT buys on top             (bounds the oracle concern)
 
 k=0
 for arm in "${ARMS[@]}"; do
@@ -76,4 +91,4 @@ for arm in "${ARMS[@]}"; do
   k=$((k + 1))
 done
 echo "submitted ${#ARMS[@]} arms x 6 seeds (throttle ${THROTTLE}/arm)"
-echo "results: fit_result/sci_full_BT0 BT1 BT2 BT3 / fit_result/sci_ceiling_BTC"
+echo "results: fit_result/sci_full_BT0 BT1 BT2"
