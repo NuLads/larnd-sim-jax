@@ -10,13 +10,34 @@ a tail far outside any region the data occupies. A sigma comparison would be dom
 and would say the prior is enormously wide. The 16-84% half-range is the same number as sigma for a
 Gaussian, is insensitive to the tail, and compares like with like against the data.
 
-WHAT RAISING A DENSITY TO A POWER DOES. The prior enters the loss as
+WHERE p(x)^w COMES FROM. It is not a modelling choice, it is what the objective already says.
+The prior enters as
     dedx_prior = -w * sum_i dx_i * log p(dedx_i)
-so with dx ~ 0.99 cm (measured: median 0.9913) the objective sees p(x)^(w*dx) ~ p(x)^w. Raising a
-density to the power w concentrates it: for a t-distribution the scale goes as 1/sqrt(w) and the
-tail index as nu_eff = w(nu+1) - 1. Weight 5 is therefore not "a prior", it is a prior asserted
-five times over -- five independent pseudo-observations per segment, against data that can barely
-see the segment at all.
+and an additive term E(x) in a negative-log objective IS a density proportional to exp(-E(x)).
+So the effective prior is exactly
+    p_eff(x) = p(x)^beta / integral p(u)^beta du ,      beta = w * dx
+renormalised. This is the standard tempering / power-posterior (fractional-likelihood)
+construction; beta is the "number of pseudo-observations", because summing log p over beta
+identical draws gives beta*log p. In statistical-mechanics terms p^beta = exp(-beta E) is the same
+density at temperature T/beta. Measured dx has median 0.9913 cm with an IQR of 0.986-0.996, so
+beta = 4.957 here and its per-segment spread (~1%) is negligible.
+
+THE STUDENT-t FAMILY IS CLOSED UNDER TEMPERING, exactly:
+    nu_eff = beta*(nu + 1) - 1
+    s_eff  = s * sqrt(nu / nu_eff)
+Verified against the numerical construction to 4e-14. For the left branch (nu=4.785, s=0.1204) at
+beta=4.957 that is nu_eff = 27.68, s_eff = 0.0501 -- so what production actually applies is a far
+narrower and much LIGHTER-TAILED t than the one written down.
+
+NOTE the Gaussian rule of thumb UNDERSTATES this. 1/sqrt(beta) = 0.449, but the exact sd ratio is
+sqrt((nu-2)/(nu_eff-2)) = 0.329, because tempering lightens the tail as well as shrinking the
+scale. The 1/sqrt(w) shorthand is only the nu -> infinity limit.
+
+The curves here are still built numerically (exp(beta*log p), renormalised on a grid) rather than
+from the closed form: the SPLIT t is two branches glued at a shared peak height with their own
+normaliser, so tempering it is not a split-t with one (nu, s) pair -- each branch tempers to
+different parameters and the glue and normalisation have to be redone. The numeric route is exact
+up to the grid and avoids re-deriving that normaliser.
 """
 import glob, os, pickle
 import numpy as np
