@@ -146,8 +146,8 @@ for k, (t, *_ ) in enumerate(ARMS):
 a.set_xticks(range(1, len(ARMS) + 1))
 a.set_xticklabels([x[1] for x in ARMS], fontsize=7.0)
 a.set_ylabel('dE/dx: % of the prior→truth gap closed')
-a.set_title('(c) THE dE/dx SCHEDULE IS A NULL: 45.9→47.4% across\n'
-            'every arm. Study 2 predicted exactly this.', fontsize=9.3)
+a.set_title('(c) the dE/dx schedule is a null FOR dE/dx ITSELF:\n'
+            '45.9→47.4% across every arm — but see (h)', fontsize=9.3)
 
 # ---------------- (d) the schedules themselves ----------------
 a = ax[1, 0]
@@ -217,12 +217,44 @@ a.set_title('(g) the seed scatter is LEVER ARM, not noise: seeds\n'
             'below the median swing are 3.9× worse', fontsize=9.3)
 a.legend(fontsize=6.8, frameon=False)
 
-ax[1, 3].axis('off')
 
-fig.suptitle('Fig 49 — study 1: the schedules barely matter. The dE/dx schedule is a clean null '
-             '(c), exactly as study 2 predicted\nfor a prior-limited block; a 4.5× range of '
-             'calibration travel leaves lifetime inside its own error bar (b).', fontsize=10.3)
-fig.tight_layout(rect=[0, 0, 1, .92])
+# ---------------- (h) the schedule effect, STRATIFIED BY LEVER ARM ----------------
+# Panel (a) says no schedule moves lifetime; panel (e) says dE/dx -> 0.01x ends closest to truth.
+# Both are right, and (g) explains why: the six seeds are not six samples of one problem, they are
+# six problems with 4.15% to 15.21% of signal. Splitting on the lever arm separates them.
+#
+# CAVEAT, stated on the figure because it matters: this split is POST HOC. The 6.5% threshold was
+# chosen after seeing (g), and the subsets are n=4 and n=2. Treat the effect size as a hypothesis
+# worth testing on fresh seeds, not as a measured number.
+a = ax[1, 3]
+T_DRIFT = 0.087 * 2200.0
+SW = {s: 100 * (1 - np.exp(-T_DRIFT / A['S1A0'][s]['tau'])) for s in SEEDS}
+HI = [s for s in SEEDS if SW[s] > 6.5]
+LO = [s for s in SEEDS if SW[s] <= 6.5]
+xs2 = np.arange(len(ARMS) - 1)
+for off, sub, col, lab in [(-.19, HI, C['green'], f'lever arm > 6.5%  (n={len(HI)})'),
+                           (+.19, LO, C['red'], f'lever arm < 6.5%  (n={len(LO)})')]:
+    m, e = [], []
+    for t, *_ in ARMS[1:]:
+        d = np.array([abs(A[t][s]['lifetime_f']) - abs(A['S1A0'][s]['lifetime_f']) for s in sub])
+        m.append(d.mean())
+        e.append(d.std(ddof=1) / np.sqrt(len(d)) if len(d) > 1 else 0.0)
+    a.bar(xs2 + off, m, yerr=e, width=.36, color=col, edgecolor='white', capsize=4, label=lab)
+a.axhline(0, color=C['ink'], lw=1.5)
+a.set_xticks(xs2); a.set_xticklabels([x[1] for x in ARMS[1:]], fontsize=7.0)
+a.set_ylabel('paired Δ|lifetime error| vs baseline (points)\nnegative = better')
+a.set_title('(h) THE SCHEDULES DO MOVE LIFETIME — but only where\n'
+            'there is signal. dE/dx→0.01×: 3.39% → 0.64% (5.4σ, 4/4)', fontsize=9.3)
+a.legend(fontsize=7.2, frameon=False, loc='upper left')
+a.text(.02, .02, 'post-hoc split — hypothesis, not a measurement', transform=a.transAxes,
+       fontsize=6.8, color=C['grey'])
+
+fig.suptitle('Fig 49 — study 1: the lifetime seed scatter is per-seed LEVER ARM, not noise (g) — and '
+             'once you split on it the schedules stop looking like a null.\ndE/dx→0.01× takes lifetime '
+             'from 3.39% to 0.64% on the four seeds that HAVE signal, and makes the two that do not '
+             'worse (h).\ndE/dx RECOVERY is unchanged throughout (c): the channel is co-adaptation, '
+             'not a better dE/dx field.', fontsize=10.1)
+fig.tight_layout(rect=[0, 0, 1, .90])
 os.makedirs(OUT, exist_ok=True)
 fig.savefig(f'{OUT}/fig49_study1_schedules.png'); plt.close(fig)
 print('wrote', f'{OUT}/fig49_study1_schedules.png')
