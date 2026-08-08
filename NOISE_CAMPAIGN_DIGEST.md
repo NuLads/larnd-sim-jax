@@ -22,6 +22,10 @@ cross-check that reframed the whole thing.
   headroom left in the current basis); dE/dx is displaced (prior-limited). The dE/dx prior turns
   out to be **correct for the wrong segmentation**, and its weight is a tempering exponent whose
   principled value is w = 1/dx ≈ 1.01, not 5.
+- **THE DATA WANTS 66% OF THE TRUE dE/dx SPREAD (fig 52).** The likelihood's own optimum is α = 0.50,
+  not truth — some shrinkage is correct. But the fit sits at 0 and no weight of the current prior
+  reaches 0.50, because it is narrower than the data wants. Lower the weight (partial fix), don't
+  remove it, refit the shape and use β = 1; keep the mean term at ~2500.
 - **THE LIFETIME SEED SCATTER IS LEVER ARM, NOT NOISE (figs 49–51).** Charge swing runs 4.2–15.2%
   across seeds; split on it, annealing the dE/dx LR takes lifetime from 3.39% to **0.64%** where
   there is signal. Post-hoc split — a hypothesis for fresh seeds.
@@ -695,6 +699,27 @@ make the block itself better.
 transverse diffusion 0.20–1.00, longitudinal diffusion 1.40–2.25, lifetime 3.2–19.8. And the
 low-lever-arm seeds are not specially bad for A_b or transverse diffusion — so it is not that those
 targets are hard in general, they are specifically starved of lifetime signal.
+
+
+![The alpha scan](plots/noise_report/fig52_alpha_scan.png)
+
+**Tests** — study 2's α-scan: the per-segment dE/dx field is walked along the straight line from the
+fitted values to the true ones in LOG space, calibration and geometry held at the fit. 2 seeds × 100
+batches × 9 α, no fitting. This is the direct measurement figs 46–48 could only infer.
+**Concludes — the DATA does not want truth.** Its own optimum is **α = 0.50**, i.e. 66% of the true
+spread; α = 0 (the fit) and α = 1 (truth) are almost equally disfavoured (ΔNLL 6964 vs 6810). With
+finite hits per segment the maximum-likelihood field is itself shrunk, so *some* shrinkage is
+correct. Per batch: median 0.535, 97% want more dispersion than the fit, 100% less than truth.
+**Concludes — no weight of the current prior reaches it**: 0.00 at w=5, 0.23 at β=1, 0.32 at w=0.5,
+0.46 even at w=0. Structural, not a tuning failure — the prior as applied is 0.046 wide against a
+data optimum of 0.056, so it is narrower than the data wants and can only pull α DOWN. A
+correctly-calibrated prior would pull α UP.
+**Concludes, operationally — lower the weight (partial), do NOT remove the prior, refit the shape and
+use β = 1 (the real fix), keep the mean constraint at ~2500.** The moment that couples to A_b and
+lifetime is the MEAN, not the spread.
+**Read the caption** — α = 0.50 is the likelihood's optimum, not a target: chasing it would be
+fitting the noise. And a different prior SHAPE cannot be re-scored offline, so the refit prior's α*
+needs its own scan.
 
 ## §11 What is settled, what is open, what is next
 

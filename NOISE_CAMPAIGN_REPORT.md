@@ -117,6 +117,15 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   **32% of the true spread** and its mean slides **1.08% low**. Refitting on the grid in use fixes
   both at β = 1; re-weighting trades one against the other. The mean constraint is separately
   **6.3× too stiff**: the true batch mean genuinely varies 0.747%, so `w = 1/(2σ²) = 2520`.
+- **THE α-SCAN: THE DATA WANTS 66% OF THE TRUE dE/dx SPREAD (§6s).** Walking the field along
+  fit→truth, the **likelihood's own optimum is α = 0.50**, not truth — with finite hits per segment
+  the ML field is itself shrunk, so *some* shrinkage is correct. The fit sits at α = 0. **No weight
+  of the current prior reaches 0.50** (0.23 at β=1, 0.32 at w=0.5, 0.46 even at w=0), because the
+  prior as applied is *narrower than the data wants* and can only pull α down. **Operationally:
+  lower the weight (partial fix, 7× on the mean at ceiling), do NOT remove it (the data cannot see
+  ~4000 per-segment parameters; an unconstrained field absorbs calibration error), refit the shape
+  and use β = 1 (the real fix), and keep the mean constraint at ~2500 not 1e5.** The dangerous
+  moment is the MEAN, not the spread — that is what couples to A_b and lifetime.
 - **STUDY 1 — THE LIFETIME SEED SCATTER IS LEVER ARM, NOT NOISE (§6t).** Each seed draws its own
   target τ against a fixed detector depth, so the charge swing runs **4.2% to 15.2%**;
   |lifetime error| tracks it at **r = −0.56**, and seeds below the median swing are **3.9× worse**.
@@ -2230,6 +2239,85 @@ give, so it is real track-to-track physics. `w = 1/(2σ²)` = **2520**; 1e5 perm
 independently reproduces the earlier "~6× too stiff, honest w ≈ 3000" note, from the physics rather
 than from tuning.
 
+### The α-scan: asking the objective directly where it wants the dispersion
+
+![The alpha scan](plots/noise_report/fig52_alpha_scan.png)
+
+Figs 46–48 *inferred* that the prior over-shrinks. This measures it. The per-segment field is walked
+along the straight line from the fitted values to the true ones, in **log** space (the coordinate the
+block is fitted in), with calibration and geometry held at the fit:
+
+```
+log_dedx(α) = log_fit + α (log_true − log_fit)
+```
+
+2 seeds × 100 batches × 9 values of α, no fitting. Because `dedx_prior` enters the total linearly in
+its weight, one scan re-scores offline at **any** weight.
+
+**The answer is not what figs 46–48 implied.**
+
+| | α* |
+|---|---|
+| **likelihood only** | **0.500** |
+| total objective at w = 5 | 0.000 |
+
+**The data does not want truth — it wants 66% of the true spread.** Over 200 batches α = 0 and α = 1
+are almost equally disfavoured by the likelihood (ΔNLL 6964 vs 6810). This is expected once stated:
+with finite hits per segment the maximum-likelihood field is *itself* a shrunk version of truth,
+because the per-segment values are individually noisy. **Some shrinkage is correct.** Per batch the
+median is 0.535 (IQR 0.37–0.61); **97% of batches want more dispersion than the fit, 100% want less
+than truth**, and the two seeds agree to 0.001.
+
+The total minimising at exactly α = 0 also validates the setup: the production fit really is
+converged in the dE/dx direction.
+
+**Re-scoring the weight — and why no value of it is right:**
+
+| w | β = w·dx | α the objective prefers |
+|---|---|---|
+| 5 (production) | 4.96 | 0.000 |
+| 3 | 2.97 | 0.059 |
+| **1.009 (β = 1)** | 1.00 | **0.227** |
+| 0.5 (script default) | 0.50 | 0.319 |
+| 0 (no prior at all) | 0 | 0.464 |
+
+**No weight of the current prior reaches 0.50, and the reason is structural.** The prior *as applied*
+is 0.046 wide against a data optimum of 0.056 and a truth of 0.084 — it is **narrower than the data
+itself wants**, so every weight of it pulls α *down*. A correctly-calibrated prior would pull α *up*
+toward truth. That is a sharper version of the §6s diagnosis, arrived at by measurement rather than
+inference, and it is the strongest argument yet for refitting rather than re-weighting.
+
+**Limitation:** a different prior *shape* cannot be re-scored offline — the stored `aux` holds only
+the weighted current prior, not the per-segment values. The refit prior's α* needs its own scan
+(2 jobs, ~20 min).
+
+### What all of this implies, operationally
+
+**The dE/dx field is a nuisance.** We do not care about recovering it; we care that getting it wrong
+does not bias A_b and lifetime. On that criterion:
+
+* **The dangerous moment is the MEAN, not the spread.** A_b and lifetime respond to total charge, so
+  the −1.08% mean displacement is what leaks into calibration. The spread mostly does not.
+* **Lower the weight: yes, but understand it is a partial fix.** Measured at ceiling, prior 5 → 0.5
+  gives 7× on the mean error and 3.8× on the recovered spread. But it makes a mis-calibrated prior
+  weaker, not right.
+* **Remove the prior: no.** At w = 0 the objective still stops at α = 0.46 (the mean constraint and
+  MCS bind), so it would not even reach the data's optimum. More importantly the likelihood moves by
+  −10 nat per batch against the prior's +562 — the data cannot see ~4000 per-segment parameters
+  individually, and an unconstrained field would absorb calibration error instead. A too-wide prior
+  is a weak regulariser; a too-narrow one imposes a wrong answer; an absent one is not safe.
+* **The real fix is to refit the shape and set β = 1** (`w = 1/dx ≈ 1.01` on the production grid).
+  That matches the true width *and* mean with no tempering. `BT2` is testing it.
+* **Keep the mean constraint, at ~2500 rather than 1e5.** The weight is derived, not tuned: the true
+  batch mean genuinely varies 0.747%, so `w = 1/(2σ²) = 2520`. Do not delete the term — its target
+  (1.887) is externally knowable physics that survives to real data, whereas the refit prior's mean
+  is bundled with a shape fitted to simulation. But once the prior is refit the two terms constrain
+  the mean comparably, so check A_b and lifetime for drift before trimming either.
+
+**One caution against over-optimising.** α = 0.50 is the *likelihood's* optimum, not a target to
+chase — pushing the field there would be fitting the noise. The criterion that matters is whether
+A_b and lifetime improve, which is what the `BT` arms measure and the α-scan cannot.
+
 ## 6t. Study 1: do the learning-rate schedules matter?
 
 ![Schedules](plots/noise_report/fig49_study1_schedules.png)
@@ -2387,7 +2475,7 @@ study 2 established.*
 |---|---|---|
 | **Study 1** `S1A0`–`S1A4` (5 arms × 6 seeds, ceiling) | calibration decay 0.80/0.91/0.97 and dE/dx LR annealed to 0.1×/0.01× | **COMPLETE — §6t** |
 | **Study 2** `TP` (6 seeds × 100 batches) | truth-point evaluation: is the minimum misplaced or unreachable? | **COMPLETE — §6s** |
-| **Study 2** `TPA` (2 seeds × 9 α) | dE/dx dispersion scan along the fit→truth line | **COMPLETE — not yet read out** |
+| **Study 2** `TPA` (2 seeds × 9 α) | dE/dx dispersion scan along the fit→truth line | **COMPLETE — §6s** |
 | **Study 3** `S3T*` / `S3W*` (8 arms, ceiling) | dE/dx mean-constraint TARGET scan (1.849–1.925) crossed with weight (1e5 / 3000) | 7 arms complete, `S3W098` at 3/6 — **hours out** |
 | `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **RUNNING**, ~2 days |
 | `annl_2xtravel` (3 seeds, 20 000 it) | double the optimiser travel — does lifetime asymptote? | **COMPLETE — not yet read out**; §6t answers it at ceiling |
@@ -2399,6 +2487,12 @@ prior-limited; `BT3` (mean weight 0) and `BTC` (ceiling) were cut before startin
 questions they asked were already answered quantitatively (§6s). Two arms therefore have 3 partial
 checkpoints in `fit_result/` that are **not** completed runs — partial checkpoints have been
 mistaken for results once already in this campaign.
+
+**Two cheap tests the α-scan implies, not yet submitted.** (1) The same α-scan with the **refit**
+prior — a different shape cannot be re-scored offline, so this is the only way to confirm the refit
+moves α* up toward the data's optimum rather than down; 2 jobs, ~20 min. (2) Fresh seeds
+**pre-selected for lever arm** for the study-1 dE/dx-annealing effect, which converts its post-hoc
+split into an out-of-sample test.
 
 **The next test, not yet submitted.** Studies 1 and 2 found two *different* levers that both damp
 the dE/dx block's influence on calibration — the prior weight (an objective bias) and the dE/dx LR
