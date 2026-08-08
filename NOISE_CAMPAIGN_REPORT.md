@@ -104,6 +104,28 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
 - **CONSOLIDATED PRODUCTION PERFORMANCE (§6q), 8 distinct seeds, repeats averaged within seed:**
   A_b **+0.73 ± 0.05%**, E field **−0.02 ± 0.01%**, transverse diffusion −0.72 ± 0.42%,
   longitudinal diffusion −7.86 ± 1.95%, lifetime **−4.21 ± 1.53%**, position 159 ± 4 µm.
+- **STUDY 2 — THE MINIMUM IS NOT MISPLACED, THE PRIOR IS (§6s).** On the total objective truth
+  loses (45% of batches); on the LIKELIHOOD it wins in **86%**, while the priors prefer the fit in
+  **100%**. Attribution is clean and the two blocks fail for opposite reasons: **geometry is
+  unreached** (−213 likelihood, an optimiser problem, with **1.86× of headroom** inside the current
+  spline basis — floor 85 µm vs 159 µm achieved) and **dE/dx is displaced** (−10 likelihood,
+  **+565 prior**, an objective problem). One term does all of it: the student-t prior, +561.9.
+- **THE dE/dx PRIOR IS CORRECT — FOR THE WRONG SEGMENTATION (§6s).** Its width (0.1359) is the MLE
+  optimum on the TARGET file's grid (true spread 0.1354, refit gains 0.0002 nat) but it is applied
+  on the guess file's grid where the true spread is 0.0843. The weight is a **tempering exponent**,
+  β = w·dx, so β = 1 means `w = 1/dx ≈ 1.01` — not 5, not 0.5. At β = 4.96 the field collapses to
+  **32% of the true spread** and its mean slides **1.08% low**. Refitting on the grid in use fixes
+  both at β = 1; re-weighting trades one against the other. The mean constraint is separately
+  **6.3× too stiff**: the true batch mean genuinely varies 0.747%, so `w = 1/(2σ²) = 2520`.
+- **STUDY 1 — THE LIFETIME SEED SCATTER IS LEVER ARM, NOT NOISE (§6t).** Each seed draws its own
+  target τ against a fixed detector depth, so the charge swing runs **4.2% to 15.2%**;
+  |lifetime error| tracks it at **r = −0.56**, and seeds below the median swing are **3.9× worse**.
+  Split on that, the schedules stop being a null: **dE/dx LR annealed to 0.01× takes lifetime from
+  3.39% to 0.64 ± 0.40% on the four seeds that have signal** (5.4σ, 4/4), and diverges on the two
+  that do not. dE/dx *recovery* is unchanged throughout — the channel is co-adaptation, not a
+  better dE/dx field. **Post-hoc split; a hypothesis for fresh seeds, not a measured number.**
+  A_b and the diffusions are schedule-independent (spread ≤0.5 and ≤2.3 points), so the effect is
+  lifetime-specific. Lifetime has also **asymptoted in optimiser travel** over a 4.5× range.
 - **THE THREE LEVERS, IN ORDER OF GAIN (§6r):** (1) drop the dE/dx prior weight **5 → 0.5** —
   largest available win, free, and production is mis-set; (2) **more data with iterations scaled
   alongside** — every central value moves toward truth and position holds at 165 µm, whereas more
@@ -2100,6 +2122,198 @@ measurement. If it **keeps drifting**, we should stop quoting a central value fo
 report a bound. That result, plus `full_p05`, are the two worth waiting for before anything here is
 finalised.
 
+## 6s. Study 2: is the minimum misplaced, or merely unreachable?
+
+![Truth point vs fit point](plots/noise_report/fig46_truthpoint.png)
+
+6 seeds × 100 batches, **no fitting**: the objective is evaluated at the fit point, at the truth
+point (each block at the best its parameterisation can represent), and at three one-block hybrids.
+
+**The question had a compound answer, and the total objective alone gives the wrong one.** On the
+total, truth wins in only **271/600 batches (45%)**, median **+4.09%** — which reads as a displaced
+minimum. The likelihood/prior split reverses it:
+
+| | truth wins | median Δ |
+|---|---|---|
+| **likelihood only** | **518/600 (86%)** | **−284** |
+| **priors only** | **0/600 (0%)** | **+564** |
+
+Moving exactly one block to truth:
+
+| block → truth | Δ total | Δ likelihood | Δ priors |
+|---|---|---|---|
+| calibration | +18 | +18 | 0 |
+| **dE/dx** | +568 | **−10** | **+565** |
+| **geometry** | **−213** | **−213** | −1 |
+
+**Geometry is genuinely unreached** (the data wants truth and we do not get there — an optimiser
+problem). **dE/dx is displaced** (the data is indifferent; a prior pushes us off truth — an
+objective problem). Calibration is already at its likelihood optimum.
+
+**One term does all of it**: the dE/dx student-t prior, +561.9 of the +565. The mean constraint
+contributes +2.6, MCS 0.0.
+
+**The spline basis is not what limits geometry.** The truth *projection* — the best the current
+basis can represent — has a median position residual of **85 µm** against the **159 µm** production
+achieves. **1.86× of headroom is reachable inside the parameterisation we already have.**
+
+![Loss components in detail](plots/noise_report/fig47_truthpoint_components.png)
+
+All six non-zero terms, separately. Two behave differently from the group they were lumped into:
+
+* **`no_match_penalty` carries a third of the geometry signal** — 239.5 → 110.5 when geometry alone
+  moves to truth, better in **79%** of batches. The hit log-intensity's geometry gain is instead
+  *concentrated in a minority* (median +15, better in only 48%, yet the summed-likelihood median is
+  −213). Better geometry mostly buys *hits existing where the target says they should*, not
+  better-placed hits.
+* **`dedx_mean_penalty` rises at truth** (7.0 → 11.3) because of SPREAD, not offset: the fit's
+  length-weighted mean is pinned in a 0.0033-wide IQR while the true mean genuinely varies over
+  0.021 — 6× wider. Small either way (+2.6 of +565).
+
+Sign consistency: the student-t prior charges more at truth in **600/600** batches. Every term
+keeps its sign across all 6 seeds independently.
+
+### The prior is correct — for the wrong segmentation
+
+![The dE/dx prior](plots/noise_report/fig48_dedx_prior_shrinkage.png)
+
+Built from the prior's own parameters and the fitted/true fields, with **no loss evaluations** — an
+independent line of evidence that lands in the same place.
+
+**The tempering identity.** The prior enters as `−w·Σ dxᵢ·log p(dEdxᵢ)`, and an additive term in a
+negative-log objective *is* a density ∝ `exp(−E)`. So the effective prior is exactly
+`p(x)^β` renormalised, with **β = w·dx** — a pseudo-observation count. The Student-t family is
+closed under tempering, exactly: `ν_eff = β(ν+1) − 1`, `s_eff = s√(ν/ν_eff)` (verified to 4e-14).
+The Gaussian shorthand `1/√β` *understates* it (0.449 vs an exact 0.329) because tempering lightens
+the tail as well as shrinking the scale.
+
+**The diagnosis.** The prior's 16–84% half-width is **0.1359**. The true per-segment spread on the
+**target file's** segmentation (dx 2.32 cm) is **0.1354** — and refitting there gains **+0.0002
+nat**, i.e. the current parameters are already the MLE optimum. It is *applied* on the guess file's
+grid (dx 0.99 cm) where the true spread is **0.0843**, 1.6× narrower, and refitting gains
+**+0.1532 nat/segment** (split-half CV: +0.9744 held out vs +0.9751 in-sample, so not overfitting).
+
+**Two harms follow, both from the weight:**
+
+1. **Over-shrinkage.** Applied at β = 4.96 the prior is 0.046 wide against a true 0.084; the fitted
+   field collapses to **32% of the true spread**, in **100% of 900 batches**, Q-Q slope 0.36 (a
+   uniform compression, not a tail artefact).
+2. **Mean displacement.** Powering an *asymmetric* density moves its mean: 1.8819 (β=1) →
+   **1.8666** (β=4.96) against a true mean of 1.8869. The mean constraint's target (1.8870) is
+   right to 0.006%, so the two dE/dx priors pull against each other and the fit lands between them
+   at 1.8784.
+
+**Closure check:** the prior finds truth 0.281 nat/segment less likely than the fit; × weight 5 ×
+404 segments/batch = **+568/batch** against the **+562** measured in the loss. Two unrelated
+computations agreeing to 1%.
+
+**Confirmed on fits.** Two complete 3-seed ceiling arrays differing in one knob:
+
+| | mean error | width recovered |
+|---|---|---|
+| prior 5.0 | −0.433% | 0.20 of truth |
+| prior 0.5 | **−0.061%** | **0.77** |
+
+**The fix is recalibration, not re-weighting.** Tempering has one knob against four parameters:
+matching the width breaks the mean. An MLE refit on the production grid gives
+ν_L 21.76, ν_R 4.72, loc 1.8786, s_L 0.0782, s_R 0.0801 — matching the true width (0.0849 vs
+0.0843) *and* the true mean (1.8870 vs 1.8869) at **β = 1**, i.e. `w = 1/dx ≈ 1.01`.
+
+Ranked by the log-density each assigns to the true field: **refit β=1 +0.981** > width-matched
+β=1.8 +0.954 > current β=1 +0.828 > current w=5 +0.430 > current w=0.5 +0.326. Note **w = 0.5 ranks
+last as a density model** yet works well in practice (see above) — a too-wide prior is a weak
+regulariser, a too-narrow one actively imposes a wrong answer. Erring wide is the safe direction.
+
+**And the mean constraint at 1e5 is 6.3× too stiff.** The true length-weighted mean genuinely varies
+**0.747%** batch to batch (sd 0.01409 over 900 batches) — 3.3× more than independent sampling would
+give, so it is real track-to-track physics. `w = 1/(2σ²)` = **2520**; 1e5 permits only 0.118%. That
+independently reproduces the earlier "~6× too stiff, honest w ≈ 3000" note, from the physics rather
+than from tuning.
+
+## 6t. Study 1: do the learning-rate schedules matter?
+
+![Schedules](plots/noise_report/fig49_study1_schedules.png)
+
+Five ceiling arms × 6 seeds, differing only in a schedule. The three blocks anneal in three
+different *kinds* of way, and one did not anneal at all before this study: calibration decays per
+**epoch**, geometry per **iteration**, and dE/dx was a bare `optax.adam(constant)`.
+
+**All comparisons are PAIRED.** Every arm uses the same six seeds and `--seed` draws the *target*,
+so seed *s* poses an identical problem in every arm. Unpaired, this study resolves almost nothing —
+the target-to-target variation (4.1 points on lifetime) exceeds every effect in it.
+
+### The lifetime seed scatter is LEVER ARM, not noise
+
+Each seed draws its own target lifetime against a **fixed** detector depth, so each seed's problem
+carries a different amount of signal:
+
+| seed | τ | depth | charge swing | mean \|lifetime error\| |
+|---|---|---|---|---|
+| 1 | 1160 µs | 0.165 τ | **15.2%** | 0.65 |
+| 0 / 2 | ~2400 | 0.080 | 7.6–7.7% | 1.75 / 2.24 |
+| 5 | 2698 | 0.071 | 6.9% | 3.78 |
+| 4 | 3640 | 0.053 | 5.1% | 2.49 |
+| **3** | **4518** | **0.042** | **4.2%** | **12.06** |
+
+**|lifetime error| correlates with the swing at r = −0.56** (n=30); seeds below the median swing
+are **3.9× worse**. The "irreducible ~4-point seed s.d." this campaign has treated as run-to-run
+noise is largely **a mixture of easy and hard problems**. It also explains why ceiling reduces the
+seed s.d. for every parameter *except* lifetime — ceiling removes geometry noise, but cannot remove
+a target draw with half the signal.
+
+### Once you split on that, the schedules stop looking like a null
+
+![Per-seed lifetime](plots/noise_report/fig50_study1_per_seed.png)
+
+> **CORRECTION.** The first readout of this study reported "the dE/dx schedule is a clean null".
+> That was the pooled mean over six seeds that are not six samples of one problem. **Withdrawn.**
+
+Paired Δ|lifetime error| vs baseline, split on the lever arm:
+
+| arm | lever arm > 6.5% (n=4) | lever arm < 6.5% (n=2) |
+|---|---|---|
+| **dE/dx → 0.01×** | **−2.75 ± 0.51 (5.4σ, 4/4 improve)** | +3.82 |
+| calib 0.80 | −2.02 ± 0.55 (3.7σ, 4/4) | +9.62 |
+| dE/dx → 0.1× | −0.62 ± 0.17 (3.6σ, 4/4) | −0.46 |
+| calib 0.97 | +0.19 ± 1.00 | +0.43 |
+
+On the four seeds with signal, dE/dx → 0.01× takes |lifetime error| from **3.39% to 0.64 ± 0.40%** —
+sub-percent, on the parameter this campaign calls structurally weakest. On the two starved seeds it
+diverges instead. Averaging the two regimes is what produced the null.
+
+**The mechanism is co-adaptation, not a better dE/dx field.** dE/dx *recovery* is unchanged across
+every arm (45.9 → 47.4% of the gap closed). Cooling the nuisance block does not make it more
+accurate; it stops it chasing the calibration parameters — the same mechanism the 5-D staging study
+found with a hard freeze. Per-seed, the annealed arm is visibly the *last* to settle: it sits above
+the others for 4000–6000 iterations, then descends late and lands closest to truth, while the
+baseline drops faster and flattens several percent low.
+
+**The split is POST HOC** (threshold chosen after seeing the correlation, subsets n=4 and n=2). The
+direction is convincing — 4/4, 5.4σ, and a mechanism established independently in the 5-D study —
+the magnitude is not yet a measured number.
+
+### The control: it really is lifetime-specific
+
+![Per-seed, other parameters](plots/noise_report/fig51_study1_per_seed_allpars.png)
+
+Spread across the five arms, per seed: **A_b 0.15–0.48 points, transverse diffusion 0.20–1.00,
+longitudinal diffusion 1.40–2.25, lifetime 3.2–19.8.** A_b and transverse diffusion are
+schedule-independent everywhere, and the low-lever-arm seeds are *not* specially bad for them
+(A_b 0.25 vs 0.17; transverse diffusion 0.32 vs 0.48, i.e. better). Longitudinal diffusion is 1.67×
+worse there — the only hint the effect is not perfectly lifetime-exclusive, unsurprising since it
+also reads the drift axis.
+
+### Two other results
+
+**Lifetime has asymptoted in optimiser travel.** The three calibration arms span a **4.5× range**
+of ΣLR (75 → 136 → 340) and the lifetime mean moves by less than its own error bar. The slow arm is
+the only one still drifting at 10 000 iterations (−0.67 points over the last 20%), so extra travel
+buys motion, not accuracy.
+
+**Keep calib decay at 0.91.** 0.80 quenches — its LR falls ~9 orders of magnitude and the fit
+freezes wherever it happens to be (seed 4 stops at +13.35%); 0.97 has not converged in 10 000
+iterations. The production value sits between two failure modes.
+
 ## 7. Methodology: the traps that cost us real time
 
 These generalise beyond this project and are the reason several earlier "results" were wrong.
@@ -2166,50 +2380,33 @@ and/or with ≥ 6 seeds.
 
 ## 8. What is running now
 
+*As of 8 August 2026. Studies 1–3 are the campaign that followed §6r; the BT arms apply what
+study 2 established.*
+
 | arm | what it tests | status |
 |---|---|---|
-| `ANNEALLONG` (3 seeds, 10 000 it) | does the −2.6% result survive a longer horizon? settles the failed convergence criterion | **COMPLETE** — see §6b |
-| `CONSTDEDX` (3 seeds, 10 000 it) | dE/dx frozen at the mean: is the nuisance block earning its keep? | **COMPLETE** — no; removing it costs long. diffusion 4×, §6d |
-| `PROBTGT` (3 seeds, 10 000 it) | target drawn from the probabilistic distribution: is our target biased? | **COMPLETE** — no detectable bias, §6d |
-| `ANNEALMORE` (seeds 3–5, 5000 it) | tightens n = 3 → 6 | **COMPLETE** — reproduces; see §6 |
-| `FRAMEONLY` / `DRIFTW6` / `DRIFTW7` (9 jobs) | the drift-axis basis fix: rotation-only control, plus two penalty weights | `DRIFTW6` (w=1e6) **COMPLETE — see below**; other two running |
-| `CHSTART1000` / `CHSTART2500` (6 jobs) | release geometry only after calibration settles | running |
-| `S3ANNEAL` (3 seeds) | does annealing fix lifetime even with *wrong frozen* geometry? | queued |
-| `S2ANNEALX` (seeds 1–2) | completes the S2 anneal control | queued |
-| `qpos50/170/400/880` (12 scans) | position quality ladder | **COMPLETE** — variance, not bias; §6f |
-| `qdedx0.75/0.5/0.25/0.0` (12 scans) | dE/dx quality ladder | **COMPLETE** — monotone bias; §6f |
-| `sci_nb400` (3 seeds, 10 000 it) | 4× the data (400 batches, 1.6 km of track) | **COMPLETE but INVALID** — silently un-annealed the LR schedule; §6g |
-| `sci_shuffle` (3 seeds, 10 000 it) | `--shuffle_bt`: does reshuffling batches remove the per-batch drift lever-arm effect (open question 5)? | running, 2/3 done |
-| `prof_true_fine`, `prof_dedx0.5_fine` | 0.75%/1.5% scan step instead of 10.2% | **COMPLETE** — objective nearly unbiased; §6g |
-| `qreseg` | segmentation alone | **COMPLETE** — no effect; §6g |
-| `qdedx0.40` | dE/dx smoothed to the guess file's real spread | **COMPLETE** (18/21 batches) — explains ⅓ of the gap; §6g. Clean rerun queued |
-| batch-size ceiling sweep (`ceil400`–`ceil1600`) | how large can `max_batch_len` go on the production config? | **COMPLETE** — **600 cm works, 700 OOMs**; 400 cm peaks at 23.0 GiB. Batch *count* stays free |
-| `nb200` (3 seeds) | 2× the data with epochs, per-batch visits and final chain LR all preserved (200 batches × 20 000 iters, `chain_decay` 0.9997→0.99985) | running |
-| `qchord0.5` / `qchord1.0` | *systematic* chord-cutting geometry error instead of random offsets | **COMPLETE** — null; geometry is not a bias channel, §6h |
-| `qcombo` | chord 1.0 **+** dE/dx f=0.40 together: is there an interaction? | **COMPLETE** — no interaction, §6h |
-| `qmeanup` / `qmeandown` | dE/dx **mean** shifted ±2% (new axis) | **COMPLETE** — the dominant bias channel; explains the guess file, §6h |
-| `NB400FIX` (3 seeds) | the 4× data test, with `decay_rate` corrected to 0.686 | **COMPLETE** — variance ↓, geometry ↓, §6i |
-| `SHUFOFF2` / `SHUFON2` (3 seeds each) | paired shuffle test on one tree | **COMPLETE** — no effect; open question 5 answered, §6i |
+| **Study 1** `S1A0`–`S1A4` (5 arms × 6 seeds, ceiling) | calibration decay 0.80/0.91/0.97 and dE/dx LR annealed to 0.1×/0.01× | **COMPLETE — §6t** |
+| **Study 2** `TP` (6 seeds × 100 batches) | truth-point evaluation: is the minimum misplaced or unreachable? | **COMPLETE — §6s** |
+| **Study 2** `TPA` (2 seeds × 9 α) | dE/dx dispersion scan along the fit→truth line | **COMPLETE — not yet read out** |
+| **Study 3** `S3T*` / `S3W*` (8 arms, ceiling) | dE/dx mean-constraint TARGET scan (1.849–1.925) crossed with weight (1e5 / 3000) | 7 arms complete, `S3W098` at 3/6 — **hours out** |
+| `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **RUNNING**, ~2 days |
+| `annl_2xtravel` (3 seeds, 20 000 it) | double the optimiser travel — does lifetime asymptote? | **COMPLETE — not yet read out**; §6t answers it at ceiling |
+| `full_p05` (6 seeds, production) | prior 0.5 in production, the §6r lever-1 confirmation | **COMPLETE — not yet read out** |
 
-**First result on the drift-axis fix (§5.4), and it is negative.** The w = 1e6 arm completed
-(3/3 seeds). The penalty does exactly what it was designed to do — drift-projected
-displacement falls from 222 µm to **18 µm** and the drift fraction from 57% to **7%** — but
-every physics number degrades: lifetime −2.6% → **+8.8 ± 6.0%**, long. diffusion −5.1% →
-**+59 ± 27%**, and the position residual worsens 255 µm → **648 µm**. The most likely reading
-is that the drift-axis displacement is largely *legitimate* track structure rather than
-absorbed calibration error, so clamping it removes a degree of freedom the geometry genuinely
-needs. **Caveat:** this arm changes both the frame and the penalty; the `FRAMEONLY` control
-(rotation only, no penalty) is still running and is required to separate them. Until it
-lands, treat §5.4's proposed fix as *tested and probably refuted*, not established.
+**Cancelled deliberately, with reasons on the record:** `S1A5` (dE/dx hard freeze) and `S3T099`
+(redundant 5th scan point) were killed mid-flight once study 2 showed the dE/dx block is
+prior-limited; `BT3` (mean weight 0) and `BTC` (ceiling) were cut before starting because the
+questions they asked were already answered quantitatively (§6s). Two arms therefore have 3 partial
+checkpoints in `fit_result/` that are **not** completed runs — partial checkpoints have been
+mistaken for results once already in this campaign.
 
-The `S3ANNEAL` arm is worth flagging: an accidental by-product of the invalidated scan (§7,
-Trap 3) was a set of runs with geometry effectively frozen at an ~880 µm-wrong guess *and*
-the annealed LR schedule — and they recovered lifetime to −1.9 ± 1.2%, versus +88 ± 36% for
-the original S3. If that reproduces deliberately, it would mean the **LR schedule, not
-geometry accuracy, dominates the lifetime bias**, which would substantially reorder our
-priorities. It came from a broken run, so it is being re-tested properly before we believe it.
-
----
+**The next test, not yet submitted.** Studies 1 and 2 found two *different* levers that both damp
+the dE/dx block's influence on calibration — the prior weight (an objective bias) and the dE/dx LR
+schedule (a dynamical coupling) — and fig 49(c) shows they are distinct, since annealing changes
+dE/dx recovery not at all while the prior weight changes it a lot. **The BT arms use the corrected
+prior with the dE/dx LR still constant, so the combination is untested.** The natural next matrix is
+`BT2` versus `BT2 + dE/dx → 0.01×` on seeds **pre-selected for lever arm**, which also converts the
+post-hoc split of §6t into a proper out-of-sample test. ~12 ceiling jobs.
 
 ## 9. Open questions
 

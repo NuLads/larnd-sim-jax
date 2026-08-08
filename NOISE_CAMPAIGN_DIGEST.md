@@ -17,6 +17,14 @@ cross-check that reframed the whole thing.
   dE/dx, all five parameters land within ~2% at the Hessian-predicted statistical floor.
 - **The hard case is fitting geometry and calibration jointly.** For weeks this gave lifetime
   errors of +40 to +130%.
+- **THE MINIMUM IS NOT MISPLACED, THE PRIOR IS (figs 46–48).** The likelihood prefers truth in 86%
+  of batches; the priors prefer the fit in 100%. Geometry is unreached (optimiser-limited, 1.86×
+  headroom left in the current basis); dE/dx is displaced (prior-limited). The dE/dx prior turns
+  out to be **correct for the wrong segmentation**, and its weight is a tempering exponent whose
+  principled value is w = 1/dx ≈ 1.01, not 5.
+- **THE LIFETIME SEED SCATTER IS LEVER ARM, NOT NOISE (figs 49–51).** Charge swing runs 4.2–15.2%
+  across seeds; split on it, annealing the dE/dx LR takes lifetime from 3.39% to **0.64%** where
+  there is signal. Post-hoc split — a hypothesis for fresh seeds.
 - **WHERE WE STAND (fig 45).** Best setup = S4 with an annealed calibration LR. Over 8 distinct
   seeds: A_b +0.73 ± 0.05%, E field −0.02 ± 0.01%, tran. diff. −0.72 ± 0.42%, long. diff.
   −7.86 ± 1.95%, lifetime −4.21 ± 1.53%, position 159 ± 4 µm. Three levers left (dE/dx prior
@@ -609,6 +617,84 @@ prior→truth gap even with perfect geometry. Neither is a tuning problem.
 **Read the caption on (c) and (e).** (c) is seed-matched because `nb200` has only 2 completed seeds;
 (e) plots bias *and* scatter because the mean-constraint arm looks better on central values alone
 purely through a lifetime value with a ±2.1 error bar.
+
+
+![Truth point vs fit point](plots/noise_report/fig46_truthpoint.png)
+
+**Tests** — study 2: is the loss minimum misplaced, or merely unreachable? 6 seeds × 100 batches,
+no fitting: the objective is evaluated at the fit point, the truth point, and three one-block
+hybrids.
+**Concludes — the total objective gives the WRONG answer on its own.** Truth loses on the total
+(45% of batches, +4.09%) but wins on the LIKELIHOOD in **86%**, while the priors prefer the fit in
+**100%**.
+**Concludes — the two blocks fail for OPPOSITE reasons.** Geometry → truth: −213 likelihood, −1
+prior (unreached, an optimiser problem). dE/dx → truth: −10 likelihood, **+565 prior** (displaced,
+an objective problem). Calibration is already at its likelihood optimum (+18).
+**Concludes — the spline basis is not the geometry limit**: the truth projection has a median
+residual of **85 µm** against the 159 µm production achieves — 1.86× of headroom inside the current
+parameterisation.
+
+![Loss components in detail](plots/noise_report/fig47_truthpoint_components.png)
+
+**Tests** — the same evaluation with all six non-zero terms kept separate.
+**Concludes — `no_match_penalty` carries a third of the geometry signal** (239.5 → 110.5, better in
+79% of batches) while the hit log-intensity's geometry gain is concentrated in a minority. Better
+geometry mostly buys hits *existing* where the target says, not better-placed hits.
+**Concludes — the dE/dx mean penalty rises at truth because of SPREAD, not offset**: the fit's
+batch mean is pinned in a 0.0033 IQR, the true one varies over 0.021.
+**Read the caption** — per-term medians do NOT sum to the median total; the waterfall is drawn on
+the single batch at the median total Δ, where it is exact.
+
+![The dE/dx prior](plots/noise_report/fig48_dedx_prior_shrinkage.png)
+
+**Tests** — the prior's own parameters against the fitted and true fields, with no loss evaluations
+at all. An independent line of evidence.
+**Concludes — the prior is CORRECT FOR THE WRONG SEGMENTATION.** Its width (0.1359) is the MLE
+optimum on the target file's grid (true spread 0.1354, refit gains 0.0002 nat); it is applied on
+the guess file's grid where the true spread is 0.0843 and refitting gains 0.1532 nat/segment.
+**Concludes — the weight is a TEMPERING EXPONENT**, β = w·dx, not a nuisance knob. The Student-t
+family is closed under tempering exactly (ν_eff = β(ν+1)−1, s_eff = s√(ν/ν_eff)). β = 1 means
+w = 1/dx ≈ 1.01.
+**Concludes — TWO harms, both from the weight**: the field collapses to 32% of the true spread
+(100% of 900 batches, Q-Q slope 0.36) and its mean slides 1.08% low, because powering an asymmetric
+density moves its mean.
+**Concludes — refit, don't re-weight.** Tempering has one knob against four parameters; matching
+the width breaks the mean. The MLE refit matches both at β = 1. Confirmed on fits: prior 5 → 0.5
+moves the mean error 0.433% → 0.061% and the recovered spread 0.20 → 0.77.
+**Closure check** — the prior alone predicts +568/batch against the +562 measured in the loss.
+
+![Study 1: schedules](plots/noise_report/fig49_study1_schedules.png)
+
+**Tests** — study 1: five ceiling arms × 6 seeds differing only in a learning-rate schedule. All
+comparisons PAIRED (same seeds = same targets).
+**Concludes — the lifetime seed scatter is LEVER ARM, not noise.** Each seed draws its own target τ
+against a fixed detector depth, so the charge swing runs 4.2–15.2%; |lifetime error| tracks it at
+r = −0.56 and seeds below the median are 3.9× worse. This is why ceiling reduces the seed s.d. for
+every parameter except lifetime.
+**Concludes — lifetime has asymptoted in optimiser travel** over a 4.5× range of ΣLR (75→136→340).
+**Concludes — dE/dx RECOVERY is schedule-independent** (45.9–47.4% across all arms), exactly as
+study 2 predicts for a prior-limited block.
+
+![Study 1 per seed](plots/noise_report/fig50_study1_per_seed.png)
+
+**Tests** — the same five arms, one panel per seed, ordered by lever arm.
+**Concludes — the schedules DO move lifetime, but only where there is signal.** dE/dx → 0.01×:
+**3.39% → 0.64 ± 0.40%** on the four high-lever-arm seeds (5.4σ, 4/4 improve), sub-percent on three
+of them; and worse on the two starved seeds. *Corrects the first readout of this study, which
+reported a clean null from the pooled mean — withdrawn.*
+**Concludes — the mechanism is co-adaptation.** The annealed arm is the LAST to settle: it sits
+above the others for 4000–6000 iterations then descends late, while the baseline drops fast and
+flattens several percent low. Cooling the nuisance block stops it chasing calibration; it does not
+make the block itself better.
+**Read the caption** — the split is post-hoc (n=4 and n=2). A hypothesis for fresh seeds.
+
+![Study 1 per seed, other parameters](plots/noise_report/fig51_study1_per_seed_allpars.png)
+
+**Tests** — the control: A_b and the diffusions, same layout and seed ordering.
+**Concludes — the effect is lifetime-specific.** Spread across the five arms: A_b 0.15–0.48 points,
+transverse diffusion 0.20–1.00, longitudinal diffusion 1.40–2.25, lifetime 3.2–19.8. And the
+low-lever-arm seeds are not specially bad for A_b or transverse diffusion — so it is not that those
+targets are hard in general, they are specifically starved of lifetime signal.
 
 ## §11 What is settled, what is open, what is next
 
