@@ -117,6 +117,13 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   **32% of the true spread** and its mean slides **1.08% low**. Refitting on the grid in use fixes
   both at β = 1; re-weighting trades one against the other. The mean constraint is separately
   **6.3× too stiff**: the true batch mean genuinely varies 0.747%, so `w = 1/(2σ²) = 2520`.
+- **STUDY 3 — THE MEAN TARGET IS AN A_b SYSTEMATIC, NOT A LIFETIME LEVER (§6u).**
+  **dA_b/d(target %) = −0.837 ± 0.018** at weight 1e5 (47σ) and −0.264 ± 0.022 at 3000, while
+  **lifetime is consistent with zero at both** (−0.16 ± 0.48, −0.25 ± 0.44). The stiffness sets how
+  much: the fitted mean follows **93%** of any target error at 1e5, **30%** at 3000. Budget: the
+  target is off by 0.023%, an A_b bias of 0.02 points; **to keep it under 0.1 points the target must
+  be known to 0.12%**. Also **corrects §6r**: the "7.5× lifetime scatter cost of weight 3000" was a
+  seed-set confound — 2.6× on common seeds, and weight 3000 is mildly *better* stratified by lever arm.
 - **THE α-SCAN: THE DATA WANTS 66% OF THE TRUE dE/dx SPREAD (§6s).** Walking the field along
   fit→truth, the **likelihood's own optimum is α = 0.50**, not truth — with finite hits per segment
   the ML field is itself shrunk, so *some* shrinkage is correct. The fit sits at α = 0. **No weight
@@ -2098,7 +2105,7 @@ insufficient power.**
 |---|---|
 | improve geometry accuracy further | a **variance** lever, not a bias lever — against random *and* systematic (chord-cutting) error (§6h). 159 µm is fine. |
 | the dE/dx minimum-length cut | a no-op in production (shortest guess segment 0.909 cm vs a 0.15 cm cut) and a clean null where it fires: Δbias +0.07, Δscatter −0.04 at ceiling (§6n). |
-| lower the mean-constraint weight 1e5 → 3000 | buys **no** bias improvement that survives its own scatter, and costs **7.5× the lifetime seed s.d.** (0.69 → 5.21) and 3.7× worse A_b (§6p). |
+| lower the mean-constraint weight 1e5 → 3000 | ~~costs 7.5× the lifetime seed s.d.~~ **SUPERSEDED — that comparison used different seed sets; on common seeds it is 2.6×, and study 3 finds weight 3000 mildly BETTER on lifetime. §6s derives 2520 as the correct weight and §6u shows it makes A_b 3.2× less target-sensitive. Now RECOMMENDED.** |
 | turn readout noise off | Δbias **+5.4 points** — long. diffusion −13.94%. It costs dE/dx recovery (44.5% → 64.3% of the gap closed) but noise-ON is what makes long. diffusion come out right (§6p). |
 | second-order optimisers on any block | all three verdicts are in (GN report; calibration block, dE/dx block, geometry block). |
 
@@ -2402,6 +2409,50 @@ buys motion, not accuracy.
 freezes wherever it happens to be (seed 4 stops at +13.35%); 0.97 has not converged in 10 000
 iterations. The production value sits between two failure modes.
 
+## 6u. Study 3: deliberately mis-setting the dE/dx mean target
+
+![Mis-setting the mean target](plots/noise_report/fig53_study3_meantarget.png)
+
+Seven ceiling arms: the target scanned over 1.849–1.925 (±2% of 1.887) **crossed with the weight**
+(1e5 and 3000), 6 seeds each, slopes fitted per seed then averaged. Distinct from
+`FITDM0`/`FITDMP2`/`FITDMM2`, which varied the *sim input file's* dE/dx mean with the target left at
+1.887 in all three.
+
+| | w = 1e5 (production) | w = 3000 (≈ the derived 2520) |
+|---|---|---|
+| **dA_b / d(target %)** | **−0.837 ± 0.018** (47σ) | **−0.264 ± 0.022** |
+| d(lifetime) / d(target %) | −0.16 ± 0.48 | −0.25 ± 0.44 |
+| E field, tran. diff., long. diff. | ≈ 0 | ≈ 0 |
+
+**A_b absorbs the mis-set mean, linearly. Lifetime does not respond at all**, at either stiffness.
+That is what the 2-D scans of §6p predicted — A_b is the cheap absorber of a charge-normalisation
+error — and it means **the mean target is an A_b systematic to control, not the lifetime lever we
+hoped for.** A clean null on the more interesting hypothesis.
+
+**The mechanism is the stiffness.** The fitted length-weighted mean follows **93%** of any target
+error at w = 1e5 but only **30%** at w = 3000, where all three arms land near 1.86–1.88 regardless
+of where the target was put. That is the §6s tug-of-war between the two dE/dx priors made visible:
+soften the mean constraint and the student-t plus the data overrule it.
+
+**The systematic budget.** The target is off by **+0.023%** against the measured true mean
+(1.887 vs 1.88656), giving an A_b bias of **−0.020 points** — negligible against A_b's +0.20%.
+**To keep |A_b bias| < 0.1 points the target must be known to 0.12%.** That is the number to quote
+on real data, where 1.887 comes from external physics rather than from truth.
+
+> **CORRECTION to §6r and fig 45(e).** That table reported "lower the mean weight 1e5 → 3000 …
+> costs **7.5× the lifetime seed s.d.** (0.69 → 5.21)". **That comparison was confounded by the seed
+> set.** `CEILP05` (n = 3) only ever saw seeds 0–2, all high-lever-arm; `CEILW3KP05` (n = 6) included
+> the two starved seeds. On the **common** seeds 0–2 the s.d. is 0.85 vs 2.20 — a **2.6×** difference,
+> not 7.5×. And within study 3, stratified by lever arm, weight 3000 is if anything *mildly better*
+> on lifetime (1.93 ± 0.50 vs 2.64 ± 0.42 on high-lever seeds). This is the same lever-arm confound
+> §6t exposed, biting a second time; any arm-to-arm comparison in this campaign that used different
+> seed sets should be re-checked the same way.
+
+**Net effect on the recommendation.** Nothing changes about lowering the mean weight to ~2500 — and
+one objection to it is now removed. The derived value still rests on the batch-to-batch variance
+argument (§6s); study 3 adds that it also makes A_b **3.2× less sensitive** to any error in the
+target, which is a robustness gain for real data where the target will not be known perfectly.
+
 ## 7. Methodology: the traps that cost us real time
 
 These generalise beyond this project and are the reason several earlier "results" were wrong.
@@ -2476,7 +2527,7 @@ study 2 established.*
 | **Study 1** `S1A0`–`S1A4` (5 arms × 6 seeds, ceiling) | calibration decay 0.80/0.91/0.97 and dE/dx LR annealed to 0.1×/0.01× | **COMPLETE — §6t** |
 | **Study 2** `TP` (6 seeds × 100 batches) | truth-point evaluation: is the minimum misplaced or unreachable? | **COMPLETE — §6s** |
 | **Study 2** `TPA` (2 seeds × 9 α) | dE/dx dispersion scan along the fit→truth line | **COMPLETE — §6s** |
-| **Study 3** `S3T*` / `S3W*` (8 arms, ceiling) | dE/dx mean-constraint TARGET scan (1.849–1.925) crossed with weight (1e5 / 3000) | 7 arms complete, `S3W098` at 3/6 — **hours out** |
+| **Study 3** `S3T*` / `S3W*` (7 usable arms, ceiling) | dE/dx mean-constraint TARGET scan crossed with weight | **COMPLETE — §6u** |
 | `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **RUNNING**, ~2 days |
 | `annl_2xtravel` (3 seeds, 20 000 it) | double the optimiser travel — does lifetime asymptote? | **COMPLETE — not yet read out**; §6t answers it at ceiling |
 | `full_p05` (6 seeds, production) | prior 0.5 in production, the §6r lever-1 confirmation | **COMPLETE — not yet read out** |

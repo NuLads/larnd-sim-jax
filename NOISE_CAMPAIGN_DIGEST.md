@@ -22,6 +22,9 @@ cross-check that reframed the whole thing.
   headroom left in the current basis); dE/dx is displaced (prior-limited). The dE/dx prior turns
   out to be **correct for the wrong segmentation**, and its weight is a tempering exponent whose
   principled value is w = 1/dx ≈ 1.01, not 5.
+- **THE dE/dx MEAN TARGET IS AN A_b SYSTEMATIC, NOT A LIFETIME LEVER (fig 53).** A_b moves
+  −0.84 points per % of target error at weight 1e5 (47σ); lifetime does not move at all. The target
+  must be known to 0.12% to keep A_b bias under 0.1 points.
 - **THE DATA WANTS 66% OF THE TRUE dE/dx SPREAD (fig 52).** The likelihood's own optimum is α = 0.50,
   not truth — some shrinkage is correct. But the fit sits at 0 and no weight of the current prior
   reaches 0.50, because it is narrower than the data wants. Lower the weight (partial fix), don't
@@ -613,7 +616,7 @@ free. (2) **More data with iterations scaled alongside**: seed-matched, every ce
 toward truth and position holds (159 → 165 µm); more batches at *fixed* iterations does the
 opposite (774 µm) because the geometry block starves. (3) **≥ 6 seeds, knobs settled at ceiling**.
 **Concludes — four things not to do**: chase geometry accuracy (a variance lever, not a bias
-lever), the dE/dx min-length cut (a null), mean-constraint weight 3000 (no bias gain, 7.5× the
+lever), the dE/dx min-length cut (a null), mean-constraint weight 3000 (SUPERSEDED — see fig 53; the 7.5× the
 lifetime scatter), noise OFF (+5.4 points of bias).
 **Concludes — two hard limits.** The detector is **0.087 lifetimes deep** — an 8.3% anode-to-cathode
 swing is the entire lifetime signal — and the dE/dx block recovers at most **~45%** of the
@@ -720,6 +723,26 @@ lifetime is the MEAN, not the spread.
 **Read the caption** — α = 0.50 is the likelihood's optimum, not a target: chasing it would be
 fitting the noise. And a different prior SHAPE cannot be re-scored offline, so the refit prior's α*
 needs its own scan.
+
+
+![Mis-setting the mean target](plots/noise_report/fig53_study3_meantarget.png)
+
+**Tests** — study 3: the dE/dx mean-constraint TARGET scanned ±2% and CROSSED with the weight
+(1e5 / 3000), 7 ceiling arms, slopes fitted per seed and averaged. Distinct from FITDM0/P2/M2, which
+varied the sim input's mean rather than the penalty target.
+**Concludes — A_b absorbs it linearly, lifetime does not respond at all.**
+dA_b/d(target %) = **−0.837 ± 0.018** at w=1e5 (47σ) and −0.264 ± 0.022 at w=3000; lifetime
+−0.16 ± 0.48 and −0.25 ± 0.44, i.e. consistent with zero at both. The 2-D scans predicted this: A_b
+is the cheap absorber of a charge-normalisation error. **The target is an A_b systematic to control,
+not a lifetime lever to exploit.**
+**Concludes — the stiffness is the mechanism**: the fitted mean follows 93% of any target error at
+1e5, only 30% at 3000, where all three arms land near 1.86–1.88 whatever the target. The two dE/dx
+priors are in a tug-of-war and the mean weight decides it.
+**Concludes — the budget**: the target is off by 0.023%, giving 0.02 points of A_b bias. To keep it
+under 0.1 points the target must be known to **0.12%**.
+**CORRECTS fig 45(e)** — the "weight 3000 costs 7.5× the lifetime scatter" claim was a SEED-SET
+confound (CEILP05 n=3 never saw the low-lever-arm seeds). On common seeds it is 2.6×, and stratified
+by lever arm weight 3000 is mildly *better*. Same confound as figs 49–51, biting twice.
 
 ## §11 What is settled, what is open, what is next
 

@@ -231,7 +231,9 @@ a.axvline(0, color=C['ink'], lw=1.4)
 a.set_yticks(ys); a.set_yticklabels([c[0] for c in CASES], fontsize=7.0)
 a.set_xlabel('change vs its own control (percentage points) — right is worse')
 a.set_title('(e) WHAT NOT TO DO. The min-length cut is a clean null.\n'
-            'Weight 3000 buys no bias and costs 7.5× the lifetime scatter.', fontsize=9.4)
+            'The weight-3000 scatter claim here is SUPERSEDED — see fig 53.', fontsize=9.4)
+a.text(.98, .04, 'the 7.5× was a seed-set confound; 2.6× on common seeds',
+       transform=a.transAxes, ha='right', va='bottom', fontsize=6.6, color=C['red'])
 a.legend(fontsize=7.0, frameon=False, loc='lower right')
 a.invert_yaxis()
 
