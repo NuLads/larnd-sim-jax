@@ -143,6 +143,17 @@ export LARND_CHAIN_DRIFT_W=${LARND_CHAIN_DRIFT_W:-0}
 echo \"[CHAIN-ENV] frame=\$LARND_CHAIN_FRAME drift_w=\$LARND_CHAIN_DRIFT_W\"
 echo \"[DEDX-ENV] lr=${DEDX_LR} final_frac='\$LARND_DEDX_LR_FINAL_FRAC' freeze=${DEDX_FREEZE_ITER} mean_target=${SCIDMEANTGT} mean_w=${SCIMEANW}\"
 
+# PREFLIGHT: fail LOUDLY if JAX cannot see the GPU.
+# On 2026-08-08 sdfampere038 degraded mid-campaign: the host nvidia-smi still reported a healthy
+# A100, but JAX inside the container raised 'no supported devices found for platform CUDA'. The
+# python process died in 8 seconds and SLURM recorded the task as COMPLETED, so five BT tasks
+# vanished from a 6-seed array while sacct showed nothing wrong. A half-filled array that reports
+# COMPLETED is exactly the failure this campaign keeps being bitten by, so make it exit non-zero.
+python3 -c \"import jax,sys; d=jax.devices(); print('[PREFLIGHT] jax devices:',d); sys.exit(0 if d and d[0].platform=='gpu' else 1)\" || {
+  echo \"[PREFLIGHT] FATAL: no GPU visible to JAX on \$(hostname). Exiting non-zero so this task is not recorded as COMPLETED.\"
+  exit 1
+}
+
 python3 -m optimize.example_run \
     --params ${PARAMS} \
     --input_file_sim ${INPUT_FILE_SIM} \

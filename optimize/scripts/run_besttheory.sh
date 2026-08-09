@@ -74,9 +74,15 @@ ARMS=(
 #   BT0 -> BT1  what correcting the WEIGHT alone buys  (deployable today, no oracle)
 #   BT1 -> BT2  what the REFIT buys on top             (bounds the oracle concern)
 
+# ONLY=BT1 restricts submission to one arm; combined with SEEDS this reruns individual tasks
+# (e.g. after a node failure took out specific seeds).
+ONLY=${ONLY:-}
+EXCLUDE=${EXCLUDE:-}
+
 k=0
 for arm in "${ARMS[@]}"; do
   IFS='|' read -r NAME MODE PW MW NUL NUR LOC SL SR <<< "${arm}"
+  if [ -n "${ONLY}" ] && [ "${NAME}" != "${ONLY}" ]; then k=$((k + 1)); continue; fi
   ACC=${ACCOUNTS[$((k % ${#ACCOUNTS[@]}))]}
   # --export values must be comma-free: sbatch splits its own list on commas.
   EXP="ALL,SCIMODE=${MODE},SCITAG=_${NAME},SCINBATCH=100,SCILEN=400,SCIITER=10000"
@@ -87,6 +93,7 @@ for arm in "${ARMS[@]}"; do
   fi
   echo "submitting ${NAME}: mode=${MODE} prior_w=${PW} mean_w=${MW} shape=${NUL:-current} acct=${ACC}"
   sbatch --account="${ACC}" --job-name="${NAME}" --array="${SEEDS}%${THROTTLE}" \
+         ${EXCLUDE:+--exclude=${EXCLUDE}} \
          --time=26:00:00 --export="${EXP}" optimize/scripts/start_sci_case.sh
   k=$((k + 1))
 done
