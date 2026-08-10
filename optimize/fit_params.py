@@ -2870,6 +2870,72 @@ class GradientDescentFitter(ParamFitter):
         # Because the aux decomposition is stored at every alpha and dedx_prior enters the total
         # linearly in its weight, the total can be re-scored offline at ANY prior weight from this
         # one scan -- no extra GPU passes to sweep the weight.
+        def _parse_alpha(name):
+            """Accept ':' and ';' as well as ',' -- sbatch --export splits its own list on commas."""
+            raw = os.environ.get(name, '').strip()
+            if not raw:
+                return []
+            raw = raw.replace(';', ',').replace(':', ',')
+            return [float(x) for x in raw.split(',') if x.strip()]
+
+        def _lerp_geom(a):
+            """Geometry along fit -> truth-projection, elementwise in the spline coefficients."""
+            out = []
+            for gf, gt in zip(g_fit, g_truth):
+                gf_, gt_ = np.asarray(gf, float), np.asarray(gt, float)
+                if gf_.shape != gt_.shape:      # never seen, but a silent mismatch would be lethal
+                    logger.warning(f"[TRUTHPOINT] batch {i}: geom shape {gf_.shape} vs {gt_.shape}; "
+                                   f"holding this track at the fit")
+                    out.append(jnp.asarray(gf_.astype(np.float32)))
+                    continue
+                out.append(jnp.asarray((gf_ + a * (gt_ - gf_)).astype(np.float32)))
+            return out
+
+        # ── GEOMETRY dispersion scan (LARND_TP_GEOM_ALPHA) ───────────────────────────────────
+        # The same walk, along GEOMETRY instead of dEdx, with calibration and dEdx held at the fit.
+        # Study 2 found geometry is UNREACHED (-213 nat of likelihood, essentially no prior
+        # involvement) while dEdx is DISPLACED. If that is right the likelihood's optimum along
+        # this axis should sit at alpha ~ 1, and geometry is purely optimiser-limited -- which is
+        # what justifies spending long runs on it. If instead the optimum is well below 1, geometry
+        # has its own shrinkage story and more iterations will not deliver the 1.86x headroom.
+        for _a in _parse_alpha('LARND_TP_GEOM_ALPHA'):
+            POINTS.append((f'G{_a:g}', calib_fit, d_fit_j, _lerp_geom(_a)))
+
+        # ── JOINT (geometry x dEdx) grid (LARND_TP_JOINT_ALPHA) ───────────────────────────────
+        # Same value list used on both axes. Tests whether the dEdx optimum MOVES with geometry --
+        # i.e. whether the two blocks are degenerate. That coupling is the hypothesis for the
+        # longitudinal-diffusion regression seen in production but not at ceiling, where geometry
+        # is frozen. Cost is len^2 points, so keep the list short.
+        _j = _parse_alpha('LARND_TP_JOINT_ALPHA')
+        if _j and d_truth_j is not None and d_fit_j is not None:
+            _lf = np.asarray(d_fit, dtype=np.float64)
+            _lt = np.asarray(d_truth, dtype=np.float64)
+            for _ga in _j:
+                _gg = _lerp_geom(_ga)
+                for _da in _j:
+                    POINTS.append((f'J{_ga:g}_{_da:g}', calib_fit,
+                                   jnp.asarray((_lf + _da * (_lt - _lf)).astype(np.float32)), _gg))
+
+        # ── CALIBRATION profile at geometry = fit AND geometry = truth ────────────────────────
+        # LARND_TP_CALIB_SCAN="long_diff:0.8:0.9:1:1.1:1.2" scans one calibration parameter as a
+        # MULTIPLE of its fitted value, once with geometry at the fit and once at truth. If the
+        # optimum moves between the two, that parameter is entangled with geometry -- the direct
+        # test for longitudinal diffusion, at ~1 GPU-minute per point instead of a 28 h refit.
+        _cs = os.environ.get('LARND_TP_CALIB_SCAN', '').strip()
+        if _cs:
+            _parts = _cs.replace(';', ',').replace(':', ',').split(',')
+            _pname = _parts[0].strip()
+            _mults = [float(x) for x in _parts[1:] if x.strip()]
+            if _pname not in calib_fit:
+                logger.warning(f"[TRUTHPOINT] LARND_TP_CALIB_SCAN parameter {_pname!r} is not one "
+                               f"of {sorted(calib_fit)}; skipping")
+            else:
+                for _tag, _gg in [('gfit', g_fit), ('gtru', g_truth)]:
+                    for _m in _mults:
+                        _cal = dict(calib_fit)
+                        _cal[_pname] = calib_fit[_pname] * _m
+                        POINTS.append((f'C{_pname}_{_tag}_{_m:g}', _cal, d_fit_j, _gg))
+
         _alph = os.environ.get('LARND_TP_DEDX_ALPHA', '').strip()
         if _alph and d_truth_j is not None and d_fit_j is not None:
             # accept ':' and ';' as well as ',' -- sbatch --export splits its own list on commas

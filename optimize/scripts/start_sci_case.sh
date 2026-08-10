@@ -26,6 +26,12 @@ MAX_NBATCH=${SCINBATCH:-100}
 # (no fitting; see _eval_truth_point). One epoch visits every batch exactly once, which is all
 # the evaluation needs, so iterations is pinned to the batch count rather than left at SCIITER.
 SCITRUTHPOINT=${SCITRUTHPOINT:-}
+# Extra point families for truth-point mode. Values use ':' separators, never ',' -- sbatch
+# --export splits its own list on commas and would truncate them silently.
+SCITPDEDXA=${SCITPDEDXA:-}
+SCITPGEOMA=${SCITPGEOMA:-}
+SCITPJOINTA=${SCITPJOINTA:-}
+SCITPCALIB=${SCITPCALIB:-}
 if [ -n "${SCITRUTHPOINT}" ]; then
   if [ ! -f "${SCITRUTHPOINT}" ]; then
     echo "SCITRUTHPOINT=${SCITRUTHPOINT} does not exist"; exit 1
@@ -138,6 +144,10 @@ export LARND_DEDX_PARAM=${SCIDXPARAM}
 export LARND_DEDX_MIN_DX=${LARND_DEDX_MIN_DX:-0.0}
 export LARND_DEDX_LR_FINAL_FRAC=${SCIDEDXFF}
 export LARND_TRUTHPOINT=${SCITRUTHPOINT}
+export LARND_TP_DEDX_ALPHA=${SCITPDEDXA}
+export LARND_TP_GEOM_ALPHA=${SCITPGEOMA}
+export LARND_TP_JOINT_ALPHA=${SCITPJOINTA}
+export LARND_TP_CALIB_SCAN=${SCITPCALIB}
 export LARND_CHAIN_FRAME=${LARND_CHAIN_FRAME:-drift}
 export LARND_CHAIN_DRIFT_W=${LARND_CHAIN_DRIFT_W:-0}
 echo \"[CHAIN-ENV] frame=\$LARND_CHAIN_FRAME drift_w=\$LARND_CHAIN_DRIFT_W\"
