@@ -390,8 +390,17 @@ def _transverse_frame(u0, frame=None):
     return e1.astype(np.float32), e2.astype(np.float32)
 
 
+# Number of sine modes per transverse direction. NOTE the floor: with a 40 cm knot and a median
+# track of 44.4 cm, round(L/knot) = 1 for almost every track, so EVERY track is clipped up to the
+# floor and chain_spline_knot_cm has no effect at all -- the basis resolution is set here, not by
+# that parameter. Measured against the truth projection, mode 1 recovers 51.6% of its true
+# amplitude, mode 2 28.4%, and mode 3 -61.7% (its error exceeds its signal, i.e. fitting it injects
+# noise). LARND_SPLINE_KMIN exists to test dropping that mode.
+_SPLINE_KMIN = int(os.environ.get('LARND_SPLINE_KMIN', '3'))
+
+
 def _spline_K(total_len, knot_cm):
-    return int(np.clip(round(total_len / knot_cm), 3, 12))
+    return int(np.clip(round(total_len / knot_cm), _SPLINE_KMIN, 12))
 
 
 def _build_chain_meta_spline(ctxs, knot_cm):
@@ -2921,20 +2930,34 @@ class GradientDescentFitter(ParamFitter):
         # MULTIPLE of its fitted value, once with geometry at the fit and once at truth. If the
         # optimum moves between the two, that parameter is entangled with geometry -- the direct
         # test for longitudinal diffusion, at ~1 GPU-minute per point instead of a 28 h refit.
+        # LARND_TP_CALIB_SCAN="Ab+lifetime:0.9:1:1.1" -- '+' separates PARAMETER NAMES, ':' the
+        # multipliers of each parameter's fitted value. Every parameter is scanned at all four
+        # combinations of (geometry, dEdx) in {fit, truth}, so the SHIFT of each optimum when a
+        # nuisance block moves is the degeneracy between that parameter and that block, and the
+        # curvature is how well the data determines it. Cost is
+        # n_params x n_mults x 4 points, so keep both lists short.
         _cs = os.environ.get('LARND_TP_CALIB_SCAN', '').strip()
         if _cs:
             _parts = _cs.replace(';', ',').replace(':', ',').split(',')
-            _pname = _parts[0].strip()
+            _pnames = [x.strip() for x in _parts[0].split('+') if x.strip()]
             _mults = [float(x) for x in _parts[1:] if x.strip()]
-            if _pname not in calib_fit:
-                logger.warning(f"[TRUTHPOINT] LARND_TP_CALIB_SCAN parameter {_pname!r} is not one "
-                               f"of {sorted(calib_fit)}; skipping")
+            _bad = [x for x in _pnames if x not in calib_fit]
+            if _bad:
+                logger.warning(f"[TRUTHPOINT] LARND_TP_CALIB_SCAN: {_bad} not in "
+                               f"{sorted(calib_fit)}; those are skipped")
+            _combos = [('gfit', 'dfit', g_fit, d_fit_j), ('gtru', 'dfit', g_truth, d_fit_j)]
+            if d_truth_j is not None:
+                _combos += [('gfit', 'dtru', g_fit, d_truth_j),
+                            ('gtru', 'dtru', g_truth, d_truth_j)]
             else:
-                for _tag, _gg in [('gfit', g_fit), ('gtru', g_truth)]:
+                logger.warning("[TRUTHPOINT] no matched-truth dEdx; the dEdx axis of the "
+                               "calibration scan is skipped")
+            for _pname in [x for x in _pnames if x in calib_fit]:
+                for _gt, _dt, _gg, _dd in _combos:
                     for _m in _mults:
                         _cal = dict(calib_fit)
                         _cal[_pname] = calib_fit[_pname] * _m
-                        POINTS.append((f'C{_pname}_{_tag}_{_m:g}', _cal, d_fit_j, _gg))
+                        POINTS.append((f'C{_pname}_{_gt}_{_dt}_{_m:g}', _cal, _dd, _gg))
 
         _alph = os.environ.get('LARND_TP_DEDX_ALPHA', '').strip()
         if _alph and d_truth_j is not None and d_fit_j is not None:

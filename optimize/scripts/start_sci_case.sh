@@ -32,6 +32,13 @@ SCITPDEDXA=${SCITPDEDXA:-}
 SCITPGEOMA=${SCITPGEOMA:-}
 SCITPJOINTA=${SCITPJOINTA:-}
 SCITPCALIB=${SCITPCALIB:-}
+# Spline mode-count floor (see _spline_K): every track is clipped up to it, so this and not
+# chain_spline_knot_cm is what sets the geometry basis resolution.
+SCIKMIN=${SCIKMIN:-3}
+# TWO-PASS: initialise geometry from a previous fit's chain_cache and freeze it, so calibration
+# and dEdx re-fit against a STATIC geometry instead of co-adapting with a moving one.
+SCICHAININIT=${SCICHAININIT:-}
+SCICHFREEZE=${SCICHFREEZE:-0}
 if [ -n "${SCITRUTHPOINT}" ]; then
   if [ ! -f "${SCITRUTHPOINT}" ]; then
     echo "SCITRUTHPOINT=${SCITRUTHPOINT} does not exist"; exit 1
@@ -125,6 +132,8 @@ _KNOBTAG=""
 [ "${SCIDEDXLR:-1e-2}" != "1e-2" ] && _KNOBTAG="${_KNOBTAG}_dlr${SCIDEDXLR}"
 [ -n "${SCIDEDXFREEZE}" ]       && _KNOBTAG="${_KNOBTAG}_dfz${SCIDEDXFREEZE}"
 [ "${SCIDXNUL}" != "4.785" ]    && _KNOBTAG="${_KNOBTAG}_refit"
+[ "${SCIKMIN}" != "3" ]         && _KNOBTAG="${_KNOBTAG}_k${SCIKMIN}"
+[ -n "${SCICHAININIT}" ]        && _KNOBTAG="${_KNOBTAG}_2pass"
 LABEL=sci_${SCIMODE}_b${MAX_NBATCH}_len${MAX_BATCH_LEN}${_KNOBTAG}_seed${SEED}
 
 mkdir -p /sdf/group/neutrino/pgranger/larnd-sim-jax/logs/sci_case
@@ -148,6 +157,9 @@ export LARND_TP_DEDX_ALPHA=${SCITPDEDXA}
 export LARND_TP_GEOM_ALPHA=${SCITPGEOMA}
 export LARND_TP_JOINT_ALPHA=${SCITPJOINTA}
 export LARND_TP_CALIB_SCAN=${SCITPCALIB}
+export LARND_SPLINE_KMIN=${SCIKMIN:-3}
+export LARND_CHAIN_INIT_FROM=${SCICHAININIT}
+export LARND_CHAIN_FREEZE_ITER=${SCICHFREEZE:-0}
 export LARND_CHAIN_FRAME=${LARND_CHAIN_FRAME:-drift}
 export LARND_CHAIN_DRIFT_W=${LARND_CHAIN_DRIFT_W:-0}
 echo \"[CHAIN-ENV] frame=\$LARND_CHAIN_FRAME drift_w=\$LARND_CHAIN_DRIFT_W\"
