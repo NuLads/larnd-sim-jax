@@ -117,12 +117,14 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   **32% of the true spread** and its mean slides **1.08% low**. Refitting on the grid in use fixes
   both at β = 1; re-weighting trades one against the other. The mean constraint is separately
   **6.3× too stiff**: the true batch mean genuinely varies 0.747%, so `w = 1/(2σ²) = 2520`.
-- **BLOCK ALTERNATION WORKS, ON EXACTLY THE PARAMETERS THE MATRIX PREDICTS (§6w).** A second pass
-  with geometry FROZEN at its converged values reaches `BT2` quality in 3 000 iterations and beats
-  it on **A_b (×2.3, 0.340 → 0.147, both seeds)** and transverse diffusion (×2.2, one seed).
-  Longitudinal diffusion and lifetime are unchanged — precisely the parameters that NEED geometry
-  to move. Calibration restarts from the nominal point in both arms, so this is an independent
-  convergence to a better optimum, not a polish. n = 2; a warm-start control is running.
+- **BLOCK ALTERNATION IS UNTESTED — the earlier positive result was RETRACTED (§6w).** A
+  frozen-geometry second pass appeared to beat `BT2` on A_b (×2.3, 0.340 → 0.147). The warm-start
+  control killed it: the frozen-geometry arms run only 3 000 iterations, so their calibration LR at
+  readout is **0.059 of peak against `BT2`'s 8.0 × 10⁻⁵ — a factor 700**, and A_b still wanders by
+  ±0.13 where `BT2`'s is fixed to ±0.001. The headline compared a frozen endpoint against a
+  mid-oscillation sample; all three arms sit within **0.4%** on the objective. The *degeneracy
+  matrix* itself is unaffected (evaluation-only), but acting on it via alternation is now an open
+  question, not a result. The fix is one flag: `SCILRDECAY` 0.91 → 0.73.
 - **WE ARE NOT STATISTICS-LIMITED ANYWHERE (§6w).** From the curvature of the objective at the
   `BT2` fit, every parameter sits **4–16×** from its statistical floor: A_b 0.017% vs 0.27%
   achieved, E field 0.003% vs 0.03%, tran. diff. 0.373% vs 1.48%, long. diff. 0.722% vs 7.45%,
@@ -2765,6 +2767,11 @@ final position as `BT2` in 26% *fewer* iterations, which is a straight win with 
 
 ### Acting on the matrix: a frozen-geometry second pass
 
+> ⚠️ **RETRACTED by the warm-start control below.** The A_b ×2.3 headline in this subsection does
+> not survive: it compared `BT2`'s *frozen* endpoint against a *mid-oscillation sample* of a run
+> whose learning rate was still 700× larger. The subsection is kept as written, with the numbers it
+> reported, because the retraction is only legible against them. **Read it with the next subsection.**
+
 ![Alternation](plots/noise_report/fig59_alternation.png)
 
 If the calibration optima move as geometry improves, then during a joint fit calibration is chasing
@@ -2826,6 +2833,68 @@ near 0.34 would mean the frozen objective has more than one basin and the cold s
 one by luck. Only calibration can be warm-started — there is no init-from for the dE/dx block, so it
 restarts at the prior centre in both arms.
 
+### The warm-start control, which retracts the above (`ALTW`)
+
+![Warm-start control](plots/noise_report/fig62_altwarm.png)
+
+`ALTW` is the control the subsection above called for: the same frozen-geometry objective,
+approached from the *other* direction, with calibration initialised at `BT2`'s own fitted values
+instead of the nominal point. Converging back to ~0.15 would have established 0.15 as the real
+optimum, reached from two directions.
+
+**The setup verified before anything was read**, since the comparison rests entirely on it:
+`ALTW`'s iteration-0 calibration equals `BT2`'s final values to all printed digits on all five
+parameters and both seeds, and both arms inherited byte-identical geometry — 860 of 864 tracks match
+`BT2` *and each other*, with the same 4 mismatches. The two arms differ **only** in the calibration
+initialisation.
+
+**The answer is neither of the two anticipated outcomes. The run invalidates its own premise, twice.**
+
+**1 — The warm start is erased inside ~200 iterations.** Only calibration is warm-started; there is
+no init-from for the dE/dx block, so it restarts near the prior centre in *both* arms and
+immediately drags A_b with it — the charge-normalisation coupling of §6u, acting here as a
+confound. `ALTW` leaves its init at +0.48 and is at **+1.27 by iteration 300**, while `ALT` arrives
+from −4.18; by ~300 both arms sit in the same region and neither remembers where it started. This
+was never a two-directions test. It is two runs of the same cold-dE/dx transient.
+
+**2 — Neither frozen-geometry arm is converged at readout.** The calibration LR decays 0.91 per
+**epoch**, so at 3 000 iterations (30 epochs) it stands at **0.059 of peak**, against **8.0 × 10⁻⁵**
+for `BT2` at 10 000 — a factor **700**. The consequence is visible directly in A_b's end-of-run
+peak-to-peak spread:
+
+| | `BT2` | `ALT` | `ALTW` |
+|---|---|---|---|
+| A_b end-of-run spread | **0.001** | 0.127 | 0.117 |
+| A_b, seed 0 | +0.472 | +0.279 | +0.328 |
+| A_b, seed 1 | +0.204 | **+0.008** | +0.437 |
+
+**So fig 59's "0.340 → 0.147, ×2.3" was a unit mismatch in disguise** — a frozen endpoint compared
+against a mid-oscillation sample. `ALT`'s striking +0.008 on seed 1 carries a ±0.065 wander around
+it: a *sample* of an oscillation, not a value. With n = 2 the median is just the mean of two, so
+that one sample set the headline.
+
+**The objective corroborates it.** All three arms sit within **0.4%** on the PPP NLL — 9 108
+(`BT2`), 9 147 (`ALT`), 9 136 (`ALTW`). For scale, `G20K` moved the same quantity by 7.2%. Nothing
+here descended; the arms are wandering across a flat region, and the calibration differences between
+them are optimiser path, not objective.
+
+**What is left standing from §6w.** The *degeneracy matrix* is untouched — it is an evaluation-only
+measurement with no optimiser in it. What falls is only the claim that acting on it via block
+alternation buys anything. The matrix's prediction of *which* parameters would respond was
+appealing, and remains untested rather than confirmed.
+
+**The fix is cheap and specific**, and worth doing before block alternation is dismissed: rerun both
+arms with the calibration schedule compressed so that 3 000 iterations reach `BT2`'s terminal LR —
+`SCILRDECAY` 0.91 → **0.73**, since 0.73³⁰ = 7.9 × 10⁻⁵ ≈ 0.91¹⁰⁰. That makes the endpoints
+comparable quantities. Warm-starting the dE/dx block would need new code (there is no init-from for
+it) and is the second half of a proper test. 4 jobs, ~5 h.
+
+> **The methodological lesson, which is the durable output of this run.** Two arms were compared at
+> equal *iteration count* when what matters is equal *schedule phase* — the same error the `K2`
+> screen made (§6w) and the inverse of the one `G20K` was designed around. Fig 59 also quoted a
+> median over 2 seeds, which cannot distinguish a trend from one lucky sample. **Any comparison
+> against a converged run must either be converged itself or quote its own oscillation amplitude.**
+
 ### Is the third spline mode worth fitting? (`K2`)
 
 ![K2](plots/noise_report/fig60_k2_basis.png)
@@ -2881,6 +2950,19 @@ points** depending on whether you read the endpoint or the plateau. Every cross-
 comparison in this campaign was therefore made between seeds that were not equally
 converged. One consequence: a threshold test previously called "inconclusive" reads +1.1% at
 its endpoint and +11.9% at its plateau.
+
+**Trap 1b — comparing a short run against a converged one at equal ITERATION COUNT.** The sharper
+form of trap 1, and it cost a published result (§6w, fig 59 → fig 62). Both schedules in this code
+are *phase* schedules, and the calibration LR decays **per epoch**: a 3 000-iteration run reads out
+at 0.059 of peak LR while a 10 000-iteration run reads out at 8.0 × 10⁻⁵ — a factor **700**. Equal
+iteration count is therefore *not* equal schedule phase, and the short arm's endpoint is a sample of
+an oscillation (A_b spread ±0.13) held against a frozen number (±0.001). The failure is symmetric
+and both directions have now bitten us: `K2` compared calibration too early and read a transient as
+a win; fig 59 compared a still-moving arm against a settled one and read wander as an improvement;
+`G20K` is the only one of the three designed correctly, by stretching the schedule with the run.
+**Either converge the short arm, or quote its oscillation amplitude alongside its value — never its
+bare endpoint.** The cheap remedy is to compress the decay so the short run lands on the same
+terminal LR (here `SCILRDECAY` 0.91 → 0.73 for 30 epochs).
 
 **Trap 2 — per-batch metrics.** The position residual is a *per-batch* quantity and swings
 between 120 µm and 1400 µm within a single converged run. Comparing final values across runs
@@ -2942,7 +3024,7 @@ study 2 established.*
 | `GQ1`–`GQ3` (geometry screen) | chain_lr 3e-2 / 1e-1, and a slower chain decay | **COMPLETE — §6w** |
 | `G20K` (3 seeds × 20 000 it) | is geometry merely unconverged? both schedules stretched | **RUNNING** at ~15 000/20 000, ~6 h — preliminary read in §6w |
 | `ALT` (screen) | frozen-geometry re-fit — does alternation help? | **COMPLETE — §6w** |
-| `ALTW` (2 seeds) | the same, calibration WARM-STARTED from BT2 — one basin or two? | **RUNNING** at 1 000/3 000, ~3 h |
+| `ALTW` (2 seeds) | the same, calibration WARM-STARTED from BT2 — one basin or two? | **COMPLETE — §6w; it RETRACTS the `ALT` result** |
 | `K2` (screen) | the 2-mode spline basis | **COMPLETE — §6w** |
 | **Study 3** `S3T*` / `S3W*` (7 usable arms, ceiling) | dE/dx mean-constraint TARGET scan crossed with weight | **COMPLETE — §6u** |
 | `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **COMPLETE — §6v** |

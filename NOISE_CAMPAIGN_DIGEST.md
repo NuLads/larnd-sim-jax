@@ -22,9 +22,11 @@ cross-check that reframed the whole thing.
   headroom left in the current basis); dE/dx is displaced (prior-limited). The dE/dx prior turns
   out to be **correct for the wrong segmentation**, and its weight is a tempering exponent whose
   principled value is w = 1/dx ≈ 1.01, not 5.
-- **BLOCK ALTERNATION WORKS ON THE DECOUPLED PARAMETERS (fig 59).** A frozen-geometry second pass
-  gives A_b ×2.3 in 3 000 iterations — and improves exactly the parameters fig 58 says are
-  decoupled from geometry, leaving the coupled ones untouched.
+- **BLOCK ALTERNATION IS UNTESTED — the fig 59 result was RETRACTED by fig 62.** The
+  frozen-geometry pass runs only 3 000 iterations, so its calibration LR at readout is 0.059 of peak
+  against BT2's 8.0e−5 (×700) and A_b still wanders ±0.13 vs BT2's ±0.001: the "×2.3" compared a
+  frozen endpoint against a mid-oscillation sample, and all three arms sit within 0.4% on the
+  objective. Fig 58's matrix is unaffected; acting on it is now open, not settled.
 - **WE ARE NOT STATISTICS-LIMITED ANYWHERE (fig 58).** Every parameter sits 4–16× from its
   statistical floor. None of the remaining error is irreducible.
 - **GEOMETRY IS OPTIMISER-LIMITED AND HOLDS MOST OF THE INFORMATION (figs 56, 58).** Its optimum is
@@ -884,6 +886,9 @@ degeneracy matrix's prediction coming true (it is the parameter most coupled to 
 
 ![Alternation](plots/noise_report/fig59_alternation.png)
 
+**⚠️ RETRACTED by fig 62 — read the two together.** The headline below compared BT2's FROZEN
+endpoint against a MID-OSCILLATION sample of a run whose LR was still 700× larger. Kept as written
+because the retraction is only legible against the numbers it reported.
 **Tests** — does alternating the blocks help? ALT takes BT2's converged geometry, FREEZES it, and
 re-fits calibration and dE/dx for 3 000 iterations. Everything except geometry restarts from the
 same nominal point BT2 used (A_b 0.800, lifetime 2200, dE/dx at the prior centre), so this is an
@@ -903,6 +908,37 @@ two-pass scheme (~22 h vs 19 h), NOT a cheaper standalone recipe. n = 2. And the
 check FAILS misleadingly: ALT's position reads 1104 µm against BT2's 170 µm median, but with
 geometry frozen the residual is recorded once for batch 0 only, where BT2's own value is 1027 µm —
 860 of 864 track coefficients match exactly.
+
+
+![Warm-start control](plots/noise_report/fig62_altwarm.png)
+
+**Tests** — the control fig 59 called for: the SAME frozen-geometry objective approached from the
+other direction, calibration initialised at BT2's own fitted values. Converging back to ~0.15 would
+have established 0.15 as the real optimum, reached from two directions.
+**Verified first** — ALTW's iteration-0 calibration equals BT2's final to all printed digits on all
+5 params and both seeds, and both arms inherited byte-identical geometry (860/864 match BT2 AND each
+other, same 4 mismatches). The arms differ ONLY in the calibration init.
+**Concludes — the premise is invalid, twice over, and fig 59 does not survive.**
+(1) *The warm start is erased in ~200 iterations.* Only calibration is warm-started; the dE/dx block
+has no init-from, restarts near the prior centre in BOTH arms, and drags A_b with it (the §6u
+charge-normalisation coupling). ALTW leaves its init at +0.48 and is at **+1.27 by iteration 300**
+while ALT arrives from −4.18 — by ~300 both sit in the same region. Not a two-directions test; two
+runs of the same cold-dE/dx transient.
+(2) *Neither arm is converged.* The calib LR decays 0.91 per EPOCH, so at 3 000 iterations it is
+**0.059 of peak vs BT2's 8.0e−5 — a factor 700**. A_b's end-of-run spread: BT2 **0.001**, ALT 0.127,
+ALTW 0.117. ALT's striking +0.008 on seed 1 carries a ±0.065 wander — a SAMPLE, not a value, and
+with n = 2 that one sample set the headline.
+**Concludes — the objective corroborates it.** All three arms within **0.4%** on the PPP NLL (9 108
+/ 9 147 / 9 136); G20K moved the same quantity 7.2%. They are wandering across a flat region, so the
+calibration differences are optimiser path, not objective.
+**What survives** — the degeneracy matrix (fig 58) is untouched: evaluation-only, no optimiser in
+it. Only the claim that ACTING on it via alternation buys anything falls. Alternation is now
+untested, not disproven.
+**The fix** — compress the calib schedule so 3 000 iterations reach BT2's terminal LR: SCILRDECAY
+0.91 → **0.73** (0.73³⁰ = 7.9e−5 ≈ 0.91¹⁰⁰). 4 jobs, ~5 h.
+**The lesson** — two arms compared at equal ITERATION COUNT when what matters is equal SCHEDULE
+PHASE: the same error the K2 screen made, the inverse of the one G20K was built around. **Any
+comparison against a converged run must be converged itself or quote its own oscillation amplitude.**
 
 
 ![K2 spline basis](plots/noise_report/fig60_k2_basis.png)

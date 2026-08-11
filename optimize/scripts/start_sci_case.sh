@@ -39,6 +39,16 @@ SCIKMIN=${SCIKMIN:-3}
 # and dEdx re-fit against a STATIC geometry instead of co-adapting with a moving one.
 SCICHAININIT=${SCICHAININIT:-}
 SCICHFREEZE=${SCICHFREEZE:-0}
+# The other two blocks of the same three-block warm-start/freeze matrix.
+#   SCIDEDXINIT     warm-start per-segment log-dEdx from a previous fit's dedx_cache. Without it a
+#                   frozen-geometry second pass restarts dEdx COLD at the prior centre, which is
+#                   exactly what invalidated the ALTW control (report fig 62).
+#   SCICALIBFREEZE  freeze CALIBRATION for the whole run. LARND_CALIB_START_ITER gates the
+#                   calibration update ("skip until iteration N"), so any N > ITERATIONS freezes it
+#                   permanently; it is derived FROM ITERATIONS below so it cannot silently become a
+#                   partial freeze when the run length changes -- the trap DEDX_FREEZE_ITER hit.
+SCIDEDXINIT=${SCIDEDXINIT:-}
+SCICALIBFREEZE=${SCICALIBFREEZE:-0}
 # --set_init_params takes SPACE-separated "<param> <val> ..." pairs, which sbatch --export cannot
 # carry. Accept a colon-separated form and expand it here; a value that already uses spaces passes
 # through untouched, so this is additive.
@@ -70,6 +80,10 @@ DEDX_START_ITER=0
 # Default = ITERATIONS+200, i.e. never fires. SCIDEDXFREEZE makes it settable: freezing dEdx at
 # iters/2 is what broke the lifetime<->dEdx co-adaptation in the 5-D study.
 DEDX_FREEZE_ITER=${SCIDEDXFREEZE:-$((ITERATIONS+200))}
+# 0 = calibration live from iteration 0 (normal). 1 = frozen for the whole run, expressed as a
+# start-iteration beyond the end so it can never degrade into a partial freeze.
+CALIB_START_ITER=0
+[ "${SCICALIBFREEZE}" = "1" ] && CALIB_START_ITER=$((ITERATIONS+200))
 # dEdx LR annealing: final LR as a FRACTION of the initial one, reached at the end of the run.
 # Empty = constant LR = previous behaviour (the dEdx block historically never annealed at all,
 # unlike calibration which decays per epoch and geometry which decays per iteration).
@@ -138,6 +152,8 @@ _KNOBTAG=""
 [ "${SCIDXNUL}" != "4.785" ]    && _KNOBTAG="${_KNOBTAG}_refit"
 [ "${SCIKMIN}" != "3" ]         && _KNOBTAG="${_KNOBTAG}_k${SCIKMIN}"
 [ -n "${SCICHAININIT}" ]        && _KNOBTAG="${_KNOBTAG}_2pass"
+[ -n "${SCIDEDXINIT}" ]         && _KNOBTAG="${_KNOBTAG}_dxinit"
+[ "${SCICALIBFREEZE}" = "1" ]   && _KNOBTAG="${_KNOBTAG}_cfz"
 LABEL=sci_${SCIMODE}_b${MAX_NBATCH}_len${MAX_BATCH_LEN}${_KNOBTAG}_seed${SEED}
 
 mkdir -p /sdf/group/neutrino/pgranger/larnd-sim-jax/logs/sci_case
@@ -164,6 +180,9 @@ export LARND_TP_CALIB_SCAN=${SCITPCALIB}
 export LARND_SPLINE_KMIN=${SCIKMIN:-3}
 export LARND_CHAIN_INIT_FROM=${SCICHAININIT}
 export LARND_CHAIN_FREEZE_ITER=${SCICHFREEZE:-0}
+export LARND_DEDX_INIT_FROM=${SCIDEDXINIT}
+export LARND_CALIB_START_ITER=${CALIB_START_ITER}
+echo \"[BLOCKS] geom_init='${SCICHAININIT}' geom_freeze=${SCICHFREEZE:-0} dedx_init='${SCIDEDXINIT}' dedx_freeze=${DEDX_FREEZE_ITER} calib_start_iter=${CALIB_START_ITER} ITERATIONS=${ITERATIONS}\"
 export LARND_CHAIN_FRAME=${LARND_CHAIN_FRAME:-drift}
 export LARND_CHAIN_DRIFT_W=${LARND_CHAIN_DRIFT_W:-0}
 echo \"[CHAIN-ENV] frame=\$LARND_CHAIN_FRAME drift_w=\$LARND_CHAIN_DRIFT_W\"

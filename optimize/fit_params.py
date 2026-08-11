@@ -3001,14 +3001,62 @@ class GradientDescentFitter(ParamFitter):
                         f"  repr_floor = {floor_um if floor_um is None else round(floor_um, 1)} um")
         self.training_history.setdefault('truthpoint', []).append(rec)
 
+    def _dedx_init_from_ckpt(self, batch_idx, n_orig_segs):
+        """Warm-start log-dEdx for *batch_idx* from a previous fit (LARND_DEDX_INIT_FROM).
+
+        Returns the checkpoint's log_dedx, or None to fall back to the prior centre.
+
+        WHY THIS EXISTS. Freezing geometry and re-fitting (LARND_CHAIN_INIT_FROM +
+        LARND_CHAIN_FREEZE_ITER) used to restart dEdx COLD at the prior centre, because there was
+        no init-from for this block. That single gap invalidated the ALTW warm-start control
+        (report fig 62): the cold dEdx block dragged A_b from its warm-started +0.48 to +1.27
+        within 300 iterations, so the calibration warm start was erased before it could be tested.
+
+        MATCHING IS BY BATCH INDEX, and that is only safe because dEdx state is inherently
+        per-batch-position: unlike geometry there is no track_id to key on, since log_dedx is a
+        flat per-segment vector over the batch. The segment count is therefore verified against
+        the checkpoint and a mismatch falls back rather than transplanting another batch's dEdx.
+        Runs must share seed / n_batches / max_batch_len, the same requirement
+        LARND_CHAIN_INIT_FROM documents.
+        """
+        _path = os.environ.get('LARND_DEDX_INIT_FROM')
+        if not _path:
+            return None
+        if not hasattr(self, '_dedx_init_ckpt'):
+            with open(_path, 'rb') as _f:
+                _ck = pickle.load(_f)
+            self._dedx_init_ckpt = {int(_bi): np.asarray(_v['log_dedx'])
+                                    for _bi, _v in _ck.get('dedx_cache', {}).items()
+                                    if 'log_dedx' in _v}
+            self._dedx_init_misses = []
+            logger.info(f"[TWO-PASS] dEdx init from {_path} "
+                        f"({len(self._dedx_init_ckpt)} batches, keyed by batch index)")
+        _ld = self._dedx_init_ckpt.get(int(batch_idx))
+        if _ld is None or len(_ld) != n_orig_segs:
+            self._dedx_init_misses.append(int(batch_idx))
+            logger.warning(
+                f"[TWO-PASS] dEdx init MISS for batch {batch_idx}: "
+                f"{'absent from checkpoint' if _ld is None else f'{len(_ld)} segments vs {n_orig_segs} here'}"
+                f" -- falling back to the prior centre for this batch "
+                f"({len(self._dedx_init_misses)} misses so far)")
+            return None
+        return jnp.asarray(_ld, dtype=jnp.float32)
+
     def _get_or_init_dedx_state(self, batch_idx, n_orig_segs):
         """Lazily initialise per-segment log-dEdx and its Adam state for *batch_idx*.
 
-        All segments are initialised to log(dedx_student_loc) — the prior centre.
-        No true dEdx information is used.
+        All segments are initialised to log(dedx_student_loc) — the prior centre — unless
+        LARND_DEDX_INIT_FROM warm-starts them from a previous fit (see _dedx_init_from_ckpt).
+        No true dEdx information is used either way.
+
+        The Adam state is always initialised FRESH, even on a warm start: the checkpoint's moment
+        estimates belong to a different loss landscape (different frozen blocks) and its step
+        counter would start the new run deep into bias correction.
         """
         if batch_idx not in self._dedx_cache:
-            log_dedx = jnp.log(jnp.full((n_orig_segs,), float(self.dedx_student_loc)))
+            log_dedx = self._dedx_init_from_ckpt(batch_idx, n_orig_segs)
+            if log_dedx is None:
+                log_dedx = jnp.log(jnp.full((n_orig_segs,), float(self.dedx_student_loc)))
             opt_state = self._dedx_optimizer.init(log_dedx)
             self._dedx_cache[batch_idx] = {'log_dedx': log_dedx, 'opt_state': opt_state}
         entry = self._dedx_cache[batch_idx]
@@ -3019,10 +3067,20 @@ class GradientDescentFitter(ParamFitter):
 
         Initialised at mu = log(dedx_student_loc), a = 0  ->  log_dedx == log(loc) for every
         segment, i.e. bit-identical to the per-segment initialisation.
+
+        Under LARND_DEDX_INIT_FROM the checkpoint's log_dedx is decomposed into this
+        parametrisation instead: mu is the length-weighted mean (the scale mu carries EXACTLY,
+        by construction) and a is the residual, which then already satisfies the sum_i l_i a_i = 0
+        gauge that _process_dedx_grads_ss re-imposes after every step.
         """
         if batch_idx not in self._dedx_ss:
             mu = jnp.asarray(np.log(float(self.dedx_student_loc)), dtype=jnp.float32)
             a = jnp.zeros((n_orig_segs,), dtype=jnp.float32)
+            _ld = self._dedx_init_from_ckpt(batch_idx, n_orig_segs)
+            if _ld is not None:
+                _l = jnp.asarray(seg_dx, dtype=jnp.float32)
+                mu = jnp.sum(_l * _ld) / jnp.maximum(jnp.sum(_l), 1e-6)
+                a = _ld - mu
             flat = jnp.concatenate([mu[None], a])
             self._dedx_ss[batch_idx] = {'mu': mu, 'a': a,
                                         'opt_state': self._dedx_optimizer.init(flat)}
