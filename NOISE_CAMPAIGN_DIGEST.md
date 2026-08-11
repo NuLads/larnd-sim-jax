@@ -22,6 +22,10 @@ cross-check that reframed the whole thing.
   headroom left in the current basis); dE/dx is displaced (prior-limited). The dE/dx prior turns
   out to be **correct for the wrong segmentation**, and its weight is a tempering exponent whose
   principled value is w = 1/dx ≈ 1.01, not 5.
+- **NEW BEST CONFIGURATION: BT2 (figs 54–55).** Production with the dE/dx prior REFIT to the
+  segmentation in use and weighted at β = 1. A_b 0.77 → 0.27% (6/6 seeds, 5.6σ) and lifetime
+  |error| 5.97 → 1.62%, better in both lever-arm strata, for ~13 µm of position. Correcting the
+  weight ALONE is a regression, so the refit cannot be replaced by a knob.
 - **THE dE/dx MEAN TARGET IS AN A_b SYSTEMATIC, NOT A LIFETIME LEVER (fig 53).** A_b moves
   −0.84 points per % of target error at weight 1e5 (47σ); lifetime does not move at all. The target
   must be known to 0.12% to keep A_b bias under 0.1 points.
@@ -743,6 +747,46 @@ under 0.1 points the target must be known to **0.12%**.
 **CORRECTS fig 45(e)** — the "weight 3000 costs 7.5× the lifetime scatter" claim was a SEED-SET
 confound (CEILP05 n=3 never saw the low-lever-arm seeds). On common seeds it is 2.6×, and stratified
 by lever arm weight 3000 is mildly *better*. Same confound as figs 49–51, biting twice.
+
+
+![The BT arms](plots/noise_report/fig54_bt_arms.png)
+
+**Tests** — the study-2 corrections applied to production fits. Three arms x 6 seeds, paired,
+differing only in the dE/dx prior: BT0 current shape/w=5/mean 1e5 (the control, run on this tree),
+BT1 current shape at w=1/dx with mean 2500 (correct WEIGHT only), BT2 the REFIT shape at w=1/dx
+with mean 2500.
+**Concludes — BT2 is the new best configuration.** A_b **0.77 → 0.27%**, paired −0.50 ± 0.09,
+better on **6/6 seeds** (5.6σ). Lifetime **|error| 5.97 → 1.62%**, better in BOTH lever-arm strata
+(4.10 → 1.36 high, **9.71 → 2.14** low). dE/dx mean error −0.454 → −0.199%, recovered spread
+0.32 → 0.70. Cost: ~13 µm of position (157 → 170). Nothing regresses.
+**Concludes — correcting the WEIGHT alone is a REGRESSION, not a partial win.** BT1's longitudinal
+diffusion |error| is +11.05 ± 2.03 worse, on **0/6 seeds**. It would have been invisible had we run
+only BT0 and BT2 — which is what that arm was for. The refit is doing the work and cannot be
+replaced by a knob.
+**Concludes — BT0 also validates the tree**: it reproduces §6r's historical production numbers
+(A_b +0.73 → +0.77, lifetime −4.21 → −5.44, position 159 → 157 µm), so a campaign's worth of new
+tooling did not move the answer.
+**WITHDRAWAL, and the third instance of one trap.** The n = 4 read of these arms reported a
+longitudinal-diffusion regression (−0.60% → +7.32%). That was a SIGNED mean of a parameter whose
+per-seed errors change sign; in |error| the paired difference is −0.50 ± 3.65, i.e. nothing. Same
+failure as fig 45(e) and study 1's first readout. **For any mixed-sign parameter, quote |error|.**
+
+![BT convergence traces](plots/noise_report/fig55_bt_traces.png)
+
+**Tests** — what the three arms are doing at every iteration rather than where they end: the five
+calibration parameters, the dE/dx MAE against truth, the length-weighted ⟨dE/dx⟩, position and loss.
+**Concludes — the ⟨dE/dx⟩ panel shows the §6s mechanism happening.** BT1 drops away from the true
+mean inside ~500 iterations and never recovers (1.8678 vs a truth of 1.8869); BT2 climbs to 1.8829
+and holds; BT0 sits between. **The A_b panel reproduces that ordering exactly**, which is the
+A_b↔charge-normalisation coupling of §6u seen as a trajectory rather than a slope.
+**Concludes — an excursion the endpoints hide**: BT1's dE/dx MAE gets WORSE than its own starting
+point for ~2500 iterations (0.070 → 0.081) before recovering, while BT0 and BT2 descend
+monotonically. A too-wide prior at β = 1 lets the field wander before the data reins it in.
+**Concludes — position is still descending in all three arms** at −6 to −7 µm per 20%, which is the
+direct motivation for the 20 000-iteration runs; and longitudinal diffusion is the only parameter
+still drifting everywhere, so its values are softer than their error bars suggest.
+**Read the caption** — the loss panel is NOT comparable across arms: the prior term differs by
+construction, so BT0 sits ~1700 lower purely because its dE/dx prior is 5× weighted.
 
 ## §11 What is settled, what is open, what is next
 

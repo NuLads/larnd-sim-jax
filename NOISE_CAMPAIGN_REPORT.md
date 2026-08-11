@@ -117,6 +117,17 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   **32% of the true spread** and its mean slides **1.08% low**. Refitting on the grid in use fixes
   both at β = 1; re-weighting trades one against the other. The mean constraint is separately
   **6.3× too stiff**: the true batch mean genuinely varies 0.747%, so `w = 1/(2σ²) = 2520`.
+- **NEW BEST CONFIGURATION: `BT2` (§6v).** The production fit with the dE/dx prior **refit to the
+  segmentation in use** and weighted at β = 1 (`w = 1/dx ≈ 1.01`), mean constraint 2500. At 6 seeds,
+  paired: **A_b +0.77 → +0.27%** (−0.50 ± 0.09, better on 6/6 seeds, 5.6σ) and **lifetime |error|
+  5.97 → 1.62%**, better in BOTH lever-arm strata (4.10 → 1.36 high, **9.71 → 2.14** low). Costs
+  ~13 µm of position; nothing regresses. **Correcting the WEIGHT alone (`BT1`) is a regression**,
+  not a partial win — long. diffusion |error| +11.05 ± 2.03, worse on 0/6 seeds — so the refit is
+  doing the work and cannot be replaced by a knob.
+- **AND A THIRD INSTANCE OF THE SIGNED-MEAN TRAP (§6v).** The n = 4 read of these arms reported a
+  longitudinal-diffusion regression; in |error| the paired difference is −0.50 ± 3.65, i.e. nothing.
+  Withdrawn. **For any parameter whose per-seed errors mix sign, quote |error|.** Only A_b and
+  E field have stable signs in this campaign.
 - **STUDY 3 — THE MEAN TARGET IS AN A_b SYSTEMATIC, NOT A LIFETIME LEVER (§6u).**
   **dA_b/d(target %) = −0.837 ± 0.018** at weight 1e5 (47σ) and −0.264 ± 0.022 at 3000, while
   **lifetime is consistent with zero at both** (−0.16 ± 0.48, −0.25 ± 0.44). The stiffness sets how
@@ -2013,6 +2024,12 @@ than trusted.
 
 ### The best setup we have
 
+> **SUPERSEDED BY §6v.** The configuration below is still the production baseline and everything
+> measured against it stands, but it is no longer the best setup we have. `BT2` — the same
+> configuration with the dE/dx prior REFIT to the segmentation in use and its weight set to
+> β = 1 — moves A_b **+0.73 → +0.27%** and lifetime **−4.21 → +0.28%** (|error| 1.62%), at a cost
+> of ~13 µm of position. See §6v.
+
 **Production (S4).** Straight-line guess geometry; jointly fitting per-track positions, ~4000
 per-segment `log_dedx` nuisances, and the five calibration parameters. Configuration:
 
@@ -2453,6 +2470,101 @@ one objection to it is now removed. The derived value still rests on the batch-t
 argument (§6s); study 3 adds that it also makes A_b **3.2× less sensitive** to any error in the
 target, which is a robustness gain for real data where the target will not be known perfectly.
 
+## 6v. The BT arms: applying the study-2 corrections, and a new best configuration
+
+Three **production** arms (geometry fitted), 6 seeds each, 10 000 iterations, differing only in the
+dE/dx prior. All comparisons are **paired** — the arms share seeds and `--seed` draws the target.
+
+| arm | prior shape | prior weight | mean weight | what it isolates |
+|---|---|---|---|---|
+| `BT0` | current | 5 | 1e5 | the production control, **on this tree** |
+| `BT1` | current | **1/dx = 1.0088** | **2500** | the correct WEIGHT, the original SHAPE |
+| `BT2` | **refit** | 1.0088 | 2500 | the headline |
+
+**`BT0` also serves as a tree check, and it passes.** It reproduces the historical production
+numbers of §6r (A_b +0.73 ± 0.05, lifetime −4.21 ± 1.53, position 159 ± 4 µm at 8 seeds) with
+A_b +0.77, lifetime −5.44, position 157 µm at 6 — so the ~1 500 lines of tooling added during this
+campaign did not move the answer. That was not knowable in advance, which is why the arm was run.
+
+### The result
+
+| arm | A_b | E field | tran. diff. | long. diff. | lifetime | pos (µm) | dE/dx MAE | ⟨dE/dx⟩ err | spread |
+|---|---|---|---|---|---|---|---|---|---|
+| `BT0` | +0.77 | −0.03 | −1.07 | −4.36 | −5.44 | **157** | 0.0581 | −0.454% | 0.32 |
+| `BT1` | +0.94 | −0.03 | +1.93 | +19.00 | +2.97 | 171 | 0.0710 | −1.019% | 0.95 |
+| **`BT2`** | **+0.27** | −0.03 | +1.48 | +7.12 | **+0.28** | 170 | **0.0569** | **−0.199%** | 0.70 |
+
+**A_b: 0.77 → 0.27%**, paired **−0.50 ± 0.09**, better on **6/6 seeds** — 5.6σ. The dE/dx mean error
+halves and the recovered spread more than doubles, exactly as §6s predicted from the prior's
+parameters alone.
+
+**Lifetime: |error| 5.97 → 1.62%**, and BT2 is better in *both* lever-arm strata:
+
+| | `BT0` | `BT1` | **`BT2`** |
+|---|---|---|---|
+| lever arm > 6.5% | 4.10 | 1.74 | **1.36** |
+| lever arm < 6.5% | 9.71 | 9.73 | **2.14** |
+
+That last row is the striking one: BT2 reaches ~2% even on the signal-starved seeds where both
+other arms sit near 10%. The **pooled** paired difference is −4.35 ± 3.25 (1.3σ), so the *magnitude*
+is not resolved at n = 6; what carries conviction is that the direction holds in both strata
+independently and the effect is large.
+
+> **A WITHDRAWAL, and the third instance of the same trap.** The n = 4 preliminary read of these
+> arms reported a longitudinal-diffusion *regression* (BT0 −0.60% → BT2 +7.32%). **That was a
+> SIGNED comparison of a parameter whose per-seed errors change sign.** BT0's are −0.39, +10.79,
+> −6.36, −6.45, −17.67, −6.06 — its signed mean is small only because they cancel. In **|error|**
+> the paired difference is **−0.50 ± 3.65**, i.e. nothing, and BT2 is marginally better (7.45 vs
+> 7.95). The regression is withdrawn.
+>
+> This is the same failure that produced the fig 45(e) scatter claim (§6u) and study 1's first
+> readout (§6t). **For any parameter whose per-seed errors mix sign, quote |error|, not the signed
+> mean.** Only A_b and E field have stable signs in this campaign.
+
+**`BT1` is decisively bad**, which is the second thing the arm was for: longitudinal diffusion
+|error| **+11.05 ± 2.03**, worse on **0/6 seeds**. Correcting the weight without the shape is not a
+partial improvement, it is a regression — and it would have been invisible had we run only BT0 and
+BT2.
+
+![The BT arms](plots/noise_report/fig54_bt_arms.png)
+
+### The mechanism, as a trajectory
+
+![BT convergence traces](plots/noise_report/fig55_bt_traces.png)
+
+The ⟨dE/dx⟩ panel shows §6s's argument happening rather than inferred. `BT1` drops away from the
+true mean inside the first ~500 iterations and never recovers (1.8678 against a truth of 1.8869);
+`BT2` climbs to 1.8829 and holds; `BT0` sits between at 1.8785. **The A_b panel reproduces that
+ordering exactly** — BT1 highest, BT0 between, BT2 lowest — which is the A_b ↔ charge-normalisation
+coupling §6u measured as a slope.
+
+`BT1`'s dE/dx MAE also gets **worse than its own starting point** for ~2500 iterations
+(0.070 → 0.081) before recovering to 0.065, while the other two descend monotonically: a too-wide
+prior at β = 1 lets the field wander before the data reins it in. That excursion is invisible in
+the endpoint numbers.
+
+**Two convergence facts that matter for what comes next.** Longitudinal diffusion is the only
+parameter still drifting in every arm (−0.08 to −0.12 points over the last 20%), so its values
+should be treated as softer than their error bars suggest. And **position is still descending in
+all three at −6 to −7 µm per 20%** — the direct motivation for the 20 000-iteration runs.
+
+*The loss panel is not comparable across arms: the prior term differs by construction, so BT0 sits
+~1700 lower purely because its dE/dx prior is 5× weighted. Only the within-arm shape is meaningful.*
+
+### What this replaces
+
+**`BT2` is the new best configuration.** Against the §6r production baseline it moves A_b
+**+0.73 → +0.27%** and lifetime **−4.21 → +0.28%** (|error| 1.62%), for ~13 µm of position
+(157 → 170). Nothing regresses.
+
+Its one dependency is the **refit prior**, whose parameters are an MLE of the true per-segment dE/dx
+of this MC sample. That is a legitimate workflow — the prior describes detector physics and is
+calibrated on simulation, not on the quantity being measured — and split-half cross-validation says
+the shape is not overfitted (+0.9744 held out vs +0.9751 in-sample, §6s). It does not prove
+independence from the sample, and `BT1` is what bounds the concern: it corrects only the weight,
+using the original published shape, and it is *worse* than the control. **The refit is doing the
+work, and it cannot be replaced by a knob.**
+
 ## 7. Methodology: the traps that cost us real time
 
 These generalise beyond this project and are the reason several earlier "results" were wrong.
@@ -2528,7 +2640,7 @@ study 2 established.*
 | **Study 2** `TP` (6 seeds × 100 batches) | truth-point evaluation: is the minimum misplaced or unreachable? | **COMPLETE — §6s** |
 | **Study 2** `TPA` (2 seeds × 9 α) | dE/dx dispersion scan along the fit→truth line | **COMPLETE — §6s** |
 | **Study 3** `S3T*` / `S3W*` (7 usable arms, ceiling) | dE/dx mean-constraint TARGET scan crossed with weight | **COMPLETE — §6u** |
-| `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **RUNNING**, ~2 days |
+| `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **COMPLETE — §6v** |
 | `annl_2xtravel` (3 seeds, 20 000 it) | double the optimiser travel — does lifetime asymptote? | **COMPLETE — not yet read out**; §6t answers it at ceiling |
 | `full_p05` (6 seeds, production) | prior 0.5 in production, the §6r lever-1 confirmation | **COMPLETE — not yet read out** |
 
