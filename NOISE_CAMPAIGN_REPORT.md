@@ -117,6 +117,12 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   **32% of the true spread** and its mean slides **1.08% low**. Refitting on the grid in use fixes
   both at β = 1; re-weighting trades one against the other. The mean constraint is separately
   **6.3× too stiff**: the true batch mean genuinely varies 0.747%, so `w = 1/(2σ²) = 2520`.
+- **BLOCK ALTERNATION WORKS, ON EXACTLY THE PARAMETERS THE MATRIX PREDICTS (§6w).** A second pass
+  with geometry FROZEN at its converged values reaches `BT2` quality in 3 000 iterations and beats
+  it on **A_b (×2.3, 0.340 → 0.147, both seeds)** and transverse diffusion (×2.2, one seed).
+  Longitudinal diffusion and lifetime are unchanged — precisely the parameters that NEED geometry
+  to move. Calibration restarts from the nominal point in both arms, so this is an independent
+  convergence to a better optimum, not a polish. n = 2; a warm-start control is running.
 - **WE ARE NOT STATISTICS-LIMITED ANYWHERE (§6w).** From the curvature of the objective at the
   `BT2` fit, every parameter sits **4–16×** from its statistical floor: A_b 0.017% vs 0.27%
   achieved, E field 0.003% vs 0.03%, tran. diff. 0.373% vs 1.48%, long. diff. 0.722% vs 7.45%,
@@ -2697,6 +2703,69 @@ magnitude — and it independently validates the `G20K` design, which stretches 
 this is a screen for what deserves a full run, not a verdict. The calibration parameters are
 nowhere near converged at this point and nothing is claimed about them.*
 
+### Acting on the matrix: a frozen-geometry second pass
+
+![Alternation](plots/noise_report/fig59_alternation.png)
+
+If the calibration optima move as geometry improves, then during a joint fit calibration is chasing
+a target geometry keeps relocating. `ALT` tests what that chase costs: it takes `BT2`'s converged
+geometry, **freezes it**, and re-fits calibration and dE/dx for 3 000 iterations.
+
+**Everything except geometry restarts from scratch.** Both arms begin at the same fixed nominal
+point (A_b 0.800, E field 0.500, lifetime 2200, …) and the same dE/dx prior centre (initial MAE
+0.0707 vs 0.0709). `ALT` inherits **geometry and nothing else** — so what follows is an independent
+convergence to a better optimum, not a polish of `BT2`'s answer.
+
+| param | `BT2` (joint, 10 000 it) | `ALT` (frozen, 3 000 it) | ratio |
+|---|---|---|---|
+| **A_b** | 0.340 | **0.147** | **×2.3** |
+| E field | 0.030 | 0.029 | ×1.0 |
+| **transverse diffusion** | 1.883 | **0.875** | ×2.2 |
+| longitudinal diffusion | 8.584 | 8.453 | ×1.0 |
+| lifetime | 1.782 | 1.864 | ×1.0 |
+
+**The pattern is exactly what the degeneracy matrix predicts.** The parameters that improve — A_b
+and transverse diffusion — are those whose optima barely move when geometry moves (+0.1% and
+−3.4%). The parameters that do not improve — longitudinal diffusion (−23.4%) and lifetime — are
+those that **need** geometry to move, which a frozen pass structurally cannot provide. Two
+independent methods, one scanning the objective and one running a fit, single out the same set of
+parameters.
+
+A_b improves on **both** seeds (0.48 → 0.24 and 0.20 → 0.05) and is at its final value by ~1 500
+iterations, while `BT2` oscillates through zero near iteration 4 000 and then **drifts back up** to
++0.4% — that drift is the co-adaptation, visible directly. The pass is also 24% cheaper per
+iteration with the geometry block off (4166 vs 5485 ms), so it costs 3.6 h.
+
+**Transverse diffusion is the weaker half of the claim**: seed 1 improves hugely (2.74 → 0.24) but
+seed 0 gets mildly worse (1.02 → 1.51), so that ×2.2 rests on one seed. A_b is the solid result.
+
+> **A verification worth recording, because the obvious check FAILS.** `ALT`'s position residual
+> reads 1104 µm against `BT2`'s 170 µm median, which looks exactly like the geometry init silently
+> failing — and it was reported as such before being checked. It had not failed: with geometry
+> frozen the residual is computed **once, for batch 0 only**, and `BT2`'s own batch-0 value is
+> 1027 µm. The per-batch spread is enormous and a median over 100 batches was never the comparable
+> quantity. Verified directly on the coefficients: **860 of 864 tracks match `BT2` exactly and none
+> are zero.** Same class of error as the signed-mean trap — two numbers compared that were not the
+> same quantity.
+
+**What this is and is not.** `ALT` inherits a geometry `BT2` spent 10 000 iterations earning, so it
+is **not a cheaper standalone recipe**: the honest framing is a two-pass scheme, 10 000 joint +
+3 000 frozen ≈ 22 h against 19 h, buying A_b ×2.3. Set against §6w's finding that A_b sits ×16 from
+its statistical floor, it closes a factor 2.3 of that gap for ~20% more wall clock, with no new
+physics and no new code.
+
+**n = 2, so this is a screen.** What makes it credible is not the sample size but that the
+mechanism predicted *which* parameters would move before the fit was run. A 6-seed confirmation is
+6 jobs at 3.6 h.
+
+**Running now: the warm-start control.** `ALT` reached A_b 0.147 from a cold start. Approaching the
+same frozen-geometry objective from the *other* direction — calibration initialised at `BT2`'s own
+fitted values — distinguishes two possibilities: converging back to ~0.15 would mean 0.15 is the
+real optimum, reached from two directions, and `BT2`'s 0.34 is the co-adaptation penalty; staying
+near 0.34 would mean the frozen objective has more than one basin and the cold start found a better
+one by luck. Only calibration can be warm-started — there is no init-from for the dE/dx block, so it
+restarts at the prior centre in both arms.
+
 ## 7. Methodology: the traps that cost us real time
 
 These generalise beyond this project and are the reason several earlier "results" were wrong.
@@ -2774,7 +2843,9 @@ study 2 established.*
 | `DIAG` / `DEGEN` (evaluation) | geometry α, the joint grid, the full degeneracy matrix | **COMPLETE — §6w** |
 | `GQ1`–`GQ3` (geometry screen) | chain_lr 3e-2 / 1e-1, and a slower chain decay | **COMPLETE — §6w** |
 | `G20K` (3 seeds × 20 000 it) | is geometry merely unconverged? both schedules stretched | **RUNNING**, ~8 h |
-| `ALT` / `K2` (screens) | frozen-geometry re-fit; the 2-mode spline basis | **COMPLETE — not yet read out** |
+| `ALT` (screen) | frozen-geometry re-fit — does alternation help? | **COMPLETE — §6w** |
+| `ALTW` (2 seeds) | the same, calibration WARM-STARTED from BT2 — one basin or two? | **RUNNING** |
+| `K2` (screen) | the 2-mode spline basis | **COMPLETE — not yet read out** |
 | **Study 3** `S3T*` / `S3W*` (7 usable arms, ceiling) | dE/dx mean-constraint TARGET scan crossed with weight | **COMPLETE — §6u** |
 | `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **COMPLETE — §6v** |
 | `annl_2xtravel` (3 seeds, 20 000 it) | double the optimiser travel — does lifetime asymptote? | **COMPLETE — not yet read out**; §6t answers it at ceiling |

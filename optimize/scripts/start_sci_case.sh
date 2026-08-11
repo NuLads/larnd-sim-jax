@@ -39,6 +39,10 @@ SCIKMIN=${SCIKMIN:-3}
 # and dEdx re-fit against a STATIC geometry instead of co-adapting with a moving one.
 SCICHAININIT=${SCICHAININIT:-}
 SCICHFREEZE=${SCICHFREEZE:-0}
+# --set_init_params takes SPACE-separated "<param> <val> ..." pairs, which sbatch --export cannot
+# carry. Accept a colon-separated form and expand it here; a value that already uses spaces passes
+# through untouched, so this is additive.
+SCIINIT=$(echo "${SCIINIT:-}" | tr ':' ' ')
 if [ -n "${SCITRUTHPOINT}" ]; then
   if [ ! -f "${SCITRUTHPOINT}" ]; then
     echo "SCITRUTHPOINT=${SCITRUTHPOINT} does not exist"; exit 1

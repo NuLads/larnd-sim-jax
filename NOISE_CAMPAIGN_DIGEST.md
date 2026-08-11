@@ -22,6 +22,9 @@ cross-check that reframed the whole thing.
   headroom left in the current basis); dE/dx is displaced (prior-limited). The dE/dx prior turns
   out to be **correct for the wrong segmentation**, and its weight is a tempering exponent whose
   principled value is w = 1/dx ≈ 1.01, not 5.
+- **BLOCK ALTERNATION WORKS ON THE DECOUPLED PARAMETERS (fig 59).** A frozen-geometry second pass
+  gives A_b ×2.3 in 3 000 iterations — and improves exactly the parameters fig 58 says are
+  decoupled from geometry, leaving the coupled ones untouched.
 - **WE ARE NOT STATISTICS-LIMITED ANYWHERE (fig 58).** Every parameter sits 4–16× from its
   statistical floor. None of the remaining error is irreducible.
 - **GEOMETRY IS OPTIMISER-LIMITED AND HOLDS MOST OF THE INFORMATION (figs 56, 58).** Its optimum is
@@ -847,6 +850,29 @@ the 3× arm is inconsistent (426/331 vs 351/357).
 magnitude — which independently validates the G20K design (chain_decay stretched 0.9997 → 0.99985).
 **Read the caption** — 3 000 of 10 000 iterations: a screen for what deserves a full run, not a
 verdict. Calibration is nowhere near converged at this point and nothing is claimed about it.
+
+
+![Alternation](plots/noise_report/fig59_alternation.png)
+
+**Tests** — does alternating the blocks help? ALT takes BT2's converged geometry, FREEZES it, and
+re-fits calibration and dE/dx for 3 000 iterations. Everything except geometry restarts from the
+same nominal point BT2 used (A_b 0.800, lifetime 2200, dE/dx at the prior centre), so this is an
+independent convergence, not a polish.
+**Concludes — a frozen-geometry second pass BEATS the joint fit on the decoupled parameters.**
+A_b 0.340 → **0.147** (×2.3, better on both seeds), transverse diffusion 1.883 → 0.875 (×2.2, but
+that one rests on a single seed). E field, longitudinal diffusion and lifetime are unchanged to
+within 2%. It also runs 24% cheaper per iteration with the geometry block off.
+**Concludes — and the pattern is exactly what fig 58 predicts.** The parameters that improve are
+those whose optima barely move when geometry moves (+0.1%, −3.4%); the ones that do not are those
+that NEED geometry to move (−23.4% for long. diffusion). Two independent methods — scanning the
+objective, running a fit — single out the same set.
+**Concludes — the co-adaptation is visible in the trace**: ALT settles by ~1 500 iterations and
+holds, while BT2 oscillates through zero near iteration 4 000 and then drifts back up to +0.4%.
+**Read the caption** — ALT inherits a geometry BT2 spent 10 000 iterations earning, so it is a
+two-pass scheme (~22 h vs 19 h), NOT a cheaper standalone recipe. n = 2. And the obvious freeze
+check FAILS misleadingly: ALT's position reads 1104 µm against BT2's 170 µm median, but with
+geometry frozen the residual is recorded once for batch 0 only, where BT2's own value is 1027 µm —
+860 of 864 track coefficients match exactly.
 
 ## §11 What is settled, what is open, what is next
 
