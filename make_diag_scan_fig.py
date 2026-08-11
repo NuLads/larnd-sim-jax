@@ -9,7 +9,10 @@ assumption they test. That asymmetry is the whole argument for scanning before f
 
 THE ONE NUMBER TO READ. Along the GEOMETRY axis the objective's optimum is alpha* = 0.988 -- it
 wants geometry essentially exactly at truth, with no shrinkage, and the likelihood range along that
-axis (193 000 nats over 200 batches) is 28x the entire dE/dx dispersion question (6 900, fig 52).
+axis (192 637 nats over 200 batches) is 5.1x the dE/dx dispersion question measured ON THE SAME FIT
+(37 475) and 228x longitudinal diffusion at +-20% (845). NOTE those must be compared like with like:
+fig 52 measured a dEdx range of 6 963 on the BT0 fit, whose dEdx field starts far more shrunk, so
+quoting geometry as "28x" against THAT number would be comparing two different fits.
 Geometry is where this objective's information actually is, and it is purely optimiser-limited.
 """
 import glob, os, pickle, re
@@ -157,11 +160,11 @@ a.set_yscale('log')
 a.set_xticks(range(len(BARS))); a.set_xticklabels([b[0] for b in BARS], fontsize=7.6)
 a.set_ylabel('likelihood range along the axis (nats, 200 batches)')
 a.set_ylim(top=BARS[0][1] * 6)
-a.set_title('(f) WHERE THE INFORMATION IS. Geometry carries ~28× the\n'
-            'dE/dx dispersion question and ~200× long. diffusion.', fontsize=9.3)
+a.set_title('(f) WHERE THE INFORMATION IS. Geometry carries 5.1× the\n'
+            'dE/dx dispersion question and 228× long. diffusion.', fontsize=9.3)
 
 fig.suptitle('Fig 56 — three ~1 h evaluation jobs, and they redirect the campaign. GEOMETRY is '
-             'optimiser-limited (α* = 0.988) and carries 28× the\nlikelihood of the dE/dx question '
+             'optimiser-limited (α* = 0.988) and carries 5.1× the\nlikelihood of the dE/dx question '
              '(a, f). The two blocks are DEGENERATE: better geometry makes the data want more dE/dx '
              'dispersion —\nthe likelihood\'s preferred spread runs 63% → 82% of truth (b, c), which is why '
              'the ceiling arms did not predict production.\nThe refit prior is validated (e).', fontsize=10.0)
