@@ -2703,6 +2703,66 @@ magnitude — and it independently validates the `G20K` design, which stretches 
 this is a screen for what deserves a full run, not a verdict. The calibration parameters are
 nowhere near converged at this point and nothing is claimed about them.*
 
+### The long run: 20 000 iterations with both schedules stretched (`G20K`) — PRELIMINARY
+
+![G20K preliminary](plots/noise_report/fig61_g20k_prelim.png)
+
+> **Status: incomplete.** Seeds 0–2 at ~15 000 of 20 000 iterations, read on request. The
+> calibration learning rate is still live, so every calibration number below can still move. The
+> position and loss results are already unambiguous; the calibration table is not a result.
+
+`G20K` is the run the screen above was designed to justify: 20 000 iterations with **both**
+schedules stretched by exactly a factor two in the exponent, `chain_decay` 0.9997 → 0.99985
+(= 0.9997^½) and calibration decay 0.91 → 0.9539 (= 0.91^½). Without the stretch the extra
+iterations would be spent frozen rather than moving.
+
+**That stretch is also what makes the comparison delicate, and the figure is built around it.**
+`G20K` at iteration 2N carries the learning rates `BT2` had at iteration N, so comparing the two at
+*equal iteration* compares a hotter optimiser against a cooler one and settles nothing. The dashed
+curve in the position panel is `BT2`'s own trace re-plotted on a doubled iteration axis: **the null
+hypothesis that the schedule is all that matters.** Under that null the extra iterations buy
+nothing — each learning-rate level is merely visited twice as long, and the run ends at 20 000
+exactly where `BT2` ended at 10 000.
+
+**The null is rejected by −42.7%.**
+
+| position | |
+|---|---|
+| `BT2` final (10 000 it) | 166–177 µm |
+| **`G20K` at 15 000 it** | **110.6 µm** |
+| paired difference | **−55.6 ± 1.0 µm** (−55.9 / −57.2 / −53.6, so 3/3 seeds) |
+| `G20K` reaches `BT2`'s *final* answer at | **iteration 7 422** — 26% fewer iterations |
+| still descending at 15 000? | yes, −1.9 / −3.0 / −8.8% over the last 2 000 iterations |
+
+A **34% position improvement on every seed, with 5 000 iterations still to run.** The shape is
+informative too: `G20K` is *worse* early (386 vs 351 µm at iteration 3 000 — the hotter schedule is
+noisier), crosses over near iteration 6 500, and then keeps descending exactly where `BT2` flattens.
+
+**The loss agrees, which is what makes this more than a diagnostic.** Position is a quantity we
+watch; the PPP negative log-likelihood is the quantity being minimised, and it reads **8 362 against
+9 011, −7.2%**. `G20K` has found a genuinely better optimum, not merely a geometry that scores
+better on a metric it was not optimising. Per-segment dE/dx MAE improves in step, 0.0526 vs 0.0546
+(−3.7%).
+
+Calibration at 15 000, **not to be quoted** — every entry is mid-transient:
+
+| param | `G20K` @ 15 000 | `BT2` final |
+|---|---|---|
+| **transverse diffusion** | **0.93%** | 2.62% |
+| E field | 0.025% | 0.026% |
+| longitudinal diffusion | 7.04% | 7.00% |
+| A_b | 0.35% | 0.20% |
+| lifetime | 1.90% | 1.26% |
+
+Transverse diffusion improving ×2.8 is what the degeneracy matrix predicts — it is the parameter
+most coupled to geometry, so better geometry should help it most. A_b and lifetime currently read
+*worse*, but the lifetime trace is still descending through zero at 15 000, and A_b's late upward
+drift is the same co-adaptation the frozen-geometry pass below exposes. Both need the run to finish.
+
+**Cost: 4761 ms/iteration → 26.4 h for the full 20 000**, against 15 h for `BT2`. So the headline
+trade is ~75% more wall clock for 34% better position and 7% lower loss — and, separately, the same
+final position as `BT2` in 26% *fewer* iterations, which is a straight win with no trade at all.
+
 ### Acting on the matrix: a frozen-geometry second pass
 
 ![Alternation](plots/noise_report/fig59_alternation.png)
@@ -2870,7 +2930,7 @@ and/or with ≥ 6 seeds.
 
 ## 8. What is running now
 
-*As of 8 August 2026. Studies 1–3 are the campaign that followed §6r; the BT arms apply what
+*As of 11 August 2026. Studies 1–3 are the campaign that followed §6r; the BT arms apply what
 study 2 established.*
 
 | arm | what it tests | status |
@@ -2880,10 +2940,10 @@ study 2 established.*
 | **Study 2** `TPA` (2 seeds × 9 α) | dE/dx dispersion scan along the fit→truth line | **COMPLETE — §6s** |
 | `DIAG` / `DEGEN` (evaluation) | geometry α, the joint grid, the full degeneracy matrix | **COMPLETE — §6w** |
 | `GQ1`–`GQ3` (geometry screen) | chain_lr 3e-2 / 1e-1, and a slower chain decay | **COMPLETE — §6w** |
-| `G20K` (3 seeds × 20 000 it) | is geometry merely unconverged? both schedules stretched | **RUNNING**, ~8 h |
+| `G20K` (3 seeds × 20 000 it) | is geometry merely unconverged? both schedules stretched | **RUNNING** at ~15 000/20 000, ~6 h — preliminary read in §6w |
 | `ALT` (screen) | frozen-geometry re-fit — does alternation help? | **COMPLETE — §6w** |
-| `ALTW` (2 seeds) | the same, calibration WARM-STARTED from BT2 — one basin or two? | **RUNNING** |
-| `K2` (screen) | the 2-mode spline basis | **COMPLETE — not yet read out** |
+| `ALTW` (2 seeds) | the same, calibration WARM-STARTED from BT2 — one basin or two? | **RUNNING** at 1 000/3 000, ~3 h |
+| `K2` (screen) | the 2-mode spline basis | **COMPLETE — §6w** |
 | **Study 3** `S3T*` / `S3W*` (7 usable arms, ceiling) | dE/dx mean-constraint TARGET scan crossed with weight | **COMPLETE — §6u** |
 | `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **COMPLETE — §6v** |
 | `annl_2xtravel` (3 seeds, 20 000 it) | double the optimiser travel — does lifetime asymptote? | **COMPLETE — not yet read out**; §6t answers it at ceiling |

@@ -241,6 +241,11 @@ value is a lower bound on the bias, not a converged estimate.
 **Tests** — the auxiliary quantities that had not converged at 5 000 iterations.
 **Concludes** — position and loss do settle by 10 000; the dE/dx MAE degradation persists and is
 still unexplained.
+**SUPERSEDED on the position half — see fig 61.** Position "settles" only *because the schedule
+cools it*. G20K stretches the schedule ×2 and position keeps descending well past 10 000, reaching
+110 µm against 166–177 µm here, still falling at 15 000. The flattening was the learning rate
+running out, not the optimiser arriving. The loss half stands and in fact strengthens it: the NLL
+also drops a further 7.2%.
 
 ![Schedule invariance](plots/noise_report/fig20_schedule_invariance.png)
 
@@ -850,6 +855,31 @@ the 3× arm is inconsistent (426/331 vs 351/357).
 magnitude — which independently validates the G20K design (chain_decay stretched 0.9997 → 0.99985).
 **Read the caption** — 3 000 of 10 000 iterations: a screen for what deserves a full run, not a
 verdict. Calibration is nowhere near converged at this point and nothing is claimed about it.
+
+
+![G20K preliminary](plots/noise_report/fig61_g20k_prelim.png)
+
+**PRELIMINARY — seeds 0–2 at ~15 000 of 20 000 iterations, calibration LR still live.**
+**Tests** — the long geometry run the screen above justified: 20 000 iterations with BOTH schedules
+stretched ×2 in the exponent (chain_decay 0.9997 → 0.99985 = 0.9997^½, calib decay 0.91 → 0.9539).
+**Read the DASHED curve, not BT2.** Because of that stretch G20K at iteration 2N carries the
+learning rates BT2 had at N, so equal-iteration comparison pits a hotter optimiser against a cooler
+one. The dashed curve is BT2 re-plotted on a doubled axis = the null "the schedule is all that
+matters", under which the run ends at 20 000 where BT2 ended at 10 000, gaining nothing.
+**Concludes — the null is rejected by −42.7%.** Position 166–177 µm (BT2 final) → **110.6 µm** at
+15 000, a paired **−55.6 ± 1.0 µm on 3/3 seeds**, and still descending (−1.9/−3.0/−8.8% over the
+last 2 000). G20K also reaches BT2's FINAL answer at **iteration 7 422** — 26% fewer iterations.
+**Concludes — the LOSS agrees, which is what makes it more than a diagnostic.** The PPP NLL, the
+quantity actually minimised, reads **8 362 vs 9 011 (−7.2%)**; dE/dx MAE follows, 0.0526 vs 0.0546.
+A better optimum, not a metric that happens to look better.
+**Concludes — geometry was optimiser-limited, as fig 56 said (α\* = 0.988).** The shape confirms it:
+G20K is WORSE early (386 vs 351 µm at 3 000 — hotter is noisier), crosses near 6 500, then keeps
+descending exactly where BT2 flattens.
+**Read the caption — calibration is NOT readable yet.** Transverse diffusion 0.93% vs 2.62% is the
+degeneracy matrix's prediction coming true (it is the parameter most coupled to geometry), but A_b
+(0.35 vs 0.20) and lifetime (1.90 vs 1.26) currently read worse and are both mid-transient.
+**Cost** — 26.4 h vs 15 h: ~75% more wall clock for 34% better position, or the same position in
+26% fewer iterations.
 
 
 ![Alternation](plots/noise_report/fig59_alternation.png)
