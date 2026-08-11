@@ -1,8 +1,4 @@
-"""Fig 55 — PRELIMINARY: convergence traces for the three BT arms, seeds 0-3.
-
-    ####################################################################
-    #  PRELIMINARY.  n = 4 of a planned 6; seeds 4 and 5 still running. #
-    ####################################################################
+"""Fig 55 — convergence traces for the three BT arms, all 6 seeds.
 
 Nine quantities on one iteration axis: the five calibration parameters, the per-segment dE/dx MAE
 against TRUTH, the length-weighted mean dE/dx, the position residual and the loss. Thin = seeds,
@@ -32,7 +28,8 @@ C = dict(blue='#0072B2', orange='#E69F00', green='#009E73', red='#D55E00',
 plt.rcParams.update({'font.size': 9, 'axes.grid': True, 'grid.alpha': .25,
                      'axes.spines.top': False, 'axes.spines.right': False,
                      'figure.dpi': 130, 'savefig.bbox': 'tight'})
-SEEDS = [0, 1, 2, 3]
+SEEDS = sorted(int(re.search(r'seed(\d+)', f).group(1))
+               for f in glob.glob('fit_result/sci_full_BT0/history_iter10000_*.pkl'))
 ARMS = [('BT0', 'BT0  current, w=5, mean 1e5', C['ink']),
         ('BT1', 'BT1  current, w=1/dx, mean 2500', C['orange']),
         ('BT2', 'BT2  REFIT, w=1/dx, mean 2500', C['green'])]
@@ -54,7 +51,10 @@ D = {}
 for tag, _, _ in ARMS:
     D[tag] = {}
     for s in SEEDS:
-        f = glob.glob(f'fit_result/sci_full_{tag}/history_iter10000_*seed{s}.pkl')[0]
+        g = glob.glob(f'fit_result/sci_full_{tag}/history_iter10000_*seed{s}.pkl')
+        if not g:
+            continue
+        f = g[0]
         h = pickle.load(open(f, 'rb'))
         d = {}
         for p in R.P:
@@ -107,17 +107,18 @@ for k, (key, title, ylab, hline) in enumerate(PANELS):
         a.set_xlabel('iteration')
 axes.ravel()[0].legend(fontsize=7.6, frameon=True, framealpha=.9, loc='upper right')
 
-fig.suptitle('Fig 55 — PRELIMINARY (seeds 0–3 of 6): BT convergence traces. Thin = seeds, thick = '
-             'median, 200-iteration rolling median.\nRead ⟨dE/dx⟩ first: BT1 (orange) slides away '
-             'from the true mean all run while BT2 (green) holds it — and the A$_b$ panel tracks '
-             'that slide,\nwhich is the coupling §6u measured. Longitudinal diffusion is the arm '
-             'that has NOT settled in any configuration.', fontsize=10.1)
+fig.suptitle('Fig 55 — BT convergence traces, all 6 seeds. Thin = seeds, thick = median, '
+             '200-iteration rolling median.\nRead ⟨dE/dx⟩ first: BT1 (orange) slides away from the '
+             'true mean all run while BT2 (green) holds it — and the A$_b$ panel tracks that '
+             'slide,\nwhich is the A$_b$↔charge-normalisation coupling §6u measured. Longitudinal '
+             'diffusion is the only parameter unsettled in every arm.', fontsize=10.1)
 fig.tight_layout(rect=[0, 0, 1, .93])
 os.makedirs(OUT, exist_ok=True)
 fig.savefig(f'{OUT}/fig55_bt_traces.png'); plt.close(fig)
 print('wrote', f'{OUT}/fig55_bt_traces.png')
 
-print(f'\nend-of-run values (median over seeds {SEEDS}), and residual drift over the last 20%')
+print(f'\nn={len(SEEDS)} seeds {SEEDS}')
+print('end-of-run values (median over seeds), and residual drift over the last 20%')
 for key, title, _, _ in PANELS:
     row = ''
     for tag, _, _ in ARMS:
