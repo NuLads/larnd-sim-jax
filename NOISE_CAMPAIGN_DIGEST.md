@@ -22,6 +22,11 @@ cross-check that reframed the whole thing.
   headroom left in the current basis); dE/dx is displaced (prior-limited). The dE/dx prior turns
   out to be **correct for the wrong segmentation**, and its weight is a tempering exponent whose
   principled value is w = 1/dx ≈ 1.01, not 5.
+- **WE ARE NOT STATISTICS-LIMITED ANYWHERE (fig 58).** Every parameter sits 4–16× from its
+  statistical floor. None of the remaining error is irreducible.
+- **GEOMETRY IS OPTIMISER-LIMITED AND HOLDS MOST OF THE INFORMATION (figs 56, 58).** Its optimum is
+  α* = 0.988 with no shrinkage, it is worth 5.1× the dE/dx question, and it is the dominant
+  degeneracy — while A_b and E field are decoupled from both nuisance blocks.
 - **NEW BEST CONFIGURATION: BT2 (figs 54–55).** Production with the dE/dx prior REFIT to the
   segmentation in use and weighted at β = 1. A_b 0.77 → 0.27% (6/6 seeds, 5.6σ) and lifetime
   |error| 5.97 → 1.62%, better in both lever-arm strata, for ~13 µm of position. Correcting the
@@ -787,6 +792,61 @@ direct motivation for the 20 000-iteration runs; and longitudinal diffusion is t
 still drifting everywhere, so its values are softer than their error bars suggest.
 **Read the caption** — the loss panel is NOT comparable across arms: the prior term differs by
 construction, so BT0 sits ~1700 lower purely because its dE/dx prior is 5× weighted.
+
+
+![Diagnostic scans](plots/noise_report/fig56_diag_scans.png)
+
+**Tests** — three ~1 h EVALUATION jobs on the BT2 fit (60 constructed points × 100 batches × 2
+seeds, no fitting): a geometry α-scan, a joint (geometry × dE/dx) grid, a long-diffusion profile at
+two geometries, and the dE/dx α-scan with the refit prior.
+**Concludes — GEOMETRY IS OPTIMISER-LIMITED.** Its optimum is **α\* = 0.988**: the objective wants
+geometry essentially exactly at truth, with no shrinkage, unlike dE/dx which stops at 0.50. Priors
+barely participate (408 nats against the likelihood's 192 637).
+**Concludes — and it is where the information is.** Likelihood range: geometry 192 637 nats, dE/dx
+dispersion 37 475, long. diffusion at ±20% just 845. Geometry is worth **5.1×** the dE/dx question
+and **228×** long. diffusion.
+**Concludes — the two nuisance blocks are DEGENERATE.** The dE/dx optimum slides −0.178 → +0.419 as
+geometry moves from the fit to truth, i.e. the preferred spread goes 63% → 82% of truth. Part of why
+the data appeared to want a flat dE/dx field is that the GEOMETRY was wrong — and it is why the
+ceiling arms did not predict production.
+**Concludes — the refit is validated**: total and likelihood optima now differ by 0.17 in α against
+0.50 with the old prior. Cross-check: fig 52 measured the data's preferred spread as 66% of truth on
+the BT0 fit with the OLD prior; this measures 63% on the BT2 fit with the REFIT prior — the same
+answer from two different fits, which is what a property of the DATA should look like.
+*Correction: an earlier version said geometry carries 28× the dE/dx question. That compared this
+figure's geometry range against fig 52's dE/dx range — two different fits. On one fit it is 5.1×.*
+
+![The degeneracy matrix](plots/noise_report/fig58_degeneracy_matrix.png)
+
+**Tests** — every calibration parameter scanned over ±20% of its BT2-fitted value at all four
+combinations of (geometry, dE/dx) ∈ {fit, truth}. 145 points × 100 batches × 2 seeds. The SHIFT of
+an optimum when a nuisance moves is its degeneracy; the CURVATURE is how tightly the data pins it.
+**Concludes — A_b and E FIELD ARE DECOUPLED from both nuisance blocks** (±0.1%). That is why they
+are the best-determined parameters, and it means their residual error cannot be blamed on the
+nuisances. Geometry dominates every other coupling and acts almost entirely on longitudinal
+diffusion (≥23.4%, the optimum ran off the grid); dE/dx coupling is ≤2.4% everywhere.
+**Concludes — the degeneracies are ADDITIVE** (largest interaction 3.3 points), so block-wise
+reasoning is valid; and BT2 sits at the objective's optimum for every parameter (≤1.3%).
+**Concludes — WE ARE NOT STATISTICS-LIMITED ANYWHERE.** Against the curvature floor: A_b ×16,
+E field ×11, tran. diff. ×4, long. diff. ×10, lifetime ×6. None of the remaining error is
+irreducible — which qualifies "lifetime is lever-arm limited": that is about the available SIGNAL,
+but even given it we are 6× short.
+**Read the caption** — conditional curvature, nuisances held fixed. Exact for A_b and E field
+(their optima do not move when the nuisances do); a LOWER BOUND for the diffusions.
+
+![Geometry schedule screen](plots/noise_report/fig57_geom_screen.png)
+
+**Tests** — a 3 000-iteration screen of geometry schedules, with BT2's own trace as the matched
+control (equal iteration count ⇒ identical schedule indexing, so the baseline costs no job).
+**Concludes — "more geometry learning rate" splits into two OPPOSITE things.** Raising the INITIAL
+rate is worse, monotonically: 3× gives +6.8%, 10× diverges (1 833 µm at iteration 1 000 against 581).
+Sustaining the rate LONGER via a slower decay is better, −8.1%, and the gain WIDENS with iteration
+(−3.7% at 1 500) rather than being a fixed offset. The sustained arm also wins on both seeds while
+the 3× arm is inconsistent (426/331 vs 351/357).
+**Concludes — geometry needs small steps early and sustained steps late.** A schedule SHAPE, not a
+magnitude — which independently validates the G20K design (chain_decay stretched 0.9997 → 0.99985).
+**Read the caption** — 3 000 of 10 000 iterations: a screen for what deserves a full run, not a
+verdict. Calibration is nowhere near converged at this point and nothing is claimed about it.
 
 ## §11 What is settled, what is open, what is next
 

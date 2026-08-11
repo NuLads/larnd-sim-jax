@@ -117,6 +117,19 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   **32% of the true spread** and its mean slides **1.08% low**. Refitting on the grid in use fixes
   both at β = 1; re-weighting trades one against the other. The mean constraint is separately
   **6.3× too stiff**: the true batch mean genuinely varies 0.747%, so `w = 1/(2σ²) = 2520`.
+- **WE ARE NOT STATISTICS-LIMITED ANYWHERE (§6w).** From the curvature of the objective at the
+  `BT2` fit, every parameter sits **4–16×** from its statistical floor: A_b 0.017% vs 0.27%
+  achieved, E field 0.003% vs 0.03%, tran. diff. 0.373% vs 1.48%, long. diff. 0.722% vs 7.45%,
+  lifetime 0.258% vs 1.62%. **None of the remaining error is irreducible.** (Conditional curvature;
+  exact for A_b and E field, a lower bound for the diffusions.)
+- **GEOMETRY IS OPTIMISER-LIMITED AND CARRIES MOST OF THE INFORMATION (§6w).** Its optimum sits at
+  **α\* = 0.988** — the objective wants it essentially exactly at truth, no shrinkage — and the
+  likelihood range along that axis is **5.1×** the dE/dx dispersion question and **228×** long.
+  diffusion. Geometry is also the DOMINANT degeneracy: A_b and E field are decoupled from both
+  nuisance blocks (±0.1%), while long. diffusion's optimum moves ≥23% when geometry goes to truth.
+- **AND "MORE GEOMETRY LEARNING RATE" SPLITS IN TWO (§6w).** Raising the *initial* rate is worse
+  (3× → +6.8%, 10× diverges); **sustaining it longer via a slower decay is better (−8.1%) and the
+  gain widens with iteration.** Small steps early, sustained steps late.
 - **NEW BEST CONFIGURATION: `BT2` (§6v).** The production fit with the dE/dx prior **refit to the
   segmentation in use** and weighted at β = 1 (`w = 1/dx ≈ 1.01`), mean constraint 2500. At 6 seeds,
   paired: **A_b +0.77 → +0.27%** (−0.50 ± 0.09, better on 6/6 seeds, 5.6σ) and **lifetime |error|
@@ -2565,6 +2578,125 @@ independence from the sample, and `BT1` is what bounds the concern: it corrects 
 using the original published shape, and it is *worse* than the control. **The refit is doing the
 work, and it cannot be replaced by a knob.**
 
+## 6w. The diagnostic scans: where the information is, and what is entangled with what
+
+Everything in this section is **evaluation, not fitting** — the objective computed at constructed
+points around the `BT2` fit. At ~30 s per point per 100 batches against ~14 h for a fit, a single
+~1–3 h job carries 60–145 points. **That asymmetry is the whole method**: scan first, then decide
+what deserves the long runs.
+
+### Geometry is optimiser-limited, and it is where the information is
+
+![Diagnostic scans](plots/noise_report/fig56_diag_scans.png)
+
+Walking the spline coefficients from the fit to the truth projection, with calibration and dE/dx
+held at the fit:
+
+**α\* = 0.988.** The objective wants geometry essentially *exactly* at truth, with no shrinkage —
+unlike dE/dx, which stops at 0.50 (§6s). Priors barely participate (they range over 408 nats
+against the likelihood's 192 637). **Geometry is purely optimiser-limited**, which is what justifies
+spending long runs on it.
+
+**And it carries most of the information.** Likelihood range along each axis, 200 batches:
+
+| axis | nats |
+|---|---|
+| **geometry, fit → truth** | **192 637** |
+| dE/dx dispersion, fit → truth | 37 475 |
+| longitudinal diffusion, ±20% | 845 |
+
+Geometry is worth **5.1×** the entire dE/dx dispersion question and **228×** longitudinal diffusion.
+*(These must be measured on the same fit: fig 52's dE/dx range of 6 963 was taken on the `BT0` fit,
+whose field starts far more shrunk, so quoting geometry against that number would compare two
+different fits. An earlier version of this figure did exactly that and said "28×"; corrected.)*
+
+**The two nuisance blocks are degenerate**, measured rather than assumed. The dE/dx optimum slides
+monotonically as geometry improves — likelihood-only α\* runs **−0.178 → +0.419** as geometry moves
+from the fit to truth, i.e. the preferred dE/dx spread goes from **63% to 82%** of truth. So part of
+why the data appeared to want a flat dE/dx field is that the *geometry* was wrong. This is also why
+the ceiling arms (frozen geometry) did not predict production behaviour.
+
+**The refit is validated.** At the `BT2` fit the total and likelihood optima differ by 0.17 in α,
+against 0.50 with the old prior (§6s). And a cross-check worth recording: fig 52 measured the data's
+preferred dE/dx spread as **66%** of truth on the `BT0` fit with the *old* prior; this measures
+**63%** on the `BT2` fit with the *refit* prior. Two different fits, two different priors, the same
+answer — which is what a property of the DATA should look like.
+
+### The degeneracy matrix, and how far we are from the statistical floor
+
+![The degeneracy matrix](plots/noise_report/fig58_degeneracy_matrix.png)
+
+Every calibration parameter scanned over ±20% of its fitted value at all four combinations of
+(geometry, dE/dx) ∈ {fit, truth}. The **shift** of an optimum when a nuisance moves is its
+degeneracy; the **curvature** is how tightly the data pins it.
+
+| | geometry → truth | dE/dx → truth |
+|---|---|---|
+| **A_b** | **+0.1%** | **−0.1%** |
+| **E field** | **+0.0%** | **+0.0%** |
+| transverse diffusion | −3.4% | −0.6% |
+| **longitudinal diffusion** | **−23.4%** (grid edge) | −2.4% |
+| lifetime | +1.6% | −0.9% |
+
+**A_b and E field are decoupled from both nuisance blocks.** That is *why* they are the
+best-determined parameters — and it means their residual error cannot be blamed on geometry or
+dE/dx. **Geometry dominates every other coupling** and acts almost entirely on longitudinal
+diffusion, whose optimum ran off the bottom of the grid, so 23.4% is a bound. **dE/dx coupling is
+weak everywhere** (≤2.4%), consistent with §6s finding the data barely sees that block.
+
+The two degeneracies are **additive** (largest interaction 3.3 points), so block-wise reasoning is
+valid. And `BT2` sits at the objective's optimum for every parameter (≤1.3%) — it converged.
+
+**The number that reframes the campaign:**
+
+| param | 1σ statistical floor | `BT2` achieved | ratio |
+|---|---|---|---|
+| A_b | 0.017% | 0.27% | **×16** |
+| E field | 0.003% | 0.03% | ×11 |
+| transverse diffusion | 0.373% | 1.48% | ×4 |
+| longitudinal diffusion | 0.722% | 7.45% | ×10 |
+| lifetime | 0.258% | 1.62% | ×6 |
+
+**Every parameter is 4–16× from its statistical floor. We are not statistics-limited anywhere, and
+none of the remaining error is irreducible.** That qualifies the §6r framing: "lifetime is
+lever-arm limited" is a statement about the available *signal*, but even given that signal we are
+6× short of what it supports.
+
+> **Caveat.** This is the **conditional** curvature, with the nuisances held fixed. The profile
+> curvature, marginalising over them, is necessarily looser. For A_b and E field the two coincide to
+> this precision *because their optima do not move when the nuisances do*, so those numbers stand.
+> For the diffusions the conditional value is a **lower bound** on the achievable uncertainty. The
+> floors quoted are already scaled to one dataset.
+
+### Faster geometry convergence: sustain the rate, do not raise it
+
+![Geometry schedule screen](plots/noise_report/fig57_geom_screen.png)
+
+A 3 000-iteration screen with `BT2`'s own trace as the matched control (at equal iteration count
+every arm indexes its schedules identically, so the baseline costs no job).
+
+| arm | | position at iter 2 900 | |
+|---|---|---|---|
+| baseline | lr 1e-2, decay 0.9997 | 354.0 µm | — |
+| `GQ1` | lr **3e-2** | 378.1 µm | +6.8% worse |
+| `GQ2` | lr **1e-1** | 1 833 µm at iter 1 000 vs 581 | **diverges** |
+| `GQ3` | decay **0.99993** | **325.2 µm** | **−8.1% better** |
+
+**"More geometry learning rate" splits into two opposite things.** Raising the *initial* rate is
+worse, monotonically with the size of the raise, and 10× diverges outright. Sustaining the rate
+*longer* by decaying it more slowly is better, and the gain **widens** with iteration (−3.7% at
+1 500, −8.1% at 2 900) rather than being a fixed offset. `GQ1` is also inconsistent between seeds
+(426/331 against the baseline's 351/357) while `GQ3` wins on both.
+
+Read together: **geometry needs small steps early, when the fit is far away and large steps are
+unstable, and sustained steps late, when it is refining.** That is a schedule *shape*, not a
+magnitude — and it independently validates the `G20K` design, which stretches `chain_decay`
+0.9997 → 0.99985 for exactly that reason.
+
+*Caveat: 3 000 of 10 000 iterations. A schedule that descends faster here can still settle worse, so
+this is a screen for what deserves a full run, not a verdict. The calibration parameters are
+nowhere near converged at this point and nothing is claimed about them.*
+
 ## 7. Methodology: the traps that cost us real time
 
 These generalise beyond this project and are the reason several earlier "results" were wrong.
@@ -2639,6 +2771,10 @@ study 2 established.*
 | **Study 1** `S1A0`–`S1A4` (5 arms × 6 seeds, ceiling) | calibration decay 0.80/0.91/0.97 and dE/dx LR annealed to 0.1×/0.01× | **COMPLETE — §6t** |
 | **Study 2** `TP` (6 seeds × 100 batches) | truth-point evaluation: is the minimum misplaced or unreachable? | **COMPLETE — §6s** |
 | **Study 2** `TPA` (2 seeds × 9 α) | dE/dx dispersion scan along the fit→truth line | **COMPLETE — §6s** |
+| `DIAG` / `DEGEN` (evaluation) | geometry α, the joint grid, the full degeneracy matrix | **COMPLETE — §6w** |
+| `GQ1`–`GQ3` (geometry screen) | chain_lr 3e-2 / 1e-1, and a slower chain decay | **COMPLETE — §6w** |
+| `G20K` (3 seeds × 20 000 it) | is geometry merely unconverged? both schedules stretched | **RUNNING**, ~8 h |
+| `ALT` / `K2` (screens) | frozen-geometry re-fit; the 2-mode spline basis | **COMPLETE — not yet read out** |
 | **Study 3** `S3T*` / `S3W*` (7 usable arms, ceiling) | dE/dx mean-constraint TARGET scan crossed with weight | **COMPLETE — §6u** |
 | `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **COMPLETE — §6v** |
 | `annl_2xtravel` (3 seeds, 20 000 it) | double the optimiser travel — does lifetime asymptote? | **COMPLETE — not yet read out**; §6t answers it at ceiling |
