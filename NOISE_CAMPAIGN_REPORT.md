@@ -2766,6 +2766,44 @@ near 0.34 would mean the frozen objective has more than one basin and the cold s
 one by luck. Only calibration can be warm-started — there is no init-from for the dE/dx block, so it
 restarts at the prior centre in both arms.
 
+### Is the third spline mode worth fitting? (`K2`)
+
+![K2](plots/noise_report/fig60_k2_basis.png)
+
+Comparing `BT2`'s fitted geometry against the least-squares truth projection mode by mode gave an
+uncomfortable number: **mode 3 recovers −61.7%** — its error (0.0209 cm rms) *exceeds* its true
+amplitude (0.0129 cm). Fitting that mode injects noise rather than extracting signal. `K2` drops it
+by lowering the spline-order floor, `LARND_SPLINE_KMIN` 3 → 2, everything else at `BT2`.
+
+**It took effect on essentially the whole sample.** `K = clip(round(L/40), K_min, 12)`, so lowering
+the floor changes every track that does not already demand three modes: **839 of 864 tracks (97%)**
+dropped to K = 2, the remaining 25 being long enough to keep K = 3. Median track length 44.4 cm.
+
+**The result is a null on position** — 354.0 → 345.1 µm at iteration 2 900, −2.5%, and that −2.5%
+is one seed of two (351 → 333 and 357 → 357). It is **10% cheaper per iteration** (4929 vs 5485 ms),
+which is the one unambiguous gain.
+
+**Panel (c) says why a null should have been expected.** The coefficient-space error is a sum in
+quadrature over modes, and mode 1 carries **4× the true amplitude** of the others while being only
+51.6% recovered. Removing mode 3 cuts the total coefficient error 0.0639 → 0.0604 cm — **5.5%**.
+Recovering mode 1 perfectly would cut it to 0.0294 cm, **54%**. Basis truncation was never the
+lever; mode 1 is. The −61.7% figure was real and correctly diagnosed a noisy mode, but that mode
+was never where the residual lived.
+
+> **The trap this figure exists to document, and it caught me.** At iteration 2 900 `K2`'s
+> calibration looks dramatically better than `BT2`'s — lifetime |error| 2.81 against 6.00,
+> transverse diffusion 3.36 against 8.64. **None of it survives.** `BT2` is simply still in its
+> transient there: its lifetime |error| continues 6.00 (2 900) → **1.56 (5 000)** → 1.59 (8 000) →
+> 1.85 (9 800), passing `K2` well before the end. A 3 000-iteration screen can rank **position**,
+> which descends monotonically, but it cannot rank calibration, which is nowhere near converged.
+> The `MODE=quick` geometry screen carries this caveat in writing; this is the concrete instance of
+> it, and the reason the caveat is worth the two lines it costs.
+
+**Verdict: adopt it for the compute, not for the accuracy.** 10% cheaper per iteration at
+unchanged position quality is worth taking, but nothing here is a physics improvement, and the
+question the run was designed to answer — *is mode 3 hurting us?* — resolves to *yes, and it does
+not matter.*
+
 ## 7. Methodology: the traps that cost us real time
 
 These generalise beyond this project and are the reason several earlier "results" were wrong.

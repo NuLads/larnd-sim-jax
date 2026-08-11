@@ -874,6 +874,27 @@ check FAILS misleadingly: ALT's position reads 1104 µm against BT2's 170 µm me
 geometry frozen the residual is recorded once for batch 0 only, where BT2's own value is 1027 µm —
 860 of 864 track coefficients match exactly.
 
+
+![K2 spline basis](plots/noise_report/fig60_k2_basis.png)
+
+**Tests** — is the third spline mode worth fitting? Measured against the truth projection it
+recovers **−61.7%**: its error (0.0209 cm rms) EXCEEDS its true amplitude (0.0129 cm), so fitting it
+injects noise. K2 drops it (`LARND_SPLINE_KMIN` 3 → 2). It took effect on **839 of 864 tracks (97%)**
+— only the 25 long enough to demand three modes keep K = 3.
+**Concludes — a NULL on position.** 354.0 → 345.1 µm (−2.5%), and that −2.5% is one seed of two
+(351 → 333, 357 → 357). The one real gain is compute: **10% cheaper per iteration** (4929 vs 5485 ms).
+**Concludes — and panel (c) says a null was predictable.** Mode 1 carries 4× the amplitude of the
+others and is only 51.6% recovered, so removing mode 3 cuts the coefficient-space error just 5.5%
+(0.0639 → 0.0604 cm) while perfect mode-1 recovery would cut it **54%**. The −61.7% correctly
+diagnosed a noisy mode; that mode was never where the residual lived. **Basis truncation is not the
+lever — mode 1 is.**
+**Read the caption — this is the concrete instance of the screen-length trap.** At iteration 2 900
+K2's calibration looks 2× better (lifetime |err| 2.81 vs 6.00, tran. diff. 3.36 vs 8.64) and NONE of
+it survives: BT2 is merely still in its transient, running 6.00 (2 900) → **1.56 (5 000)** → 1.85
+(9 800) and passing K2. A 3 000-iteration screen ranks POSITION, which descends monotonically; it
+cannot rank calibration.
+**Verdict** — adopt for the compute, not the accuracy.
+
 ## §11 What is settled, what is open, what is next
 
 **Settled**
