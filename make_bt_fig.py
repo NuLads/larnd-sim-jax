@@ -1,11 +1,13 @@
-"""Fig 54 — PRELIMINARY: the BT arms on seeds 0-3 only.
+"""Fig 54 — the BT arms at the full n = 6.
 
-    ####################################################################
-    #  PRELIMINARY.  n = 4 of a planned 6.  Seeds 4 and 5 are still     #
-    #  running (they were lost to a node failure and resubmitted).      #
-    #  Nothing here is final; lifetime in particular is unresolvable    #
-    #  at this n.                                                       #
-    ####################################################################
+Supersedes the n = 4 preliminary read, and CORRECTS it: that version reported a longitudinal
+diffusion "regression" (BT0 -0.60% -> BT2 +7.32%). That was a SIGNED comparison of a parameter
+whose per-seed errors change sign. In |error| the paired difference is -0.50 +- 3.65 points, i.e.
+nothing at all. The regression is withdrawn.
+
+Signed means are quoted only where the sign is stable (A_b, E field). For longitudinal diffusion,
+transverse diffusion and lifetime the per-seed errors mix sign, so |error| is the honest statistic
+and is what panels (b), (e) and (g) use.
 
 Three PRODUCTION arms (geometry fitted), 10 000 iterations, differing only in the dE/dx prior:
 
@@ -41,7 +43,8 @@ C = dict(blue='#0072B2', orange='#E69F00', green='#009E73', red='#D55E00',
 plt.rcParams.update({'font.size': 9, 'axes.grid': True, 'grid.alpha': .25,
                      'axes.spines.top': False, 'axes.spines.right': False,
                      'figure.dpi': 130, 'savefig.bbox': 'tight'})
-SEEDS = [0, 1, 2, 3]
+SEEDS = sorted(int(re.search(r'seed(\d+)', f).group(1))
+               for f in glob.glob('fit_result/sci_full_BT0/history_iter10000_*.pkl'))
 ARMS = [('BT0', 'BT0  current, w=5, mean 1e5', C['ink']),
         ('BT1', 'BT1  current, w=1/dx, mean 2500', C['orange']),
         ('BT2', 'BT2  REFIT, w=1/dx, mean 2500', C['green'])]
@@ -58,7 +61,10 @@ V = {}
 for tag, _, _ in ARMS:
     V[tag] = {}
     for s in SEEDS:
-        f = glob.glob(f'fit_result/sci_full_{tag}/history_iter10000_*seed{s}.pkl')[0]
+        g = glob.glob(f'fit_result/sci_full_{tag}/history_iter10000_*seed{s}.pkl')
+        if not g:
+            continue
+        f = g[0]
         h = pickle.load(open(f, 'rb'))
         d = {}
         for p in R.P:
@@ -79,6 +85,8 @@ for tag, _, _ in ARMS:
         F, T, D = np.concatenate(F), np.concatenate(T), np.concatenate(D)
         d['mean_err'] = 100 * ((np.sum(F * D) / np.sum(D)) / (np.sum(T * D) / np.sum(D)) - 1)
         d['wratio'] = rw(F) / rw(T)
+        d['tau'] = float(np.ravel(h['lifetime_target'])[0])
+        d['swing'] = 100 * (1 - np.exp(-0.087 * 2200.0 / d['tau']))
         V[tag][s] = d
 
 fig, ax = plt.subplots(2, 3, figsize=(16.4, 8.8))
@@ -95,8 +103,8 @@ a.axhline(0, color=C['grey'], lw=1.4)
 a.axhspan(-1, 1, color=C['green'], alpha=.10)
 a.set_xticks(xs); a.set_xticklabels([PL[p] for p in R.P], fontsize=8, rotation=18, ha='right')
 a.set_ylabel('error vs truth (%)')
-a.set_title('(a) absolute. A$_b$ improves with the REFIT;\nthe diffusions get worse in every arm but BT0.',
-            fontsize=9.3)
+a.set_title('(a) absolute, signed. A$_b$ improves with the REFIT.\n'
+            'Mixed-sign parameters are read in |error| in (b).', fontsize=9.3)
 a.legend(fontsize=6.9, frameon=False)
 
 # ---------------- (b) paired differences ----------------
@@ -109,18 +117,18 @@ xs2 = np.arange(len(KEYS))
 for k, (u, w, col, lab) in enumerate(PAIRS):
     m, e = [], []
     for p in KEYS:
-        f = (lambda x: abs(x)) if p == 'long_diff' else (lambda x: x)
+        f = abs if p in ('long_diff', 'tran_diff', 'lifetime') else (lambda x: x)
         d = np.array([f(V[w][s][p]) - f(V[u][s][p]) for s in SEEDS])
         m.append(d.mean()); e.append(d.std(ddof=1) / np.sqrt(len(d)))
     a.errorbar(xs2 + (k - 1) * .19, m, yerr=e, lw=0, elinewidth=2.4, marker='o', ms=7, capsize=4,
                color=col, label=lab)
 a.axhline(0, color=C['ink'], lw=1.5)
 a.set_xticks(xs2)
-a.set_xticklabels([PL[p] + ('\n(|error|)' if p == 'long_diff' else '') for p in KEYS],
-                  fontsize=7.8, rotation=12, ha='right')
+a.set_xticklabels([PL[p] + ('\n(|error|)' if p in ('long_diff', 'tran_diff', 'lifetime')
+                                    else '') for p in KEYS], fontsize=7.8, rotation=12, ha='right')
 a.set_ylabel('PAIRED difference (points).  negative = better')
-a.set_title('(b) the weight alone is HARMFUL; the refit rescues it.\n'
-            'A$_b$: +0.28 then −0.71, net −0.43 ± 0.12', fontsize=9.3)
+a.set_title('(b) BT2 improves or matches EVERY parameter;\n'
+            'BT1 degrades long. diffusion by +11.1 ± 2.0 (0/6 seeds)', fontsize=9.3)
 a.legend(fontsize=7.0, frameon=False)
 
 # ---------------- (c) A_b per seed: the clean result ----------------
@@ -130,8 +138,8 @@ for k, (t, lab, col) in enumerate(ARMS):
 a.axhline(0, color=C['red'], lw=1.4, ls='--')
 a.set_xticks(SEEDS); a.set_xlabel('seed')
 a.set_ylabel('A$_b$ error vs truth (%)')
-a.set_title('(c) A$_b$: BT2 is best on ALL FOUR seeds.\n'
-            'Paired −0.43 ± 0.12 vs BT0 (3.6σ).', fontsize=9.3)
+a.set_title('(c) A$_b$: BT2 is best on ALL SIX seeds.\n'
+            'Paired −0.50 ± 0.09 vs BT0 (5.6σ).', fontsize=9.3)
 a.legend(fontsize=7.0, frameon=False)
 
 # ---------------- (d) the dE/dx field: the mechanism check ----------------
@@ -160,16 +168,29 @@ a.set_title('(d) THE MECHANISM. BT1 fixes the SPREAD and breaks\n'
 h1, l1 = a.get_legend_handles_labels(); h2, l2 = a2.get_legend_handles_labels()
 a.legend(h1 + h2, l1 + l2, fontsize=7.0, frameon=False, loc='upper center')
 
-# ---------------- (e) longitudinal diffusion: the caveat ----------------
+# ---------------- (e) lifetime, stratified by lever arm ----------------
+# Pooling lifetime across seeds mixes problems with 4.2% and 15.2% of signal (sec 6t), so it is
+# quoted stratified. This is the panel n = 4 could not produce.
 a = ax[1, 1]
+HI = [s for s in SEEDS if V['BT0'][s]['swing'] > 6.5]
+LO = [s for s in SEEDS if V['BT0'][s]['swing'] <= 6.5]
+xs4 = np.arange(2)
 for k, (t, lab, col) in enumerate(ARMS):
-    a.plot(SEEDS, [V[t][s]['long_diff'] for s in SEEDS], marker='o', ms=8, lw=1.8, color=col,
-           label=f'{t}  |err| {np.mean([abs(V[t][s]["long_diff"]) for s in SEEDS]):.1f}%')
-a.axhline(0, color=C['red'], lw=1.4, ls='--')
-a.set_xticks(SEEDS); a.set_xlabel('seed'); a.set_ylabel('long. diffusion error (%)')
-a.set_title('(e) THE CAVEAT: long. diffusion is badly determined in\n'
-            'ALL arms. BT1 is clearly worst; BT2 ≈ BT0 in |error|.', fontsize=9.3)
-a.legend(fontsize=7.2, frameon=False)
+    m = [np.mean([abs(V[t][s]['lifetime']) for s in HI]),
+         np.mean([abs(V[t][s]['lifetime']) for s in LO])]
+    e = [np.std([abs(V[t][s]['lifetime']) for s in HI], ddof=1) / np.sqrt(len(HI)),
+         np.std([abs(V[t][s]['lifetime']) for s in LO], ddof=1) / np.sqrt(len(LO))]
+    a.bar(xs4 + (k - 1) * .26, m, yerr=e, width=.24, color=col, edgecolor='white', capsize=4,
+          label=t)
+    for j, y in enumerate(m):
+        a.text(j + (k - 1) * .26, y + .25, f'{y:.2f}', ha='center', fontsize=7.4)
+a.set_xticks(xs4)
+a.set_xticklabels([f'lever arm > 6.5%\n(seeds {HI})', f'lever arm < 6.5%\n(seeds {LO})'],
+                  fontsize=7.6)
+a.set_ylabel('mean |lifetime error| (%)')
+a.set_title('(e) LIFETIME: 5.97 → 1.62% overall, and BT2 is better in\n'
+            'BOTH lever-arm strata — the panel n = 4 could not produce.', fontsize=9.3)
+a.legend(fontsize=7.4, frameon=False)
 
 # ---------------- (f) geometry and the dE/dx metric ----------------
 a = ax[1, 2]
@@ -190,21 +211,21 @@ for k in range(len(ARMS)):
                 ha='center', fontsize=7.4)
 a.set_xticks(xs3); a.set_xticklabels([t for t, _, _ in ARMS], fontsize=9)
 a.set_ylabel('position residual (µm)'); a.set_ylim(0, max(pos) * 1.35)
-a.set_title('(f) geometry costs ~7 µm; the dE/dx MAE against TRUTH\n'
+a.set_title('(f) geometry costs ~13 µm; the dE/dx MAE against TRUTH\n'
             'is best for BT2 and worst for BT1.', fontsize=9.3)
 h1, l1 = a.get_legend_handles_labels(); h3, l3 = a3.get_legend_handles_labels()
 a.legend(h1 + h3, l1 + l3, fontsize=7.0, frameon=False, loc='lower center')
 
-fig.suptitle('Fig 54 — PRELIMINARY (seeds 0–3 of 6; 4 and 5 still running). The refit prior does '
-             'what fig 48 predicted: A$_b$ 0.69 → 0.26%\n(best on 4/4 seeds) and the dE/dx mean '
-             '−0.45 → −0.21%. But correcting the WEIGHT ALONE is actively harmful (d), and the\n'
-             'DIFFUSIONS get worse in production even though they improved at ceiling (e) — which '
-             'the ceiling arms did not predict.', fontsize=10.0)
+fig.suptitle('Fig 54 — the BT arms at n = 6. The refit prior delivers what fig 48 predicted: '
+             'A$_b$ 0.77 → 0.27% (6/6 seeds, 5.6σ),\nlifetime |error| 5.97 → 1.62%, and the dE/dx '
+             'mean −0.45 → −0.20%. Correcting the WEIGHT ALONE remains actively harmful (d).\n'
+             'The longitudinal-diffusion "regression" of the n = 4 read was a signed-mean artefact '
+             'and is WITHDRAWN.', fontsize=10.0)
 fig.tight_layout(rect=[0, 0, 1, .90])
 os.makedirs(OUT, exist_ok=True)
-fig.savefig(f'{OUT}/fig54_bt_preliminary.png'); plt.close(fig)
-print('wrote', f'{OUT}/fig54_bt_preliminary.png')
-print(f'\nPRELIMINARY, n={len(SEEDS)} seeds {SEEDS}')
+fig.savefig(f'{OUT}/fig54_bt_arms.png'); plt.close(fig)
+print('wrote', f'{OUT}/fig54_bt_arms.png')
+print(f'\nn={len(SEEDS)} seeds {SEEDS}')
 print(f'{"arm":5s}' + ''.join(f'{p:>11s}' for p in R.P) + f'{"pos":>8s}{"MAEtru":>9s}{"dEdx mean":>11s}{"spread":>8s}')
 for t, _, _ in ARMS:
     print(f'{t:5s}' + ''.join(f'{np.mean([V[t][s][p] for s in SEEDS]):+11.2f}' for p in R.P)
