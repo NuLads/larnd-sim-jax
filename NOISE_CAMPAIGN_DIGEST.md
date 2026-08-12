@@ -29,11 +29,11 @@ cross-check that reframed the whole thing.
 - **A LOWER LOSS CAN MEAN A WORSE LIFETIME (fig 63).** A plain re-anneal beats BT2's loss by 1.21%
   while moving lifetime +3.6 further from truth, on both seeds. Selecting on the loss selects
   AGAINST lifetime accuracy.
-- **AND THAT IS THE OBJECTIVE'S FAULT, NOT THE OPTIMISER'S (fig 66).** The fit sits on the
-  objective's own minimum at every arm and seed; the optimiser's share of the error is 0.14–0.65
-  points against the objective's 0.36–4.15. That minimum is within 0.5% of truth for A_b and E field
-  and 2–7% off for the diffusions and lifetime, and it MOVES with the nuisance state (a 6-point
-  lifetime swing from re-annealing alone). **Lifetime is objective-limited at ~2%.**
+- **AND THE OBJECTIVE STILL PREFERS TRUTH — SO IT IS REACHABILITY (fig 66).** With calibration,
+  dE/dx and geometry ALL at truth the loss beats the fit on **7/7 arm-seeds by 5.6%**; the gap
+  closes 9.4% (BT2) → 6.6% (BM0) → 2.5% (G20K). **Blocks must move together**: calibration alone at
+  truth is WORSE (+0.18%), dE/dx alone worse still (+2.79%), all three together −5.6%. 1-D scans
+  showing the fit at "the optimum" measure COUPLING, not bias.
 - **BLOCK ALTERNATION IS UNTESTED — the fig 59 result was RETRACTED by fig 62.** The
   frozen-geometry pass runs only 3 000 iterations, so its calibration LR at readout is 0.059 of peak
   against BT2's 8.0e−5 (×700) and A_b still wanders ±0.13 vs BT2's ±0.001: the "×2.3" compared a
@@ -1037,36 +1037,32 @@ worse physics, in a controlled pair.
 
 ![Objective bias](plots/noise_report/fig66_objective_bias.png)
 
-**Tests** — is the lifetime error the OPTIMISER's or the OBJECTIVE's? Re-runs exactly the fig 58
-calibration scan (each param over ±20% of its fitted value) at BM0's and G20K's converged
-checkpoints instead of BT2's, and compares where the FIT put each parameter against where the
-OBJECTIVE's minimum sits. Evaluation only: 5 scans × 100 batches × 145 points, ~3 h each.
-**Concludes — the fit sits on the objective's own minimum, EVERYWHERE.** In panel (a) every point
-lies on the diagonal, not on the "objective wants truth" line. Error budget, in points:
-
-| | A_b | E field | tran. diff. | long. diff. | lifetime |
-|---|---|---|---|---|---|
-| optimiser's share | 0.14 | 0.17 | 0.26 | 1.54 | 0.65 |
-| **objective's share** | 0.36 | 0.15 | **1.37** | **4.15** | **2.82** |
-
-**THE OPTIMISER IS DOING ITS JOB** — the objective's share is 4.3× the optimiser's for lifetime,
-5.3× for tran. diff., 2.7× for long. diff. (E field is not an exception: both its entries are
-~0.15% = the parabola fit's resolution on a 5% grid; its fit is 0.02% from truth.)
-**Concludes — the bias is PARAMETER-SPECIFIC, and it explains the whole campaign.** The objective's
-minimum is within 0.5% of truth for A_b and E field — which is WHY those are the two we recover well
-and why no degradation ever moved them — and 2–7% off for the diffusions and lifetime.
-**Concludes — and it MOVES with the nuisance state.** BM0's objective wants lifetime at **+4.94%**
-(+4.72/+5.16, tight) while BT2's wants −1.09% and G20K's −0.23%: a **6-point swing** in the location
-of the minimum from re-annealing alone. BM0's bad lifetime was never an optimiser failure. At
-BT2/G20K the optimum straddles truth by ±2–3% seed to seed — a wander, not an offset.
-**A HYPOTHESIS KILLED** — a lifetime ↔ long.-diffusion trade was the obvious mechanism (both act
-along drift; BM0 improved one 5.7 points while degrading the other 3.6). Correlation across all 7
-arm-seeds: **+0.03**. No trade.
-**Free second answer** — better geometry DOES shrink the geometry→truth shift for tran. diff.
-(4.4×), long. diff. (2.4×) and A_b (1.6×), but NOT for lifetime, which is flat after BT2.
-**SETTLES** — lifetime is **objective-limited at ~2%, not optimiser-limited**. No schedule, freeze,
-block ordering or iteration count fixes it; the block matrix and G20K were optimising a target in
-the wrong place. Next question is a forward-model one.
+**Tests** — is the calibration error the OPTIMISER's or the OBJECTIVE's? Evaluation only, at BT2's,
+BM0's and G20K's converged checkpoints. The decisive quantity is P1_truth: the loss with
+calibration AND dE/dx AND geometry all set to truth.
+**Concludes — THE OBJECTIVE PREFERS TRUTH.** P1_truth beats P0_fit on **7/7 arm-seeds by 5.6%**, so
+the fit is NOT at the joint minimum and the error is REACHABILITY, not objective bias.
+**Concludes — and the gap is closing:** truth beats the fit by 9.4% (BT2) → 6.6% (BM0) → **2.5%**
+(G20K). G20K genuinely reached a better region rather than trading errors.
+**Concludes — BLOCKS MUST MOVE TOGETHER, and this is the mechanism.** Moving one block to truth
+while the others stay fitted: geometry alone **−7.00%** (7/7), calibration alone **+0.18%** (0/7),
+dE/dx alone **+2.79%** (0/7), all three together **−5.60%** (7/7). Setting calibration to its TRUE
+values while the nuisances are wrong makes the fit WORSE.
+**Concludes — the 1-D scans measure COUPLING, not bias.** With geometry and dE/dx pinned at their
+FITTED values the fit sits on the scan's minimum every time — because wrong nuisances drag the
+preferred value onto the fit. A conditional minimum cannot locate a joint one.
+**One genuine objective bias survives, and it is not lifetime's** — P3_dedx_true is WORSE than the
+fit on 7/7 by 2.79%: the dE/dx prior displaces its own block's minimum, the standing §6s result,
+reconfirmed at three converged points.
+**The residual, honestly** — with BOTH nuisances at truth the lifetime slice minimum is still 2.26%
+off (from 2.83%), so the nuisance state explains only ~⅕. But that scan still fixes the other four
+calibration parameters, so it is also conditional. **Settling it needs a profile over the full
+calibration block — no run has done this. That is the open question.**
+**A hypothesis killed (stands)** — lifetime ↔ long. diffusion trade: correlation +0.03 (n=7). None.
+**⚠️ CORRECTION** — the first version of this entry concluded the OPPOSITE (lifetime
+objective-limited, unfixable by optimisation). That read a CONDITIONAL minimum as a joint one; a
+conditional minimum sits on the fit by construction when blocks are coupled. The test that
+distinguishes them, P1_truth vs P0_fit, was in the same files all along.
 
 
 ![K2 spline basis](plots/noise_report/fig60_k2_basis.png)
