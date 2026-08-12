@@ -117,6 +117,15 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   **32% of the true spread** and its mean slides **1.08% low**. Refitting on the grid in use fixes
   both at β = 1; re-weighting trades one against the other. The mean constraint is separately
   **6.3× too stiff**: the true batch mean genuinely varies 0.747%, so `w = 1/(2σ²) = 2520`.
+- **FREEZING CALIBRATION LETS THE NUISANCES DESCEND (§6w, block matrix).** With every block
+  warm-started from `BT2` and calibration frozen, `BMC` reaches the best loss of any arm
+  (**−3.25%** vs `BT2`, **−2.06%** vs the re-anneal control), the best position (**115.7 µm** vs
+  165.3) and the best dE/dx. Freezing GEOMETRY instead erases the descent completely — those arms
+  sit within 0.1% of `BT2` whatever else is fitted.
+- **A LOWER LOSS CAN MEAN A WORSE LIFETIME (§6w, block matrix).** A plain re-anneal finds a loss
+  **1.21% lower** than `BT2` while moving lifetime **+3.6 points further from truth**, on both seeds
+  independently. For lifetime the objective's optimum is displaced from truth, so **any procedure
+  that selects on the loss selects against lifetime accuracy.**
 - **BLOCK ALTERNATION IS UNTESTED — the earlier positive result was RETRACTED (§6w).** A
   frozen-geometry second pass appeared to beat `BT2` on A_b (×2.3, 0.340 → 0.147). The warm-start
   control killed it: the frozen-geometry arms run only 3 000 iterations, so their calibration LR at
@@ -2912,6 +2921,76 @@ it) and is the second half of a proper test. 4 jobs, ~5 h.
 > median over 2 seeds, which cannot distinguish a trend from one lucky sample. **Any comparison
 > against a converged run must either be converged itself or quote its own oscillation amplitude.**
 
+### The block matrix: warm-start everything, then freeze subsets (`BM*`)
+
+![Block matrix](plots/noise_report/fig63_block_matrix.png)
+
+The fit has three blocks — calibration **C** (5 physics parameters), per-segment dE/dx **D**
+(~4 000 nuisances) and per-track spline geometry **G**. They are optimised together, and the
+degeneracy matrix says they are coupled: each block's optimum *moves* as the others move. So a block
+may sit where it does not because the data wants it there but because it **co-adapted** to the
+others while they were still wrong. Seven arms test every subset: all three blocks warm-started from
+`BT2` (nothing restarts from scratch), then 1 or 2 of them frozen and the rest re-annealed for
+3 000 iterations.
+
+**This required building the missing half of the machinery.** Only calibration and geometry had an
+init-from; the dE/dx block did not, which is precisely what invalidated `ALTW`. `LARND_DEDX_INIT_FROM`
+now warm-starts `log_dedx` from a checkpoint's `dedx_cache`, and `SCICALIBFREEZE` exposes the
+existing calibration gate. Both were validated on a 30-iteration job before any GPU-hours were
+committed: calibration peak-to-peak movement exactly **0**, and dE/dx max deviation from `BT2`
+**0.0100** — one Adam step at lr 1e-2 — against 0.2530 for a cold start.
+
+**It is also the first study built with trap 1b designed in.** Both schedules are compressed so
+3 000 iterations land on `BT2`'s terminal LR (`SCILRDECAY` 0.91 → 0.73, `SCICHDECAY` 0.9997 → 0.999),
+so every arm is read at the same schedule phase. Panel (a) is the other half of that discipline:
+every freeze was verified against the checkpoint before a single number was read, and all seven arms
+match their declaration — the figure asserts it rather than trusting it.
+
+**`BM0` — everything warm-started, nothing frozen — is the control, and it is not optional.** A
+re-anneal *alone* moves position 165 → 127 µm. Read any arm against `BM0`, not against `BT2`, or the
+re-anneal gets credited to the freeze.
+
+| arm | fits | loss | vs `BT2` | vs `BM0` |
+|---|---|---|---|---|
+| **`BMC`** | D, G | **8 812** | **−3.25%** | **−2.06%** |
+| `BMCD` | G | 8 872 | −2.60% | −1.40% |
+| `BM0` | C, D, G | 8 998 | −1.21% | — |
+| `BMD` | C, G | 9 055 | −0.59% | +0.64% |
+| `BMCG` | D | 9 100 | −0.10% | +1.13% |
+| `BMDG` | C | 9 106 | −0.03% | +1.20% |
+| `BMG` | C, D | 9 110 | +0.01% | +1.24% |
+
+**Freezing calibration is the clear win.** `BMC` reaches the best loss of any arm and the best of
+both nuisance blocks — position **115.7 µm** (against 127.1 for the control and 165.3 for `BT2`) and
+dE/dx MAE **0.0533** (against 0.0554 and 0.0541). The ordering is the same on all three quantities.
+The nuisance blocks *were* being held back by co-adaptation with calibration, and the effect is worth
+roughly as much again as the re-anneal itself: −38 µm from the re-anneal, a further −11 µm from the
+freeze.
+
+**Freezing geometry erases the descent entirely.** `BMG`, `BMCG` and `BMDG` all sit within 0.1% of
+`BT2`'s loss no matter what else is fitted. Geometry is where the objective lives — exactly what the
+α-scan measured at 5.1× the dE/dx question — and this is the independent confirmation that the
+fig 59 frozen-geometry arms could not have been descending in the first place.
+
+**Calibration is genuinely mixed, and the pattern is consistent across both seeds.** Every arm that
+fits calibration improves longitudinal diffusion (`BM0` 8.54 → 2.85%, −5.13/−6.24 per seed) and
+degrades **lifetime** (`BM0` 1.85 → 5.44%, +3.68/+3.49). A_b improves under the plain re-anneal
+(0.34 → 0.10%) but not when a nuisance block is frozen. Transverse diffusion is a null under the
+re-anneal and improves only with geometry frozen (`BMG` 1.89 → 0.76%).
+
+> **The uncomfortable result, panel (f).** `BM0` finds a **lower loss** than `BT2` (−1.21%) while
+> moving lifetime **+3.6 points further from truth**, on both seeds independently. Better fit, worse
+> physics. For lifetime the objective's optimum is *displaced* from truth — this campaign's oldest
+> open problem — and here it is in a single controlled pair, with everything else held fixed. Note
+> what it implies for tuning: any procedure that selects on the loss will select *against* lifetime
+> accuracy.
+
+**What to do with this.** The natural production recipe is a two-stage schedule — re-anneal with
+calibration frozen to let geometry and dE/dx descend (`BMC`), then release calibration — and it is
+untested; no arm here does it. The other clear follow-up is `BMC` at n = 6, since **n = 2 makes this
+a screen**: it is sized for the large effects it found (−3.25% loss, −50 µm position) and cannot
+resolve the small ones. Per-seed values are quoted throughout for that reason.
+
 ### Is the third spline mode worth fitting? (`K2`)
 
 ![K2](plots/noise_report/fig60_k2_basis.png)
@@ -3042,7 +3121,7 @@ study 2 established.*
 | `G20K` (3 seeds × 20 000 it) | is geometry merely unconverged? both schedules stretched | **COMPLETE — §6w**; position −34.7%, loss −8.7% |
 | `ALT` (screen) | frozen-geometry re-fit — does alternation help? | **COMPLETE — §6w** |
 | `ALTW` (2 seeds) | the same, calibration WARM-STARTED from BT2 — one basin or two? | **COMPLETE — §6w; it RETRACTS the `ALT` result** |
-| **Block matrix** `BM0`/`BMC`/`BMD`/`BMG`/`BMCD`/`BMCG`/`BMDG` (7 arms × 2 seeds) | every block warm-started from `BT2`, then subsets FROZEN; schedules compressed to `BT2`'s terminal LR | **COMPLETE — not yet read out** |
+| **Block matrix** `BM0`/`BMC`/`BMD`/`BMG`/`BMCD`/`BMCG`/`BMDG` (7 arms × 2 seeds) | every block warm-started from `BT2`, then subsets FROZEN; schedules compressed to `BT2`'s terminal LR | **COMPLETE — §6w**; freezing calibration wins (loss −3.25%) |
 | `K2` (screen) | the 2-mode spline basis | **COMPLETE — §6w** |
 | **Study 3** `S3T*` / `S3W*` (7 usable arms, ceiling) | dE/dx mean-constraint TARGET scan crossed with weight | **COMPLETE — §6u** |
 | `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **COMPLETE — §6v** |

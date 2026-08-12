@@ -22,6 +22,13 @@ cross-check that reframed the whole thing.
   headroom left in the current basis); dE/dx is displaced (prior-limited). The dE/dx prior turns
   out to be **correct for the wrong segmentation**, and its weight is a tempering exponent whose
   principled value is w = 1/dx ≈ 1.01, not 5.
+- **FREEZING CALIBRATION LETS THE NUISANCES DESCEND (fig 63).** BMC — every block warm-started from
+  BT2, calibration frozen — takes the best loss (−3.25% vs BT2, −2.06% vs the re-anneal control),
+  position (115.7 vs 165.3 µm) and dE/dx of any arm. Freezing GEOMETRY instead erases the descent:
+  those arms sit within 0.1% of BT2.
+- **A LOWER LOSS CAN MEAN A WORSE LIFETIME (fig 63).** A plain re-anneal beats BT2's loss by 1.21%
+  while moving lifetime +3.6 further from truth, on both seeds. Selecting on the loss selects
+  AGAINST lifetime accuracy.
 - **BLOCK ALTERNATION IS UNTESTED — the fig 59 result was RETRACTED by fig 62.** The
   frozen-geometry pass runs only 3 000 iterations, so its calibration LR at readout is 0.059 of peak
   against BT2's 8.0e−5 (×700) and A_b still wanders ±0.13 vs BT2's ±0.001: the "×2.3" compared a
@@ -951,6 +958,39 @@ untested, not disproven.
 **The lesson** — two arms compared at equal ITERATION COUNT when what matters is equal SCHEDULE
 PHASE: the same error the K2 screen made, the inverse of the one G20K was built around. **Any
 comparison against a converged run must be converged itself or quote its own oscillation amplitude.**
+
+
+![Block matrix](plots/noise_report/fig63_block_matrix.png)
+
+**Tests** — all seven subsets of the three blocks: calibration C, per-segment dE/dx D, spline
+geometry G. Every block warm-started from BT2 (nothing restarts from scratch), then 1 or 2 frozen
+and the rest re-annealed for 3 000 iterations. Required NEW machinery: LARND_DEDX_INIT_FROM (the
+missing dE/dx warm start that invalidated ALTW) and SCICALIBFREEZE, both validated on a
+30-iteration job first — calibration movement exactly 0, dE/dx max deviation 0.0100 = one Adam step
+vs 0.2530 for a cold start.
+**First study built with trap 1b designed in** — schedules COMPRESSED so 3 000 iterations land on
+BT2's terminal LR (SCILRDECAY 0.91→0.73, SCICHDECAY 0.9997→0.999), so all arms share a schedule
+phase. Panel (a) verifies every freeze against the checkpoint and the figure ASSERTS it.
+**BM0 (nothing frozen) is the control and is not optional** — a re-anneal ALONE moves position
+165 → 127 µm. Read arms against BM0, not BT2, or the re-anneal is credited to the freeze.
+**Concludes — freezing CALIBRATION is the clear win.** BMC (fits D+G) takes the best loss
+(**8 812, −3.25% vs BT2, −2.06% vs BM0**), the best position (**115.7 µm** vs 127.1 control, 165.3
+BT2) and the best dE/dx MAE (0.0533 vs 0.0554, 0.0541). Same ordering on all three. The nuisances
+WERE held back by co-adaptation with calibration: −38 µm from the re-anneal, a further −11 µm from
+the freeze.
+**Concludes — freezing GEOMETRY erases the descent.** BMG / BMCG / BMDG all sit within 0.1% of BT2's
+loss whatever else is fitted. Geometry is where the objective lives (the α-scan's 5.1×), and this is
+the independent confirmation that fig 59's frozen-geometry arms could not have been descending.
+**Concludes — calibration is mixed, consistently on both seeds.** Every calibration-fitting arm
+improves long. diffusion (BM0 8.54 → 2.85%) and degrades LIFETIME (BM0 1.85 → 5.44%). A_b improves
+under the plain re-anneal only (0.34 → 0.10%); tran. diff. improves only with geometry frozen
+(BMG 1.89 → 0.76%).
+**THE UNCOMFORTABLE ONE (panel f)** — BM0 finds a **LOWER loss (−1.21%)** while moving lifetime
+**+3.6 further from truth**, on both seeds independently. Better fit, worse physics: for lifetime the
+objective's optimum is DISPLACED from truth, and any procedure that selects on the loss selects
+AGAINST lifetime accuracy.
+**Next** — the two-stage recipe (freeze calibration, descend, then release) is untested; no arm does
+it. And n = 2 is a screen: sized for the −3.25% / −50 µm effects it found, not for small ones.
 
 
 ![K2 spline basis](plots/noise_report/fig60_k2_basis.png)
