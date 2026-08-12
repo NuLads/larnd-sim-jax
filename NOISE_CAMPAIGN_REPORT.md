@@ -2985,6 +2985,66 @@ re-anneal and improves only with geometry frozen (`BMG` 1.89 → 0.76%).
 > what it implies for tuning: any procedure that selects on the loss will select *against* lifetime
 > accuracy.
 
+#### What actually happens during the run
+
+![Block traces](plots/noise_report/fig64_block_traces.png)
+
+The endpoints above hide the mechanism. Plotted as trajectories — with `BT2`'s own last 3 000
+iterations drawn to the left of zero, since every arm begins where `BT2` finished — three things
+become visible that no bar chart shows.
+
+**The re-anneal kicks every fitted block away before it re-descends.** That transient is not noise;
+it is why a warm start does not simply sit still, and it is exactly what erased `ALTW`'s warm start.
+Here it is deliberate and every arm pays it.
+
+**Position descends monotonically and is still falling at 3 000 in every geometry-fitting arm.** All
+the position numbers in this section are therefore *upper bounds*, and the ranking between arms is
+established well before the end.
+
+**Lifetime does the opposite: it is kicked away and never comes back.** `BM0` leaves `BT2`'s −1.2%
+and settles at +5.4%; the other calibration-fitting arms leave in the other direction and settle
+near −3.2%. Every arm moves lifetime further from truth and then stays there — the loss is content
+at the new point. That is fig 63(f) as a trajectory rather than a pair of endpoints.
+
+**And the loss panel separates the arms into exactly two families** — geometry fitted (descending)
+and geometry frozen (flat from the first iteration). The 5.1× information asymmetry, made visual.
+
+#### The same seven arms as a factorial
+
+![Block factorial](plots/noise_report/fig65_block_factorial.png)
+
+Seven arms is more comparisons than anyone can hold at once, but the design is not seven arbitrary
+configurations. **For each block being fitted, the other two are each either frozen or fitted — a
+complete 2×2.** So every outcome decomposes into two *main effects* and one *interaction*: three
+numbers instead of four, and directly comparable across blocks. This is the same question the
+degeneracy matrix asks of the **objective**, now asked of the **fit**.
+
+| outcome | 2×2 over | arms |
+|---|---|---|
+| position (geometry) | freeze C × freeze D | `BM0` `BMC` `BMD` `BMCD` |
+| dE/dx MAE | freeze C × freeze G | `BM0` `BMC` `BMG` `BMCG` |
+| calibration | freeze D × freeze G | `BM0` `BMD` `BMG` `BMDG` |
+
+**Freezing calibration is the one large, consistent lever, and it helps both nuisance blocks:**
+position **−9.3 µm** (−6.7 / −11.9 per seed) and dE/dx MAE **−13.9 × 10⁻⁴** (−13.2 / −14.5). Both
+seeds agree in sign on both outcomes.
+
+**Freezing a nuisance does little for the other nuisance.** Freezing dE/dx has no effect on position
+at all (+0.1 µm, seeds +3.9/−3.7 — a null). Freezing geometry does help dE/dx (−4.6 × 10⁻⁴,
+remarkably reproducible across seeds) but only about a third as much as freezing calibration.
+
+**For calibration, freezing geometry is the only consistent lever — and it is a trade, not a win:**
+transverse diffusion **−0.72** (better, both seeds) bought against longitudinal diffusion **+4.50**
+and A_b **+0.19** (both worse, both seeds). Freezing dE/dx does essentially nothing to calibration;
+every entry except A_b straddles zero across the two seeds.
+
+> **Panel (f) is the one to keep.** Differencing each arm against *its own seed's* `BT2` — necessary
+> because the two seeds sit ~200 NLL apart in absolute loss, enough to manufacture a spurious trend
+> — puts `BT2` at the origin. **7 of the 8 arm × seed points lie above zero**, and the three largest
+> loss improvements (−149, −137, −72 NLL) are the three worst lifetime degradations (+3.68, +2.75
+> at −137 on the other seed, +3.49). The one exception, `BMG` seed 0, improves both by a negligible
+> −0.3 NLL. Better fit, worse physics, measured in a controlled pair.
+
 **What to do with this.** The natural production recipe is a two-stage schedule — re-anneal with
 calibration frozen to let geometry and dE/dx descend (`BMC`), then release calibration — and it is
 untested; no arm here does it. The other clear follow-up is `BMC` at n = 6, since **n = 2 makes this

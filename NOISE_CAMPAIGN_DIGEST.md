@@ -993,6 +993,43 @@ AGAINST lifetime accuracy.
 it. And n = 2 is a screen: sized for the −3.25% / −50 µm effects it found, not for small ones.
 
 
+![Block traces](plots/noise_report/fig64_block_traces.png)
+
+**Tests** — the block matrix as TRAJECTORIES (fig 63 gives only endpoints). BT2's last 3 000
+iterations are drawn left of zero, since every arm starts where BT2 finished; dotted = that block is
+frozen, so flat at BT2 by construction.
+**Concludes — the re-anneal KICKS every fitted block away before it re-descends.** Not noise: it is
+why a warm start does not sit still, and exactly what erased ALTW's warm start. Every arm pays it.
+**Concludes — position descends monotonically and is STILL FALLING at 3 000** in every
+geometry-fitting arm, so every position number here is an upper bound; the ranking is settled early.
+**Concludes — lifetime does the opposite: kicked away, never returns.** BM0 leaves BT2's −1.2% and
+settles at +5.4%; the other calibration-fitting arms leave the other way and settle near −3.2%. The
+loss is content at the new point.
+**Concludes — the loss panel splits into exactly two families**, geometry fitted (descending) and
+geometry frozen (flat from iteration 0): the 5.1× information asymmetry made visual.
+
+
+![Block factorial](plots/noise_report/fig65_block_factorial.png)
+
+**Tests** — the same seven arms read as the FACTORIAL they are. For each fitted block the other two
+are each frozen or fitted = a complete 2×2, so each outcome reduces to two MAIN EFFECTS and one
+interaction: three numbers instead of four, comparable across blocks. The degeneracy matrix asks
+this of the OBJECTIVE; this asks it of the FIT.
+**Concludes — freezing CALIBRATION is the one large consistent lever** and it helps both nuisance
+blocks: position **−9.3 µm** (−6.7/−11.9 per seed), dE/dx MAE **−13.9e−4** (−13.2/−14.5). Both seeds
+agree in sign on both.
+**Concludes — freezing a nuisance does little for the other nuisance.** Freeze dE/dx → no effect on
+position (+0.1 µm, seeds +3.9/−3.7 = null). Freeze geometry → helps dE/dx (−4.6e−4, very
+reproducible) but only ~⅓ as much as freezing calibration.
+**Concludes — for CALIBRATION, freezing geometry is the only lever and it is a TRADE:** tran. diff.
+−0.72 (better, both seeds) bought against long. diff. +4.50 and A_b +0.19 (both worse, both seeds).
+Freezing dE/dx does essentially nothing — every entry but A_b straddles zero.
+**Panel (f) is the one to keep** — differenced against each arm's OWN seed's BT2 (the seeds sit
+~200 NLL apart, enough to fake a trend). **7 of 8 arm×seed points lie above zero**, and the three
+largest loss gains (−149, −137, −72 NLL) are the three worst lifetime degradations. Better fit,
+worse physics, in a controlled pair.
+
+
 ![K2 spline basis](plots/noise_report/fig60_k2_basis.png)
 
 **Tests** — is the third spline mode worth fitting? Measured against the truth projection it
