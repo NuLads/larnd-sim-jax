@@ -32,6 +32,9 @@ cross-check that reframed the whole thing.
 - **GEOMETRY IS OPTIMISER-LIMITED AND HOLDS MOST OF THE INFORMATION (figs 56, 58).** Its optimum is
   α* = 0.988 with no shrinkage, it is worth 5.1× the dE/dx question, and it is the dominant
   degeneracy — while A_b and E field are decoupled from both nuisance blocks.
+- **AND ACTING ON IT IS THE LARGEST SINGLE WIN HERE (fig 61).** 20 000 iterations with both
+  schedules stretched ×2: position **−57.2 ± 0.3 µm on 3/3 seeds (−34.7%)** and the **loss −8.7%**,
+  plus transverse diffusion 2.61 → 0.61%. Same position as BT2 in 26% fewer iterations.
 - **NEW BEST CONFIGURATION: BT2 (figs 54–55).** Production with the dE/dx prior REFIT to the
   segmentation in use and weighted at β = 1. A_b 0.77 → 0.27% (6/6 seeds, 5.6σ) and lifetime
   |error| 5.97 → 1.62%, better in both lever-arm strata, for ~13 µm of position. Correcting the
@@ -859,29 +862,38 @@ magnitude — which independently validates the G20K design (chain_decay stretch
 verdict. Calibration is nowhere near converged at this point and nothing is claimed about it.
 
 
-![G20K preliminary](plots/noise_report/fig61_g20k_prelim.png)
+![G20K](plots/noise_report/fig61_g20k.png)
 
-**PRELIMINARY — seeds 0–2 at ~15 000 of 20 000 iterations, calibration LR still live.**
 **Tests** — the long geometry run the screen above justified: 20 000 iterations with BOTH schedules
 stretched ×2 in the exponent (chain_decay 0.9997 → 0.99985 = 0.9997^½, calib decay 0.91 → 0.9539).
-**Read the DASHED curve, not BT2.** Because of that stretch G20K at iteration 2N carries the
-learning rates BT2 had at N, so equal-iteration comparison pits a hotter optimiser against a cooler
-one. The dashed curve is BT2 re-plotted on a doubled axis = the null "the schedule is all that
-matters", under which the run ends at 20 000 where BT2 ended at 10 000, gaining nothing.
-**Concludes — the null is rejected by −42.7%.** Position 166–177 µm (BT2 final) → **110.6 µm** at
-15 000, a paired **−55.6 ± 1.0 µm on 3/3 seeds**, and still descending (−1.9/−3.0/−8.8% over the
-last 2 000). G20K also reaches BT2's FINAL answer at **iteration 7 422** — 26% fewer iterations.
-**Concludes — the LOSS agrees, which is what makes it more than a diagnostic.** The PPP NLL, the
-quantity actually minimised, reads **8 362 vs 9 011 (−7.2%)**; dE/dx MAE follows, 0.0526 vs 0.0546.
-A better optimum, not a metric that happens to look better.
+Seeds 0–2, complete.
+**Read the DASHED curve, not BT2.** The stretch means G20K at iteration 2N carries the LRs BT2 had
+at N, so equal-iteration comparison pits a hotter optimiser against a cooler one. The dashed curve
+is BT2 on a doubled axis = the null "the schedule is all that matters", ending at 20 000 where BT2
+ended at 10 000.
+**The ENDPOINTS are comparable, and that is what the ½ exponent buys** — terminal LR 0.9539²⁰⁰ =
+7.95e−5 vs BT2's 0.91¹⁰⁰ = 8.02e−5, the same number, with end-of-run spreads 0.0001–0.016 in both.
+This run satisfies trap 1b by construction, unlike the frozen-geometry arms.
+**Concludes — the null is rejected and the OBJECTIVE agrees.** Position **−57.2 ± 0.3 µm on 3/3
+seeds** (165→108, 165→108, 176→119; −34.7%), and −42.7% against the null; loss (PPP NLL, the
+quantity actually minimised) **−667 ± 92 = −8.7%**; dE/dx MAE −0.0022 ± 0.0002. A better optimum,
+not a metric that happens to look better. G20K also reaches BT2's FINAL position at iteration
+**7 422** — 26% fewer iterations.
 **Concludes — geometry was optimiser-limited, as fig 56 said (α\* = 0.988).** The shape confirms it:
 G20K is WORSE early (386 vs 351 µm at 3 000 — hotter is noisier), crosses near 6 500, then keeps
-descending exactly where BT2 flattens.
-**Read the caption — calibration is NOT readable yet.** Transverse diffusion 0.93% vs 2.62% is the
-degeneracy matrix's prediction coming true (it is the parameter most coupled to geometry), but A_b
-(0.35 vs 0.20) and lifetime (1.90 vs 1.26) currently read worse and are both mid-transient.
-**Cost** — 26.4 h vs 15 h: ~75% more wall clock for 34% better position, or the same position in
-26% fewer iterations.
+descending where BT2 flattens. It is converged at the end (−0.4/+0.1/−1.0% over the last 2 000);
+BT2 was still drifting when it stopped.
+**Concludes — calibration: ONE improvement, four nulls.** Transverse diffusion 2.610 → **0.605%**,
+paired −1.42 ± 0.40 on 3/3 seeds — the parameter fig 58 calls most geometry-coupled, so this is
+predicted, not surprising (t = 3.6 on 2 dof, p ≈ 0.07: confirm at n = 6). Long. diffusion
+(−1.23 ± 4.02), E field (−0.000 ± 0.012), A_b (+0.03 ± 0.09) and lifetime (+0.72 ± 0.89) are all
+consistent with zero.
+**Read the caption — do NOT read the ratio of medians.** A_b reads "+73%" and lifetime "+88%" as
+median ratios and both are nulls on the paired difference; with n = 3 the median is essentially the
+middle sample. Lifetime is worse on 2 of 3 seeds though — not established, but the sign is
+consistently unhelpful and is the one place more geometry iterations might cost something.
+**Cost** — 26.4 h vs 13.4 h: ~2× wall clock for 34% better position, or the SAME position in 26%
+fewer iterations.
 
 
 ![Alternation](plots/noise_report/fig59_alternation.png)

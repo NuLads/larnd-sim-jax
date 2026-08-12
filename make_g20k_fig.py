@@ -1,8 +1,10 @@
-"""Fig 61 — G20K PRELIMINARY: 20 000 iterations with both schedules stretched x2. INCOMPLETE RUN.
+"""Fig 61 — G20K FINAL: 20 000 iterations with both schedules stretched x2. Seeds 0-2, complete.
 
-READ THE STATUS LINE FIRST. These are traces at ~15 000 of 20 000 iterations, seeds 0-2 only. The
-calibration learning rate is still live, so every calibration number here can still move. Nothing
-below is a result; it is a progress read the user asked for explicitly.
+BOTH ARMS ARE CONVERGED AND READ AT THE SAME SCHEDULE PHASE, which is what makes the endpoints
+comparable at all -- and is exactly the discipline trap 1b (fig 62) exists to enforce. The x2
+stretch is in the exponent, so G20K's terminal LR after 200 epochs is 0.9539^200 = 7.95e-5 against
+BT2's 0.91^100 = 8.02e-5: the same number. End-of-run parameter spreads are 0.0001-0.016 in both.
+Neither arm is sampled mid-oscillation.
 
 THE COMPARISON IS NOT ITERATION-MATCHED, AND THAT IS THE POINT. G20K stretches both schedules by
 exactly a factor two in the exponent:  chain_decay 0.9997 -> 0.99985 = 0.9997^0.5,  calib decay
@@ -19,6 +21,12 @@ geometry as optimiser-limited (alpha* = 0.988), not schedule-limited.
 
 Calibration parameters are % error against each seed's OWN target (--seed draws the target); the
 targets were verified identical seed-for-seed between the two arms before differencing.
+
+READ THE PAIRED DIFFERENCES, NOT THE RATIO OF MEDIANS. With n = 3 the median is nearly the middle
+sample, and ratios of medians manufacture headline numbers the per-seed data does not support:
+A_b reads "+73%" and lifetime "+88%" as median ratios while their paired differences are
++0.027 +- 0.085 and +0.718 +- 0.888 -- both consistent with zero. Panel titles quote the paired
+difference for that reason. This is the same signed-mean/median trap section 7 catalogues.
 """
 import glob, os, pickle, re, io, contextlib
 import numpy as np
@@ -69,14 +77,15 @@ D = {t: {s: load(t, s) for s in SEEDS} for t in ('G20K', 'BT2')}
 NG = min(D['G20K'][s]['_n'] for s in SEEDS)
 print(f'G20K at {[D["G20K"][s]["_n"] for s in SEEDS]} of 20000; common {NG}')
 
-PANELS = [('Ab', PL['Ab'], '% error', None), ('eField', PL['eField'], '% error', None),
-          ('tran_diff', PL['tran_diff'], '% error', None),
-          ('long_diff', PL['long_diff'], '% error', None),
-          ('lifetime', PL['lifetime'], '% error', None),
+PANELS = [('Ab', PL['Ab'] + '   (paired +0.03 ± 0.09 → null)', '% error', None),
+          ('eField', PL['eField'] + '   (paired −0.000 ± 0.012 → null)', '% error', None),
+          ('tran_diff', PL['tran_diff'] + '  ← |err| −1.42 ± 0.40, 3/3', '% error', None),
+          ('long_diff', PL['long_diff'] + '   (paired −1.23 ± 4.02 → null)', '% error', None),
+          ('lifetime', PL['lifetime'] + '  (paired +0.72 ± 0.89 = not established)', '% error', None),
           ('mae', 'per-segment dE/dx MAE vs TRUTH', 'MAE', None),
           ('meandedx', 'length-weighted ⟨dE/dx⟩', 'MeV/cm', TRUE_MEAN),
-          ('pos', 'position residual  ← THE POINT OF THE RUN', 'µm', None),
-          ('loss', 'loss (PPP negative log-likelihood)', 'NLL', None)]
+          ('pos', 'position residual  ← −57.2 ± 0.3 µm, 3/3 seeds', 'µm', None),
+          ('loss', 'loss (PPP NLL)  ← −667 ± 92, the objective itself', 'NLL', None)]
 
 fig, axes = plt.subplots(3, 3, figsize=(16.6, 11.4), sharex=True)
 for k, (key, title, ylab, hline) in enumerate(PANELS):
@@ -101,9 +110,9 @@ for k, (key, title, ylab, hline) in enumerate(PANELS):
         a.annotate(f' TRUE {hline:.4f}', (0, hline), fontsize=7.4, color=C['red'], va='bottom')
     elif ylab == '% error':
         a.axhline(0, color=C['red'], lw=1.4, ls='--')
-    a.axvline(NG, color=C['grey'], lw=1.4, ls=':')
+    a.axvline(10000, color=C['grey'], lw=1.2, ls=':')
     if k == 0:
-        a.annotate(' G20K is\n here now', (NG, 0), textcoords='offset points', xytext=(3, 22),
+        a.annotate(' BT2 ends\n here', (10000, 0), textcoords='offset points', xytext=(3, 22),
                    fontsize=7.0, color=C['grey'])
     a.set_xlim(0, 20000)
     a.set_title(title, fontsize=9.5)
@@ -120,15 +129,16 @@ for k, (key, title, ylab, hline) in enumerate(PANELS):
         a.set_xlabel('iteration')
 axes.ravel()[0].legend(fontsize=7.4, frameon=True, framealpha=.92, loc='upper right')
 
-fig.suptitle('Fig 61 — G20K, PRELIMINARY at ~15 000 of 20 000 iterations, seeds 0–2, seed-matched '
-             'against BT2. The calibration LR is still live:\nnothing here is final. Read the '
-             'position panel against the DASHED curve, not against BT2 — because G20K stretches '
-             'both schedules ×2,\nG20K at iteration 2N carries the learning rates BT2 had at N, so '
-             'the dashed curve is the null "extra iterations buy nothing".', fontsize=10.1)
+fig.suptitle('Fig 61 — G20K FINAL, 20 000 iterations, seeds 0–2, seed-matched against BT2 and read '
+             'at the SAME terminal LR (7.95e−5 vs 8.02e−5).\nPosition −57.2 ± 0.3 µm on 3/3 seeds '
+             '(−34.7%) and the loss −8.7%: the extra iterations buy a genuinely better optimum, not '
+             'a better-looking metric.\nRead the position panel against the DASHED null — BT2 '
+             'replotted on a doubled axis — because the ×2 schedule stretch means equal iteration '
+             'is NOT equal LR.', fontsize=10.1)
 fig.tight_layout(rect=[0, 0, 1, .925])
 os.makedirs(OUT, exist_ok=True)
-fig.savefig(f'{OUT}/fig61_g20k_prelim.png'); plt.close(fig)
-print('wrote', f'{OUT}/fig61_g20k_prelim.png')
+fig.savefig(f'{OUT}/fig61_g20k.png'); plt.close(fig)
+print('wrote', f'{OUT}/fig61_g20k.png')
 
 # ---- the numbers ----
 print(f'\nposition (median over seeds {SEEDS}, 200-it rolling median)')
