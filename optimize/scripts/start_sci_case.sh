@@ -252,5 +252,12 @@ python3 -m optimize.example_run \
     --test_name ${TEST_NAME} \
     --save_freq 200
 "
+# PROPAGATE the container's exit status. Without this the batch script's own trailing commands
+# decide the job's status, so a container that died -- including the GPU preflight deliberately
+# exiting 1 -- was still recorded by SLURM as COMPLETED. That is exactly how TS1 seed 1 vanished on
+# 2026-08-12 on sdfampere038 (the same node as the 2026-08-08 incident): the preflight fired and
+# printed FATAL, and sacct still showed COMPLETED 0:0.
+_RC=$?
 
-echo "=== Job finished: $(date) ==="
+echo "=== Job finished: $(date) (exit ${_RC}) ==="
+exit ${_RC}
