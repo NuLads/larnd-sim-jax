@@ -124,8 +124,14 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   sit within 0.1% of `BT2` whatever else is fitted.
 - **A LOWER LOSS CAN MEAN A WORSE LIFETIME (§6w, block matrix).** A plain re-anneal finds a loss
   **1.21% lower** than `BT2` while moving lifetime **+3.6 points further from truth**, on both seeds
-  independently. For lifetime the objective's optimum is displaced from truth, so **any procedure
-  that selects on the loss selects against lifetime accuracy.**
+  independently, so **any procedure that selects on the loss selects against lifetime accuracy.**
+- **AND THAT IS THE OBJECTIVE'S FAULT, NOT THE OPTIMISER'S (§6w, `LSCAN`).** Scanning the objective
+  at three different converged points shows the fit sitting on its own minimum every time: the
+  optimiser's share of the remaining error is 0.14–0.65 points against the objective's 0.36–4.15.
+  The objective's minimum is within 0.5% of truth for A_b and E field — which is why those two are
+  recovered well — and **2–7% away for the diffusions and lifetime**. Worse, it MOVES with the
+  nuisance state: re-annealing alone swings the lifetime minimum by **6 points**. **Lifetime is
+  objective-limited at ~2%, and no schedule, freeze or iteration count can fix it.**
 - **BLOCK ALTERNATION IS UNTESTED — the earlier positive result was RETRACTED (§6w).** A
   frozen-geometry second pass appeared to beat `BT2` on A_b (×2.3, 0.340 → 0.147). The warm-start
   control killed it: the frozen-geometry arms run only 3 000 iterations, so their calibration LR at
@@ -3051,6 +3057,67 @@ untested; no arm here does it. The other clear follow-up is `BMC` at n = 6, sinc
 a screen**: it is sized for the large effects it found (−3.25% loss, −50 µm position) and cannot
 resolve the small ones. Per-seed values are quoted throughout for that reason.
 
+### Is the lifetime error the optimiser's or the objective's? (`LSCAN`)
+
+![Objective bias](plots/noise_report/fig66_objective_bias.png)
+
+Every arm that improved the loss made lifetime worse. Two readings were possible — the optimiser
+walks to a point the objective does not actually prefer, or **the objective's own minimum is not at
+truth** — and they demand completely different work, so they had to be separated before anything
+else was decided.
+
+**The test is evaluation only.** Re-run exactly the fig 58 calibration scan — each parameter over
+±20% of its fitted value — at `BM0`'s and `G20K`'s converged checkpoints instead of `BT2`'s, and
+compare where the fit put each parameter against where the objective's minimum sits. 5 scans × 100
+batches × 145 points, ~3 h each, no fitting.
+
+**The answer is unambiguous: the fit sits on the objective's own minimum, everywhere.** In panel (a)
+every point lies on the diagonal rather than on the green "objective wants truth" line.
+
+| | A_b | E field | tran. diff. | long. diff. | lifetime |
+|---|---|---|---|---|---|
+| \|fit − objective optimum\| — **the optimiser's share** | 0.14 | 0.17 | 0.26 | 1.54 | 0.65 |
+| \|objective optimum − truth\| — **the objective's share** | 0.36 | 0.15 | 1.37 | 4.15 | **2.82** |
+
+**The optimiser is doing its job.** It walks to the bottom of the objective it is given, and the
+bottom is not at truth. For lifetime the objective's share is **4.3×** the optimiser's; for
+transverse diffusion 5.3×; for longitudinal diffusion 2.7×. *(E field is the exception in the table
+and should not be read as one: both its entries sit at ~0.15%, which is the parabola fit's own
+resolution on a grid spaced 5% apart. Its fit is 0.02% from truth — finer than this scan can
+resolve — so it simply has no error left to apportion.)*
+
+**The bias is parameter-specific, and it explains the campaign's whole pattern of results.** For A_b
+and E field the objective's minimum sits within 0.5% of truth — which is *why* those are the two
+parameters we recover well, and why no amount of degradation has ever moved them. For the diffusions
+and lifetime it is displaced by 2–7%, which is the floor everything else has been hitting.
+
+> **And the displacement is not a fixed offset — it moves with the nuisance state.** `BM0`'s
+> objective wants lifetime at **+4.94%** (+4.72 and +5.16 on the two seeds, tight), while `BT2`'s
+> wants −1.09% and `G20K`'s −0.23%. **A 6-point swing in the location of the minimum, caused by
+> nothing but re-annealing geometry and dE/dx.** So `BM0`'s bad lifetime was never an optimiser
+> failure: the objective moved its minimum there and the optimiser followed. At `BT2` and `G20K` the
+> optimum straddles truth by ±2–3% seed to seed, so the honest reading there is a seed-dependent
+> wander of a couple of percent rather than a systematic offset in one direction.
+
+**A hypothesis this kills.** The obvious mechanism was a lifetime ↔ longitudinal-diffusion trade —
+both act along the drift axis, and `BM0` improved longitudinal diffusion by 5.7 points while
+degrading lifetime by 3.6. Across all seven arm-seeds the correlation between their two optima is
+**+0.03**. There is no such trade, and whatever moves the lifetime minimum, it is not longitudinal
+diffusion.
+
+**The free second answer.** With geometry now much closer to truth, the geometry→truth *shift* of
+each optimum does shrink — transverse diffusion by 4.4× from `BT2` to `G20K`, longitudinal diffusion
+by 2.4×, A_b by 1.6×. **Lifetime's does not**: it is flat after `BT2`. So geometry accuracy drives
+the diffusion couplings but is not what drives lifetime's. (These minima run off the ±20% grid, so
+the values are extrapolations — read the ordering, not the numbers.)
+
+**What this settles.** Lifetime accuracy is **objective-limited, not optimiser-limited**, at roughly
+the 2% level, and no schedule, freeze, block ordering or iteration count will fix it — the block
+matrix and `G20K` were both, in hindsight, optimising a target that was in the wrong place. The next
+question is a forward-model one: what in the simulation or the likelihood puts the lifetime minimum
+2–5% away from truth, and why does re-annealing the nuisances move it. That is a different kind of
+work from anything this campaign has done so far.
+
 ### Is the third spline mode worth fitting? (`K2`)
 
 ![K2](plots/noise_report/fig60_k2_basis.png)
@@ -3182,6 +3249,8 @@ study 2 established.*
 | `ALT` (screen) | frozen-geometry re-fit — does alternation help? | **COMPLETE — §6w** |
 | `ALTW` (2 seeds) | the same, calibration WARM-STARTED from BT2 — one basin or two? | **COMPLETE — §6w; it RETRACTS the `ALT` result** |
 | **Block matrix** `BM0`/`BMC`/`BMD`/`BMG`/`BMCD`/`BMCG`/`BMDG` (7 arms × 2 seeds) | every block warm-started from `BT2`, then subsets FROZEN; schedules compressed to `BT2`'s terminal LR | **COMPLETE — §6w**; freezing calibration wins (loss −3.25%) |
+| `LSCAN` (5 scans, evaluation) | is the lifetime error the optimiser's or the objective's? | **COMPLETE — §6w**; it is the OBJECTIVE's |
+| `TS1` / `TS2` (two-stage recipe, 3 seeds) | freeze calibration → descend nuisances → release calibration | `TS1` **RUNNING**; `TS2` follows |
 | `K2` (screen) | the 2-mode spline basis | **COMPLETE — §6w** |
 | **Study 3** `S3T*` / `S3W*` (7 usable arms, ceiling) | dE/dx mean-constraint TARGET scan crossed with weight | **COMPLETE — §6u** |
 | `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **COMPLETE — §6v** |
