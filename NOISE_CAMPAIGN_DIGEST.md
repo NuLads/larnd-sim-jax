@@ -1035,6 +1035,34 @@ largest loss gains (−149, −137, −72 NLL) are the three worst lifetime degr
 worse physics, in a controlled pair.
 
 
+![TS1](plots/noise_report/fig67_ts1.png)
+
+**Tests** — stage 1 of the two-stage recipe: calibration FROZEN at BT2's values, geometry and dE/dx
+warm-started from BT2 and re-annealed for 10 000 iterations. BMC run to the floor it was still
+descending toward at 3 000. 3 seeds.
+**Verified** — calibration movement exactly 0 on all 5 params and 3 seeds (init = BT2's tail median
+to 0.0000%); dE/dx moved 0.165–0.179 log units, geometry moved on 98.7–100% of tracks.
+**Concludes — freezing the block that does not need to move BEATS doubling the iteration count.**
+
+| arm | what | h | position | loss | dE/dx MAE |
+|---|---|---|---|---|---|
+| BT2 | all fitted, 10k | 13.4 | 165.4 | 9 009 | 0.05455 |
+| BMC | calib frozen, 3k | 4.3 | 115.7 | 8 812 | 0.05333 |
+| **TS1** | **calib frozen, 10k** | **13.5** | **105.0** | **8 072** | **0.05206** |
+| G20K | all fitted, 20k | 26.4 | 108.0 | 8 229 | 0.05204 |
+
+Against G20K: objective better on **3/3 seeds (−88 ± 34 NLL)**, position and dE/dx a tie, at **51%
+of the compute**. Since the objective PREFERS truth (fig 66), lower loss = closer to the joint
+minimum, so this is real.
+**Concludes — and it converges EARLY.** Past G20K's final position by iteration **3 244** and its
+final loss by **3 926**; within 2% of its own endpoint by ~3 500. Stage 1 could run at 4 000
+iterations (~5.4 h), taking the full two-stage recipe from ~27 h to **~19 h** — cheaper than BT2.
+**Read the caption — TS1's CALIBRATION IS BT2's, frozen.** Tran. diff. 2.64% vs G20K's 0.61%. A
+better FIT, not a better CALIBRATION. Consistent with "blocks must move together": TS1 moves only
+two of three, so it cannot be the endpoint. **Stage 2 (TS2) has NOT been run** — one command:
+`STAGE=2 bash optimize/scripts/run_twostage.sh`.
+
+
 ![Objective bias](plots/noise_report/fig66_objective_bias.png)
 
 **Tests** — is the calibration error the OPTIMISER's or the OBJECTIVE's? Evaluation only, at BT2's,

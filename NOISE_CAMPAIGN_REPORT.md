@@ -3058,6 +3058,47 @@ untested; no arm here does it. The other clear follow-up is `BMC` at n = 6, sinc
 a screen**: it is sized for the large effects it found (−3.25% loss, −50 µm position) and cannot
 resolve the small ones. Per-seed values are quoted throughout for that reason.
 
+### Stage 1 of the two-stage recipe (`TS1`)
+
+![TS1](plots/noise_report/fig67_ts1.png)
+
+`TS1` freezes calibration at `BT2`'s converged values and re-anneals geometry and dE/dx — both
+warm-started from `BT2` — for 10 000 iterations. It is `BMC`, the block-matrix winner, run to the
+floor `BMC` was still descending toward at 3 000. 3 seeds.
+
+**Verified before reading:** calibration peak-to-peak movement exactly **0** on all five parameters
+and all three seeds, with iteration-0 values matching `BT2`'s tail median to 0.0000%; dE/dx moved
+0.165–0.179 in log units and geometry moved on 98.7–100% of tracks.
+
+**Freezing the block that does not need to move beats doubling the iteration count.**
+
+| arm | what | wall clock | position | loss | dE/dx MAE |
+|---|---|---|---|---|---|
+| `BT2` | all fitted, 10 k | 13.4 h | 165.4 µm | 9 009 | 0.05455 |
+| `BMC` | calib frozen, 3 k | 4.3 h | 115.7 µm | 8 812 | 0.05333 |
+| **`TS1`** | **calib frozen, 10 k** | **13.5 h** | **105.0 µm** | **8 072** | **0.05206** |
+| `G20K` | all fitted, 20 k | 26.4 h | 108.0 µm | 8 229 | 0.05204 |
+
+Against `G20K` — the previous best — `TS1` wins **the objective on 3/3 seeds (−88 ± 34 NLL)** and
+ties on position (−1.3 ± 1.7) and dE/dx, at **51% of the compute**. Since §6w established that the
+objective *prefers* truth, a lower loss means closer to the joint minimum, so this is a real gain
+rather than a reparametrisation artefact.
+
+**And it converges early, which matters for anyone running stage 2.** `TS1` is past `G20K`'s final
+position by iteration **3 244** and past its final loss by **3 926**, and is within 2% of its own
+endpoint by ~3 500. The last 6 000 iterations buy almost nothing: **stage 1 could run at 4 000
+iterations for ~5.4 h**, which would take the full two-stage recipe from ~27 h to about **19 h** —
+cheaper than `BT2` alone was.
+
+> **What `TS1` does NOT do, and the figure says so twice so it cannot be misread.** Its calibration
+> **is** `BT2`'s, by construction. Transverse diffusion is 2.64% where `G20K` reached 0.61%. `TS1`
+> is a better **fit**, not a better **calibration**. Delivering the calibration is stage 2's job, and
+> panel (f) is the target it has to hit. This is also consistent with §6w's "blocks must move
+> together": `TS1` deliberately moves only two of the three, so it cannot be the endpoint.
+
+**Stage 2 (`TS2`) has not been run.** It is one command —
+`STAGE=2 bash optimize/scripts/run_twostage.sh` — and reads `TS1`'s checkpoints automatically.
+
 ### Is the lifetime error the optimiser's or the objective's? (`LSCAN`)
 
 ![Objective bias](plots/noise_report/fig66_objective_bias.png)
@@ -3256,7 +3297,8 @@ study 2 established.*
 | `ALTW` (2 seeds) | the same, calibration WARM-STARTED from BT2 — one basin or two? | **COMPLETE — §6w; it RETRACTS the `ALT` result** |
 | **Block matrix** `BM0`/`BMC`/`BMD`/`BMG`/`BMCD`/`BMCG`/`BMDG` (7 arms × 2 seeds) | every block warm-started from `BT2`, then subsets FROZEN; schedules compressed to `BT2`'s terminal LR | **COMPLETE — §6w**; freezing calibration wins (loss −3.25%) |
 | `LSCAN` (5 scans, evaluation) | is the calibration error the optimiser's or the objective's? | **COMPLETE — §6w**; the objective PREFERS truth → reachability |
-| `TS1` / `TS2` (two-stage recipe, 3 seeds) | freeze calibration → descend nuisances → release calibration | `TS1` **RUNNING**; `TS2` follows |
+| `TS1` (two-stage, stage 1, 3 seeds) | freeze calibration → descend nuisances | **COMPLETE — §6w**; beats `G20K` on loss at 51% of the compute |
+| `TS2` (two-stage, stage 2) | release calibration, fresh anneal from `TS1` | **NOT SUBMITTED** — one command, see §6w |
 | `K2` (screen) | the 2-mode spline basis | **COMPLETE — §6w** |
 | **Study 3** `S3T*` / `S3W*` (7 usable arms, ceiling) | dE/dx mean-constraint TARGET scan crossed with weight | **COMPLETE — §6u** |
 | `BT0` / `BT1` / `BT2` (3 arms × 6 seeds, production) | prior weight 5 → 1/dx, then the refit prior; mean weight 1e5 → 2500 | **COMPLETE — §6v** |
