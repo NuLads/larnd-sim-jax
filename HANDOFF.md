@@ -45,6 +45,12 @@ seeds. The *median* of the same data reads 0.24 / 0.03 / 0.99 / 8.54 / **0.97** 
 larger than most effects we chase, which is why every comparison in the report is **paired** on
 seed. See trap T3.
 
+![TS1 — the current best fit](plots/noise_report/fig67_ts1.png)
+
+*Fig 67 — the efficiency frontier (b) is the panel to look at: `TS1` reaches a lower loss than the
+26 h `G20K` run in 13.5 h. Panel (f) is the caveat — `TS1`'s calibration is `BT2`'s, frozen, so it
+is a better fit and not yet a better calibration.*
+
 **Current best configuration** (this is `BT2`, the production baseline):
 
 ```bash
@@ -67,14 +73,32 @@ information of any other question. Running 20 000 iterations with **both schedul
 the exponent** (`G20K`) gives position **−57 ± 0.3 µm on 3/3 seeds (−34.7%)** and the **loss −8.7%**.
 *(fig 61)*
 
+![G20K — geometry was optimiser-limited](plots/noise_report/fig61_g20k.png)
+
+*Fig 61 — read the position panel against the DASHED curve, not against `BT2`. Because both
+schedules are stretched ×2, `G20K` at iteration 2N has the learning rates `BT2` had at N; the dashed
+line is the null "extra iterations buy nothing". It is rejected by 42.7%.*
+
 **2. Freezing calibration lets the nuisance blocks descend further — and it is cheap.**
 `TS1`: freeze C at `BT2`'s values, warm-start D and G, re-anneal. Beats `G20K` on the objective on
 **3/3 seeds at 51% of the compute** (13.5 h vs 26.4 h), position 105 vs 108 µm. It also converges by
-iteration ~3 500, so stage 1 could run at 4 000 iterations (~5.4 h). *(figs 63, 67)*
+iteration ~3 500, so stage 1 could run at 4 000 iterations (~5.4 h). *(figs 63, 65, 67)*
+
+![The block matrix as a factorial](plots/noise_report/fig65_block_factorial.png)
+
+*Fig 65 — the seven freeze/fit arms are a factorial: for each fitted block the other two form a 2×2,
+so each outcome reduces to two main effects. Freezing calibration is the one large lever and helps
+both nuisance blocks on both seeds (position −9.3 µm, dE/dx MAE −13.9 × 10⁻⁴).*
 
 **3. The objective PREFERS truth — the remaining error is reachability, not bias.**
 With C **and** D **and** G all set to truth, the loss beats the fit on **7/7 arm-seeds by 5.6%**. And
 the gap is closing: 9.4% (`BT2`) → 6.6% (`BM0`) → **2.5%** (`G20K`). *(fig 66)*
+
+![The objective prefers truth](plots/noise_report/fig66_objective_bias.png)
+
+*Fig 66 — panel (a) is the test that settles it: with everything at truth the loss beats the fit on
+7/7. Panel (c) is the mechanism below. **This figure corrects an earlier version of itself** that
+concluded the opposite from a 1-D conditional scan — see trap T2.*
 
 **4. But blocks must move TOGETHER.** Setting one block to truth while the others stay fitted:
 
@@ -96,6 +120,12 @@ to the segmentation actually in use (the `SCIDX*` numbers above) was a large win
 **6. A_b and E field are decoupled from both nuisance blocks** (±0.1% shift when either goes to
 truth), which is exactly why they are the two parameters we recover well. Everything else is
 geometry-coupled. *(fig 58)*
+
+![The degeneracy matrix](plots/noise_report/fig58_degeneracy_matrix.png)
+
+*Fig 58 — which calibration parameter is entangled with which nuisance block, measured by scanning
+the objective (no optimiser involved). `A_b` and `E field` are decoupled from both, at ±0.1%.
+Panel (e) is the statistical-floor comparison behind finding 7.*
 
 **7. Every parameter sits 4–16× from its statistical floor.** We are not statistics-limited
 anywhere. *(fig 58)*
