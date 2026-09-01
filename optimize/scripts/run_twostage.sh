@@ -61,7 +61,12 @@ print(':'.join(out))")
   ACC=${ACCOUNTS[$((k % ${#ACCOUNTS[@]}))]}; k=$((k + 1))
   echo "TS${STAGE} seed ${S} on ${ACC}  (calib frozen=${CFZ})"
   echo "   from ${CK}"
+  # sdfampere038 has twice reported a healthy GPU to the host while JAX saw none inside the
+  # container; the task died in seconds. There is now a preflight AND an exit-status fix in
+  # start_sci_case.sh, so such a task would at least be recorded FAILED -- but avoiding the node
+  # is free. Override with SCIEXCLUDE= to allow it.
   sbatch --account="${ACC}" --job-name="TS${STAGE}" --array="${S}-${S}" --time=30:00:00 \
+    --exclude="${SCIEXCLUDE-sdfampere038}" \
     --export=ALL,${BASE},${REFIT},${SCHED},SCITAG=${TAG},SCIITER=10000,\
 SCIINIT=${INIT},SCICHAININIT=${CK},SCIDEDXINIT=${CK},SCICALIBFREEZE=${CFZ} \
     optimize/scripts/start_sci_case.sh
