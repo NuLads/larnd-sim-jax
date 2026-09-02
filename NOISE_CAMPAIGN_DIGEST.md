@@ -1063,6 +1063,31 @@ two of three, so it cannot be the endpoint. **Stage 2 (TS2) has NOT been run** �
 `STAGE=2 bash optimize/scripts/run_twostage.sh`.
 
 
+![TS2](plots/noise_report/fig68_ts2.png)
+
+**Tests** — stage 2 of the two-stage recipe: everything warm-started from TS1, calibration RELEASED,
+fresh 10 000-iteration anneal. TS1 had the best FIT but its calibration was BT2's, frozen; this was
+meant to convert that into a better CALIBRATION. 3 seeds.
+**Verified** — calibration genuinely moved (ptp 755–1434 physical) from an init matching TS1's to
+0.0000%; dE/dx moved 0.088–0.107; geometry moved on 98.7–100% of tracks.
+**⚠️ PAIRED DIFFERENCES ONLY** — the arms sit within ~3 µm and ~130 NLL, *smaller than the
+seed-to-seed spread*, so the MEAN and MEDIAN of the absolute levels disagree about whether TS1 or
+TS2 has the lower loss. Absolute levels are meaningless at this precision. Trap T3 at its sharpest.
+**Concludes — the release helped PARTLY, and cost something.** vs TS1: transverse diffusion
+**−0.93 (3/3)**; position **+2.7 µm (0/3, worse)**; E field +0.023 (0/3, worse but negligible
+absolutely); loss, A_b, long. diff., lifetime all nulls.
+**Concludes — and it does NOT beat G20K at equal compute** (27.0 h vs 26.4 h). It TRADES: loss
+**−131 (3/3, TS2 wins)** against transverse diffusion **+0.49 (0/3, G20K wins)**; everything else a
+tie. Lower loss, worse physics — the same pattern as figs 63/65, explained by fig 66: the objective
+prefers truth only when all three blocks move TOGETHER, and stage 2 moves calibration against
+nuisances no longer free to follow.
+**Against BT2 it IS a clear win** — loss −799, position −55.7 µm, dE/dx −0.0024, tran. diff. −0.93,
+all 3/3. The recipe is not a failure; it is just not better than cheaper alternatives at the thing
+it was built to fix.
+**PRACTICAL — TS1 alone (13.5 h) remains the best value in the campaign.** Stage 2 doubles the cost
+to buy one parameter and give back position. **Treat stage 2 as optional.**
+
+
 ![Objective bias](plots/noise_report/fig66_objective_bias.png)
 
 **Tests** — is the calibration error the OPTIMISER's or the OBJECTIVE's? Evaluation only, at BT2's,

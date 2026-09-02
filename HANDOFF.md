@@ -3,7 +3,7 @@
 **Repo:** `larnd-sim-jax`, branch `dedx_soft_barrier` (many commits ahead of `origin`, **not pushed**)
 **Full detail:** `NOISE_CAMPAIGN_REPORT.md` (long) and `NOISE_CAMPAIGN_DIGEST.md` (figure-by-figure,
 67 figures). Both are also published to the Obsidian vault under `06_Analyses/`.
-**As of:** 20 August 2026. Nothing is running; the queue is empty.
+**As of:** 1 September 2026. Nothing is running; the queue is empty. `TS2` completed 1 Sep — see finding 3 and §5.
 
 ---
 
@@ -28,7 +28,7 @@ the target parameters and the data, so **always compare seed-matched and paired*
 
 ## 2. Where we are — the numbers
 
-Best **calibration** (`BT2`, n = 6 seeds) and best **fit** (`TS1`, n = 3):
+Best **calibration** is still `BT2` (n = 6 seeds); best **fit** is `TS1` (n = 3). `TS2` improves transverse diffusion to 1.20% but no other parameter — see finding 2b.
 
 | parameter | `BT2` mean \|error\| (n = 6) | per-seed range | comment |
 |---|---|---|---|
@@ -81,8 +81,23 @@ line is the null "extra iterations buy nothing". It is rejected by 42.7%.*
 
 **2. Freezing calibration lets the nuisance blocks descend further — and it is cheap.**
 `TS1`: freeze C at `BT2`'s values, warm-start D and G, re-anneal. Beats `G20K` on the objective on
-**3/3 seeds at 51% of the compute** (13.5 h vs 26.4 h), position 105 vs 108 µm. It also converges by
-iteration ~3 500, so stage 1 could run at 4 000 iterations (~5.4 h). *(figs 63, 65, 67)*
+**3/3 seeds at 51% of the compute** (13.5 h vs 26.4 h). It also converges by iteration ~3 500, so
+stage 1 could run at 4 000 iterations (~5.4 h). **`TS1` is the best value in the campaign.**
+*(figs 63, 65, 67)*
+
+**2b. But releasing calibration afterwards (`TS2`) does NOT settle the recipe — it trades.**
+Stage 2 buys **transverse diffusion (−0.93, 3/3)** and gives back **position (+2.7 µm, 0/3)**;
+everything else is a null. Against `G20K` at equal compute (27.0 h vs 26.4 h) it **wins the
+objective (−131 NLL, 3/3)** and **loses transverse diffusion (+0.49, 0/3)**. Neither dominates.
+Against `BT2` it *is* a clear win (loss −799, position −55.7 µm, tran. diff. −0.93, all 3/3), so the
+recipe is not a failure — it is just not better than the cheaper alternatives at what it was built
+to fix. **Treat stage 2 as optional.** *(fig 68)*
+
+![TS2 — the calibration release](plots/noise_report/fig68_ts2.png)
+
+*Fig 68 — all paired per-seed differences, because the arms sit within ~3 µm and ~130 NLL of each
+other, which is smaller than the seed spread: the mean and median of the absolute levels disagree
+about whether `TS1` or `TS2` has the lower loss. Grey = seeds straddle zero = null.*
 
 ![The block matrix as a factorial](plots/noise_report/fig65_block_factorial.png)
 
@@ -149,25 +164,26 @@ optimum runs off a ±20% scan grid whenever geometry goes to truth.
 
 ## 5. What to run next — concrete
 
-**Priority 1 — `TS2`, stage 2 of the two-stage recipe. One command, ~13 h × 3 seeds.**
-```bash
-STAGE=2 bash optimize/scripts/run_twostage.sh
-```
-It reads `TS1`'s checkpoints automatically. Stage 1 gave the best *fit* we have but its calibration
-is still `BT2`'s (frozen). Stage 2 releases calibration with a fresh anneal against that much better
-nuisance background. **This is the natural production candidate and the most valuable single run
-outstanding.** The target it must hit is transverse diffusion 0.61% (what `G20K` achieved); if it
-gets there *and* keeps `TS1`'s position and loss, the recipe is settled.
+*(`TS2` was Priority 1 and has now been run — it did not settle the recipe. See finding 2b.)*
 
-**Priority 2 — confirm `TS1`/`TS2` at n = 6.** Everything above at n = 2–3 is a screen. ~9 jobs.
+**Priority 1 — the calibration profile (4(a)). Needs new code; this is now the top item.**
+Every scan we have fixes the other four calibration parameters while one moves, so we cannot yet
+say whether the residual lifetime displacement is real. Build a scan that **profiles** over the full
+calibration block and re-run it at `BT2`'s, `TS1`'s and `G20K`'s checkpoints. It is evaluation-only
+and cheap to run once written (~3 h/point set). **This is the question that decides whether lifetime
+has a residual bias, and every optimisation avenue is now exhausted, so it is what is left.**
 
-**Priority 3 — the calibration profile (4(a)).** Needs new code: a scan that profiles over the other
-four calibration parameters rather than fixing them. Non-trivial, but it is the question that
-matters most scientifically.
+**Priority 2 — confirm `TS1` at n = 6 and adopt it.** ~6 jobs × 13.5 h. `TS1` is the best value we
+have (best fit, half the compute of `G20K`) and everything is at n = 2–3, which only resolves large
+effects. If it holds, `TS1` — not the full two-stage — becomes the production recipe. Cheaper still:
+`TS1` converges by ~3 500 iterations, so test a 4 000-iteration variant (~5.4 h) at the same time.
 
-**Do not** spend more effort on longer runs or fancier schedules for their own sake — items 1–3
-above show the optimiser is close to done; the remaining error is in reachability and in the dE/dx
-prior.
+**Priority 3 — longitudinal diffusion (4(b)),** at 7.4% the worst parameter, untouched by anything
+we have tried.
+
+**Do not** spend more effort on longer runs, fancier schedules or new block orderings. Between
+`G20K`, the block matrix and the two stages, that avenue is done: the arms now differ by less than
+the seed spread, and every further gain in the loss has come with a loss somewhere in the physics.
 
 ---
 
