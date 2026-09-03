@@ -32,6 +32,8 @@ SCITPDEDXA=${SCITPDEDXA:-}
 SCITPGEOMA=${SCITPGEOMA:-}
 SCITPJOINTA=${SCITPJOINTA:-}
 SCITPCALIB=${SCITPCALIB:-}
+# The full fit->truth line: all three blocks moved together (see _eval_truth_point).
+SCITPFULL=${SCITPFULL:-}
 # Spline mode-count floor (see _spline_K): every track is clipped up to it, so this and not
 # chain_spline_knot_cm is what sets the geometry basis resolution.
 SCIKMIN=${SCIKMIN:-3}
@@ -49,6 +51,8 @@ SCICHFREEZE=${SCICHFREEZE:-0}
 #                   partial freeze when the run length changes -- the trap DEDX_FREEZE_ITER hit.
 SCIDEDXINIT=${SCIDEDXINIT:-}
 SCICALIBFREEZE=${SCICALIBFREEZE:-0}
+# Profile likelihood: hold these calibration parameters fixed ('+' separated) while the rest fit.
+SCICALIBPIN=${SCICALIBPIN:-}
 # --set_init_params takes SPACE-separated "<param> <val> ..." pairs, which sbatch --export cannot
 # carry. Accept a colon-separated form and expand it here; a value that already uses spaces passes
 # through untouched, so this is additive.
@@ -154,6 +158,7 @@ _KNOBTAG=""
 [ -n "${SCICHAININIT}" ]        && _KNOBTAG="${_KNOBTAG}_2pass"
 [ -n "${SCIDEDXINIT}" ]         && _KNOBTAG="${_KNOBTAG}_dxinit"
 [ "${SCICALIBFREEZE}" = "1" ]   && _KNOBTAG="${_KNOBTAG}_cfz"
+[ -n "${SCICALIBPIN}" ]         && _KNOBTAG="${_KNOBTAG}_pin${SCICALIBPIN}"
 LABEL=sci_${SCIMODE}_b${MAX_NBATCH}_len${MAX_BATCH_LEN}${_KNOBTAG}_seed${SEED}
 
 mkdir -p /sdf/group/neutrino/pgranger/larnd-sim-jax/logs/sci_case
@@ -177,11 +182,13 @@ export LARND_TP_DEDX_ALPHA=${SCITPDEDXA}
 export LARND_TP_GEOM_ALPHA=${SCITPGEOMA}
 export LARND_TP_JOINT_ALPHA=${SCITPJOINTA}
 export LARND_TP_CALIB_SCAN=${SCITPCALIB}
+export LARND_TP_FULL_ALPHA=${SCITPFULL}
 export LARND_SPLINE_KMIN=${SCIKMIN:-3}
 export LARND_CHAIN_INIT_FROM=${SCICHAININIT}
 export LARND_CHAIN_FREEZE_ITER=${SCICHFREEZE:-0}
 export LARND_DEDX_INIT_FROM=${SCIDEDXINIT}
 export LARND_CALIB_START_ITER=${CALIB_START_ITER}
+export LARND_CALIB_PIN=${SCICALIBPIN:-}
 echo \"[BLOCKS] geom_init='${SCICHAININIT}' geom_freeze=${SCICHFREEZE:-0} dedx_init='${SCIDEDXINIT}' dedx_freeze=${DEDX_FREEZE_ITER} calib_start_iter=${CALIB_START_ITER} ITERATIONS=${ITERATIONS}\"
 export LARND_CHAIN_FRAME=${LARND_CHAIN_FRAME:-drift}
 export LARND_CHAIN_DRIFT_W=${LARND_CHAIN_DRIFT_W:-0}

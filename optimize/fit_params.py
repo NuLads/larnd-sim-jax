@@ -971,6 +971,18 @@ class ParamFitter:
         # phase 1: with dEdx off the sim uses the input-file dEdx, and free calibration would
         # absorb that per-segment mismatch via lifetime/diffusion (wrong basin, deterministic).
         self._calib_start_iter = int(os.environ.get('LARND_CALIB_START_ITER', '0'))
+        # PROFILE LIKELIHOOD support: hold a SUBSET of the calibration parameters fixed while the
+        # rest (and both nuisance blocks) are optimised freely. Set with
+        #   LARND_CALIB_PIN="lifetime"        (or "lifetime+Ab", '+' separated)
+        # combined with --set_init_params to place the pinned parameter at the scan value.
+        #
+        # Pinning here rather than via --set_params / the param-list YAML is deliberate: those
+        # routes rewrite ref_params, which is also what the TARGET is built from, so a scan done
+        # that way would move the truth it is being measured against and be silently meaningless.
+        # Zeroing the update leaves the parameter exactly where --set_init_params put it and
+        # touches nothing else.
+        _pin = os.environ.get('LARND_CALIB_PIN', '').strip()
+        self._calib_pinned = [x for x in _pin.replace(',', '+').split('+') if x.strip()] if _pin else []
         self._chain_update_freq = max(1, int(chain_update_freq))
         # Exponential decay of the chain-position learning rate. The chain optimizer
         # (optax.adam) is otherwise fixed-LR, so positions never settle and sustain a
@@ -2676,7 +2688,14 @@ class GradientDescentFitter(ParamFitter):
 
         # Update the optimizer state and get the updates for norm_params
         updates, self.opt_state = self.optimizer.update(relevant_grads, self.opt_state)
-        
+
+        # PROFILE: zero the update for any pinned parameter. Done AFTER optimizer.update so the
+        # other parameters' Adam moments and the shared schedule counter advance exactly as they
+        # would in an unpinned run -- the pinned parameter is held, not removed from the problem.
+        if self._calib_pinned:
+            updates = {k: (jnp.zeros_like(v) if k in self._calib_pinned else v)
+                       for k, v in updates.items()}
+
         # Apply the updates directly to the unconstrained norm_params
         self.apply_updates('norm_params', updates)
 
@@ -2924,6 +2943,41 @@ class GradientDescentFitter(ParamFitter):
                 for _da in _j:
                     POINTS.append((f'J{_ga:g}_{_da:g}', calib_fit,
                                    jnp.asarray((_lf + _da * (_lt - _lf)).astype(np.float32)), _gg))
+
+        # ── THE FULL fit -> truth LINE (LARND_TP_FULL_ALPHA) ─────────────────────────────────
+        # All THREE blocks moved together along the straight line joining the fit to truth:
+        #     X(alpha) = X_fit + alpha * (X_truth - X_fit)   for calibration, dEdx AND geometry,
+        # each in the coordinate it is actually fitted in (physical for calibration, LOG for dEdx,
+        # spline coefficients for geometry). alpha=0 is P0_fit and alpha=1 is P1_truth exactly, so
+        # those two are reproduced by construction and act as a built-in consistency check.
+        #
+        # WHY THIS AND NOT THE ONE-BLOCK SCANS. We know the objective PREFERS truth (P1 beats P0 on
+        # 7/7 arm-seeds by 5.6%) and yet the fit does not get there, and we know moving any SINGLE
+        # block to truth alone can make the loss WORSE -- calibration alone +0.18%, dEdx alone
+        # +2.79%. So the one-block axes cannot answer the question that matters: is there a
+        # monotone downhill path from where we are to truth, or is the fit separated from truth by
+        # a barrier or a shelf?
+        #
+        #   monotone decreasing  -> nothing structural blocks us. The last few % is conditioning /
+        #                           step size, and a better-preconditioned optimiser should close
+        #                           it. Worth building.
+        #   barrier or shelf     -> no local method gets there from here, and effort should go to
+        #                           the objective (the dEdx prior is the one proven defect) rather
+        #                           than to the optimiser.
+        #
+        # Sampling alpha slightly beyond 1 is deliberate: if the minimum along the line sits past
+        # truth, the objective's optimum is not at truth even jointly, which would be a much
+        # stronger statement than anything the conditional scans can support.
+        for _a in _parse_alpha('LARND_TP_FULL_ALPHA'):
+            _cal = {k: float(calib_fit[k]) + _a * (float(calib_truth[k]) - float(calib_fit[k]))
+                    for k in calib_fit}
+            if d_truth_j is not None and d_fit_j is not None:
+                _lf = np.asarray(d_fit, dtype=np.float64)
+                _lt = np.asarray(d_truth, dtype=np.float64)
+                _dd = jnp.asarray((_lf + _a * (_lt - _lf)).astype(np.float32))
+            else:
+                _dd = d_fit_j
+            POINTS.append((f'F{_a:g}', _cal, _dd, _lerp_geom(_a)))
 
         # ── CALIBRATION profile at geometry = fit AND geometry = truth ────────────────────────
         # LARND_TP_CALIB_SCAN="long_diff:0.8:0.9:1:1.1:1.2" scans one calibration parameter as a
