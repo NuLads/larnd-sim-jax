@@ -1088,6 +1088,29 @@ it was built to fix.
 to buy one parameter and give back position. **Treat stage 2 as optional.**
 
 
+![Full path](plots/noise_report/fig69_fullpath.png)
+
+**Tests** — is there a BARRIER between the fit and truth, or is the path open? Evaluates the loss
+along the joint line X(α) = X_fit + α(X_truth − X_fit) with calibration, dE/dx AND geometry moving
+together. One-block scans cannot answer this: moving any single block to truth alone can make the
+loss worse.
+**Verified** — α=0 reproduces P0_fit and α=1 reproduces P1_truth to 1.6e−7 (float32 round-off), and
+F1 is IDENTICAL across all three arms per seed (1 part in 1e8), as truth must be.
+**Concludes — NO BARRIER.** The path is monotone downhill in every arm and every seed, and the
+minimum sits AT α = 1, not beyond: past truth the loss climbs steeply, exceeding the fit's own value
+by α = 1.2. Along this direction the objective's optimum IS truth — stronger than any conditional
+scan supports.
+**Concludes — the fits stop because they RUN OUT OF STEP SIZE, not because the gradient vanishes.**
+The schedule anneals the LR to ~8e−5 of peak while a gradient toward truth is demonstrably still
+there. With the shape (shallow near the fit, steepening toward truth) this is the signature of an
+ILL-CONDITIONED valley: steepest descent nearly orthogonal to the useful direction.
+**ACTIONABLE — build a preconditioner.** The gap is reachable, and more first-order iterations are
+not the route (G20K plateaued at 2× the iterations). The GGN/Newton machinery from the dE/dx block
+is the obvious start.
+**Secondary** — TS1 closes **86–87%** of BT2's gap to truth vs G20K's 77–79%, at half the compute:
+independent confirmation, on a measure neither was tuned against, that the cheap recipe wins.
+
+
 ![Objective bias](plots/noise_report/fig66_objective_bias.png)
 
 **Tests** — is the calibration error the OPTIMISER's or the OBJECTIVE's? Evaluation only, at BT2's,

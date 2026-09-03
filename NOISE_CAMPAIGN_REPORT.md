@@ -3148,6 +3148,49 @@ simply not better than the cheaper alternatives at what it was designed to fix.
 doubles the cost to buy one parameter and give back position. **Treat the second stage as
 optional.**
 
+### The fit→truth path: no barrier (`FP`)
+
+![Full path](plots/noise_report/fig69_fullpath.png)
+
+The objective prefers truth and the optimiser does not get there. Two very different reasons — a
+**barrier** between the two, or an **open but ill-conditioned** path — and they call for completely
+different work. One-block scans cannot tell them apart, because moving any single block to truth
+alone can make the loss *worse*. The question is only well posed along the **joint** line, with all
+three blocks moving together: `X(α) = X_fit + α(X_truth − X_fit)`.
+
+**Verified by construction:** α = 0 reproduces `P0_fit` and α = 1 reproduces `P1_truth` to 1.6 × 10⁻⁷
+relative — float32 round-off. And `F1` is **identical across all three arms** for a given seed (spread
+1 part in 10⁸), as it must be, since truth does not depend on which fit you started from. That makes
+the truth point a fixed reference per seed.
+
+**The answer is unambiguous: the path is monotone downhill, in every arm and every seed.** There is
+no barrier and no shelf. **And the minimum sits at α = 1, not beyond** — past truth the loss climbs
+steeply, exceeding the value at the fit by α = 1.2 in the converged arms. Along this direction the
+objective's optimum *is* truth, which is a stronger statement than any conditional scan in this
+campaign can support.
+
+| arm | gap to truth | closed of `BT2`'s gap | monotone |
+|---|---|---|---|
+| `BT2` | 9.14 / 9.57% | — | ✓ |
+| **`TS1`** | **1.34 / 1.36%** | **86.5 / 87.0%** | ✓ (one flat step at α = 0.9) |
+| `G20K` | 2.09 / 2.34% | 78.8 / 77.3% | ✓ |
+
+**So why does the fit stop?** Not because it reached a stationary point. The schedules anneal the
+learning rate to ~8 × 10⁻⁵ of peak, so a run ends when it **runs out of step size** — and the
+monotone descent shows a gradient toward truth is still there when it does. Combined with the shape
+(shallow near the fit, steepening toward truth) this is the classic signature of an
+**ill-conditioned valley**: steepest descent is nearly orthogonal to the direction that actually
+reduces the loss, so progress along it is slow even though the path is wide open.
+
+> **The actionable conclusion: build a preconditioner.** The gap is *reachable* — that is now
+> measured, not assumed — and more of the same first-order optimisation is not how to reach it, as
+> `G20K` already showed by plateauing at twice the iterations. The GGN/Newton machinery built for
+> the dE/dx block is the obvious starting point.
+
+**A secondary result worth keeping:** `TS1` closes **86–87%** of the baseline's gap to truth against
+`G20K`'s 77–79%, for half the compute. That is an independent confirmation, on a measure neither was
+tuned against, that the cheap two-block recipe beats the long single-block run.
+
 ### Is the lifetime error the optimiser's or the objective's? (`LSCAN`)
 
 ![Objective bias](plots/noise_report/fig66_objective_bias.png)
