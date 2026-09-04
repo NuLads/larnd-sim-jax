@@ -1111,6 +1111,30 @@ is the obvious start.
 independent confirmation, on a measure neither was tuned against, that the cheap recipe wins.
 
 
+![Profile](plots/noise_report/fig70_profile.png)
+
+**Tests** — a genuine PROFILE over the calibration block: pin lifetime at 7 multipliers and
+re-optimise everything else (the other 4 calibration params AND both nuisance blocks) from TS1.
+The pin was validated first and held at every point (drift 8e−9 to 1.4e−7 vs free params at 1e−3).
+**Concludes — IT DOES NOT WORK, and the noise budget says why.** The curve is jagged, not convex:
+minimum at −5.3% while the far end of the grid is nearly as low. In nats per batch:
+expected signal across the WHOLE grid **7.5** (an upper bound — it is the CONDITIONAL curvature and
+profiling only flattens it); error bar on one point **10.5**; scatter between the 7 re-fits **41.4**.
+The signal is smaller than the noise on a single point.
+**Concludes — and it cannot be averaged away.** A 1σ interval needs Δ = 0.5 summed = 0.005
+nats/batch against 10.5 achieved: **2 105× too noisy**, i.e. ~4 million times more sampling. Wrong
+instrument, not insufficient resolution.
+**Why** — each point is an independent stochastic re-optimisation of ~9 000 nuisance parameters, and
+where it LANDS varies more in loss than the lifetime dependence. The noise is in the optimiser's
+landing point, not in the data (every point already averages over full epochs).
+**THE REDIRECTION** — uncertainties must come from the CURVATURE at the fitted point (the profile
+covariance is the Schur complement of the full Hessian), which is deterministic. **This is the same
+machinery fig 69 asks for**: both studies converge on building second-order information. The
+GGN/Newton code from the dE/dx block is the start.
+**Seed 1 not submitted** — the pilot answered it; a second seed buys a second unresolvable curve
+for 30 GPU-hours.
+
+
 ![Objective bias](plots/noise_report/fig66_objective_bias.png)
 
 **Tests** — is the calibration error the OPTIMISER's or the OBJECTIVE's? Evaluation only, at BT2's,

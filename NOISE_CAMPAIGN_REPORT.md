@@ -3191,6 +3191,49 @@ reduces the loss, so progress along it is slow even though the path is wide open
 `G20K`'s 77–79%, for half the compute. That is an independent confirmation, on a measure neither was
 tuned against, that the cheap two-block recipe beats the long single-block run.
 
+### The profile likelihood by re-fitting: it does not work (`PROF`)
+
+![Profile](plots/noise_report/fig70_profile.png)
+
+A genuine profile over the calibration block — pin lifetime at 7 multipliers of its fitted value and
+re-optimise **everything else**, the other four calibration parameters *and* both nuisance blocks,
+from `TS1`. 3 000 iterations per point, schedules compressed so all points read out at the same
+schedule phase.
+
+**The pin worked** — validated beforehand at a 6184× separation, and it held at every point (relative
+drift 8 × 10⁻⁹ to 1.4 × 10⁻⁷ against free parameters moving 10⁻³–10⁻²).
+
+**What came back is not a profile.** The curve is jagged rather than convex: the minimum sits at
+−5.3% while the far end of the grid is nearly as low. Error bars from the scatter of independent
+one-epoch windows within each run show why.
+
+| nats per batch | |
+|---|---|
+| expected lifetime signal across the **whole** ±10% grid | **7.5** *(an upper bound — this is the conditional curvature, and profiling only flattens it)* |
+| error bar on a single point | 10.5 |
+| scatter between the 7 independent re-fits | **41.4** |
+
+**The signal is smaller than the noise on one point and five times smaller than the scatter between
+points.** And it cannot be fixed by running more: a 1σ interval needs Δ = 0.5 in the summed loss,
+i.e. 0.005 nats/batch, against 10.5 achieved — **2 105× too large**, which averaging down would take
+~4 million times more sampling. This is not a resolution problem; it is the wrong instrument.
+
+**Why:** each point is an independent stochastic re-optimisation of ~9 000 nuisance parameters, and
+*where that optimisation lands* varies far more in loss than the lifetime dependence being measured.
+The noise is not in the data — every point already averages over full epochs — it is in the
+optimiser's landing point.
+
+> **The redirection, and it is the useful output of this study.** Uncertainties must come from the
+> **curvature at the fitted point**, computed analytically: the profile covariance is the Schur
+> complement of the full Hessian, marginalising the nuisance blocks. That is deterministic and has
+> no landing-point noise. **And it is the same machinery §6w's fit→truth study asks for** — that
+> found the path to truth open but ill-conditioned and wanting a preconditioner. Both studies
+> converge on one build: **second-order information**. The GGN/Newton code already written for the
+> dE/dx block is the starting point.
+
+**Seed 1 was not submitted.** The pilot answered the question — a second seed would have produced a
+second unresolvable curve at another 30 GPU-hours.
+
 ### Is the lifetime error the optimiser's or the objective's? (`LSCAN`)
 
 ![Objective bias](plots/noise_report/fig66_objective_bias.png)
