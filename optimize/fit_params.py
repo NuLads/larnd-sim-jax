@@ -981,6 +981,13 @@ class ParamFitter:
         # that way would move the truth it is being measured against and be silently meaningless.
         # Zeroing the update leaves the parameter exactly where --set_init_params put it and
         # touches nothing else.
+        _tph = os.environ.get('LARND_TP_HESS', '').strip()
+        self._tp_hess_points = set(x for x in _tph.replace(',', ':').split(':') if x.strip())
+        # Two step sizes, in NORMALISED units where the parameters are O(1). 1e-3 and 3e-3 bracket
+        # the usual stable window; the analysis compares them and refuses to quote if they disagree.
+        self._tp_hess_steps = [float(x) for x in
+                               os.environ.get('LARND_TP_HESS_STEPS', '1e-3:3e-3').replace(',', ':').split(':')
+                               if x.strip()]
         _pin = os.environ.get('LARND_CALIB_PIN', '').strip()
         self._calib_pinned = [x for x in _pin.replace(',', '+').split('+') if x.strip()] if _pin else []
         self._chain_update_freq = max(1, int(chain_update_freq))
@@ -3035,6 +3042,21 @@ class GradientDescentFitter(ParamFitter):
                 # it silently evaluates the nominal geometry and the input-file dEdx, which
                 # would make every point here identical apart from the calibration values.
                 self._set_calib_physical(cal)
+                # LARND_TP_HESS="P0_fit:P1_truth" -- also build the CALIBRATION Hessian at these
+                # points. This is the deterministic route to an uncertainty: profiling by re-fitting
+                # is 2105x too noisy (report fig 70), because each re-fit lands its ~9 000 nuisance
+                # parameters somewhere slightly different and that scatter swamps the signal. A
+                # Hessian has no landing-point noise at all.
+                #
+                # Summing the per-batch Hessians gives the Hessian of the summed loss, which is the
+                # right object: the batches are independent data. Inverting it gives the CONDITIONAL
+                # covariance -- geometry and dEdx held fixed -- which is a LOWER BOUND on the profile
+                # uncertainty, and the full 5x5 gives the calibration correlations, which no
+                # measurement in this campaign has ever produced.
+                #
+                # _hess_via_hvp is forced on: jacfwd(jacrev(.)) evaluates all 5 tangents through one
+                # reverse tape and requested 129 GB at 400 cm batches.
+                _want_h = name in self._tp_hess_points
                 lv, _, _, _, aux, _, _ = self.compute_loss(
                     tracks, i, *ref, epoch=epoch, with_loss=True, with_grad=False,
                     use_physical_params=False, log_dedx=ld, parent_ids=parent_ids,
@@ -3043,6 +3065,42 @@ class GradientDescentFitter(ParamFitter):
                     'loss': float(lv),
                     'aux': {k: serialize_value(v) for k, v in (aux or {}).items()},
                     'calib': dict(cal)}
+                if _want_h:
+                    # FINITE DIFFERENCE OF THE GRADIENT, not forward-over-reverse.
+                    # _hess_by_hvp is the natural choice and it OOMs here: the forward-over-reverse
+                    # tape asked for 8.3 GB per allocation at 400 cm batches (jacfwd(jacrev) is far
+                    # worse -- 129 GB, which is why the HVP path exists at all). Central-differencing
+                    # the gradient costs exactly one training iteration's memory per evaluation,
+                    # which we know fits, at 2*P gradient passes for a P x P block. P = 5 here.
+                    #
+                    # Two step sizes are used and BOTH are stored. Finite differences are a
+                    # trade-off between truncation error (large h) and float32 cancellation (small
+                    # h), and the only honest way to know which side we are on is to vary h: if the
+                    # two Hessians agree the answer is in the stable window, and if they do not the
+                    # number should not be quoted. Doing this at analysis time rather than guessing
+                    # a step size here is deliberate.
+                    for _h in self._tp_hess_steps:
+                        _cols = {}
+                        for _kb in self.relevant_params_list:
+                            _base = getattr(self.norm_params, _kb)
+                            _gs = []
+                            for _sgn in (+1.0, -1.0):
+                                self.norm_params = self.norm_params.replace(
+                                    **{_kb: _base + _sgn * _h})
+                                self.update_params()
+                                _, _g, _, _, _, _, _ = self.compute_loss(
+                                    tracks, i, *ref, epoch=epoch, with_loss=False, with_grad=True,
+                                    use_physical_params=False, log_dedx=ld,
+                                    parent_ids=parent_ids, chain_angles_per_track=gg)
+                                _gs.append(_g)
+                            self.norm_params = self.norm_params.replace(**{_kb: _base})
+                            self.update_params()
+                            _cols[_kb] = {_ka: (float(getattr(_gs[0], _ka))
+                                                - float(getattr(_gs[1], _ka))) / (2.0 * _h)
+                                          for _ka in self.relevant_params_list}
+                        rec['points'][name][f'hessian_fd_{_h:g}'] = _cols
+                    logger.info(f"[TRUTHPOINT] batch {i:3d} {name:14s} calibration Hessian stored "
+                                f"(finite difference, steps {self._tp_hess_steps})")
                 logger.info(f"[TRUTHPOINT] batch {i:3d} {name:14s} loss = {float(lv):.4f}")
         finally:
             self.norm_params, self.current_params = _norm_saved, _cur_saved

@@ -34,6 +34,9 @@ SCITPJOINTA=${SCITPJOINTA:-}
 SCITPCALIB=${SCITPCALIB:-}
 # The full fit->truth line: all three blocks moved together (see _eval_truth_point).
 SCITPFULL=${SCITPFULL:-}
+# Calibration Hessian at named truth-points, e.g. SCITPHESS=P0_fit -- the deterministic
+# route to an uncertainty (profiling by re-fitting is 2105x too noisy, fig 70).
+SCITPHESS=${SCITPHESS:-}
 # Spline mode-count floor (see _spline_K): every track is clipped up to it, so this and not
 # chain_spline_knot_cm is what sets the geometry basis resolution.
 SCIKMIN=${SCIKMIN:-3}
@@ -183,6 +186,8 @@ export LARND_TP_GEOM_ALPHA=${SCITPGEOMA}
 export LARND_TP_JOINT_ALPHA=${SCITPJOINTA}
 export LARND_TP_CALIB_SCAN=${SCITPCALIB}
 export LARND_TP_FULL_ALPHA=${SCITPFULL}
+export LARND_TP_HESS=${SCITPHESS:-}
+export LARND_TP_HESS_STEPS=${SCITPHESSTEPS:-1e-3:3e-3}
 export LARND_SPLINE_KMIN=${SCIKMIN:-3}
 export LARND_CHAIN_INIT_FROM=${SCICHAININIT}
 export LARND_CHAIN_FREEZE_ITER=${SCICHFREEZE:-0}
