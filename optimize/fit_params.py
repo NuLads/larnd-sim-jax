@@ -549,6 +549,10 @@ def _gn_mem_peak():
         return 0.0
 
 
+class _SchurDone(Exception):
+    """Internal control flow: the dEdx-exact Schur path finished; skip the joint-CG code."""
+
+
 def _hess_by_hvp(f_with_aux, params, keys):
     """Hessian of a scalar (loss, aux) function w.r.t. the named params, built column by
     column with Hessian-vector products.
@@ -999,6 +1003,10 @@ class ParamFitter:
         self._tp_schur_cgit = int(os.environ.get('LARND_TP_SCHUR_CGIT', '30'))
         self._tp_schur_tol = float(os.environ.get('LARND_TP_SCHUR_TOL', '1e-2'))
         self._tp_schur_lam = float(os.environ.get('LARND_TP_SCHUR_LAM', '1e-2'))
+        # 'dedx' (default): marginalise the dEdx block EXACTLY -- its Hessian is banded(2)+rank-1,
+        # recovered from 5 HVPs and solved directly, no CG. Geometry stays conditional. 'joint'
+        # keeps the CG-over-everything path, which today needs remat to be viable (see below).
+        self._tp_schur_mode = os.environ.get('LARND_TP_SCHUR_MODE', 'dedx')
         _pin = os.environ.get('LARND_CALIB_PIN', '').strip()
         self._calib_pinned = [x for x in _pin.replace(',', '+').split('+') if x.strip()] if _pin else []
         self._chain_update_freq = max(1, int(chain_update_freq))
@@ -2263,6 +2271,15 @@ class ParamFitter:
 
             _chain_angles_active = (self.fit_chain_positions and chain_angles_per_track is not None)
             _dedx_active = (log_dedx is not None)
+            if return_loss_closure == 'joint' and _chain_angles_active and _dedx_active:
+                # Pure loss(log_dedx, chain_angles) -> scalar with calibration frozen at the
+                # CURRENT norm_params. For the Schur complement: exact nuisance HVPs via
+                # jvp-of-grad over this closure fit in memory (this is the same tape shape the
+                # dEdx GN code and the geometry CG already use), where the calibration HVP tape
+                # does not.
+                def _joint_nuis_loss(log_dedx_pt, chain_angles_pt):
+                    return loss_wrapper_combined(self.norm_params, log_dedx_pt, chain_angles_pt)[0]
+                return _joint_nuis_loss
             if return_loss_closure and _chain_angles_active:
                 # Return a pure, differentiable loss(chain_angles_pt[, norm_params])->scalar for this
                 # batch, with dEdx held fixed. norm_params is an OPTIONAL traced arg so a jitted
@@ -3125,6 +3142,7 @@ class GradientDescentFitter(ParamFitter):
             # consistency test of the whole construction. And diag(inv(S)) must be >= diag(inv(H_cc)):
             # marginalising can only inflate.
             if self._tp_schur and i < self._tp_schur_nb and 'P0_fit' in rec['points']:
+              try:
                 _t0 = time()
                 P5 = self.relevant_params_list
                 _h = 1e-3
@@ -3173,13 +3191,102 @@ class GradientDescentFitter(ParamFitter):
                     _, gm = _grads(dcal={k: -_h})
                     HNC[:, j] = (gp - gm) / (2 * _h)
 
+                if self._tp_schur_mode == 'dedx':
+                    # ── EXACT dEdx marginalisation, no CG ─────────────────────────────────────
+                    # Three routes to the full nuisance marginalisation failed on memory or noise:
+                    # jacfwd(jacrev) wants 129 GB; the joint nuisance HVP tape wants 8.3 GB the
+                    # moment GEOMETRY is a differentiated argument (its tangent re-materialises
+                    # the signal simulation); and FD-matvec CG diverges (residuals up to 4.3)
+                    # because FD noise fills the Krylov space of an ill-conditioned system.
+                    #
+                    # The dEdx block alone needs none of that: its Hessian is banded(bw 2)+rank-1
+                    # (the GN-dEdx result), recovered EXACTLY from 5 HVPs whose tape is the same
+                    # one _dedx_gn_step runs in production at 400 cm, and solved DIRECTLY by
+                    # banded elimination + Sherman-Morrison. Geometry remains conditional, so the
+                    # result is a lower bound that marginalises calibration + dEdx -- one block
+                    # short of full, with no iterative solver anywhere.
+                    self._set_calib_physical(calib_fit)
+                    Nd = _nd
+                    Vp = _dedx_probe_matrix(Nd)
+                    # analytic rank-1 of the mean constraint (as in _dedx_gn_step)
+                    _w = float(self.dedx_mean_constraint_weight)
+                    _sdx = self._batch_seg_dx.get(i)
+                    q = None
+                    if _w > 0 and _sdx is not None:
+                        l = np.asarray(_sdx, dtype=np.float64)[:Nd]
+                        L = float(l.sum())
+                        if L > 1e-6:
+                            q = np.sqrt(2.0 * _w) * (l * np.exp(np.asarray(d_fit_j, np.float64)) / L)
+                    # FD probes, NOT HVPs. The exact jvp was tried and OOMs identically to the
+                    # calibration case (8.3 GB in simulate_signals): a forward tangent through the
+                    # sim costs the same no matter which argument carries it, because log_dedx
+                    # enters upstream of everything. FD is safe HERE though the CG attempt was not:
+                    # the band entries are recovered LINEARLY from the probes and fed to a DIRECT
+                    # banded solve, so there is no Krylov space for the FD noise to be amplified
+                    # in -- the failure mode that killed the joint-CG route.
+                    _hp = 3e-3
+                    probes = np.empty((Vp.shape[0], Nd))
+                    for c in range(Vp.shape[0]):
+                        vfull = np.zeros(N); vfull[:Nd] = Vp[c]
+                        _, gp = _grads(vn=+_hp * vfull)
+                        _, gm = _grads(vn=-_hp * vfull)
+                        probes[c] = (gp[:Nd] - gm[:Nd]) / (2 * _hp)
+                    if q is not None:
+                        probes = probes - np.outer(Vp @ q, q)
+                    ab = _dedx_band_from_probes(probes, Nd)
+                    lam = self._tp_schur_lam * float(np.median(np.abs(ab[_DEDX_GN_BW])))
+                    HDC = HNC[:Nd, :]
+                    X = np.zeros((Nd, 5)); solve_ok = True
+                    for j in range(5):
+                        x, ok = _dedx_banded_sm_solve(ab, q, HDC[:, j], lam)
+                        if not ok:
+                            solve_ok = False
+                            break
+                        X[:, j] = x
+                    if solve_ok:
+                        DELTA = HDC.T @ X
+                        rec['schur'] = {
+                            'delta': {P5[j]: {P5[k]: float(DELTA[j, k]) for k in range(5)}
+                                      for j in range(5)},
+                            'mode': 'dedx', 'n_nuisance': int(Nd), 'n_active': int(Nd),
+                            'cg': [], 'lam': float(lam),
+                            'asym': float(np.max(np.abs(DELTA - DELTA.T)) /
+                                          max(np.max(np.abs(DELTA)), 1e-30)),
+                            'wall_s': round(time() - _t0, 1)}
+                        logger.info(f"[SCHUR] batch {i:3d}: dEdx-exact N={Nd}, "
+                                    f"asym {rec['schur']['asym']:.4f}, lam {lam:.3g}, "
+                                    f"{rec['schur']['wall_s']} s")
+                    else:
+                        logger.warning(f"[SCHUR] batch {i:3d}: banded solve failed, no record")
+                    # restore and skip the joint-CG path entirely
+                    self.norm_params = _np_base
+                    self.update_params()
+                    raise _SchurDone()
+
+                # EXACT HVP matvec. The finite-difference matvec was tried first and CG diverged
+                # on it (residuals up to 4.3): FD noise is amplified by an ill-conditioned system
+                # and after ~15 iterations the Krylov space is noise. jvp-of-grad over the joint
+                # nuisance closure is exact to float32 and its tape fits (unlike the calibration
+                # HVP, which OOMs) -- it is the same construction the dEdx GN and geometry CG code
+                # already run per-iteration.
+                self._set_calib_physical(calib_fit)
+                _jl = self.compute_loss(tracks, i, *ref, epoch=epoch,
+                                        use_physical_params=False, log_dedx=d_fit_j,
+                                        parent_ids=parent_ids, chain_angles_per_track=g_fit,
+                                        return_loss_closure='joint')
+                _gn_fn = jax.grad(_jl, argnums=(0, 1))
+
+                def _hvp_pair(vd, vgs):
+                    return jax.jvp(_gn_fn, (d_fit_j, g_fit), (vd, vgs))[1]
+
                 def _mv_raw(v):
-                    nv = float(np.linalg.norm(v))
-                    if nv == 0:
-                        return np.zeros_like(v)
-                    _, gp = _grads(vn=+_h * v / nv)
-                    _, gm = _grads(vn=-_h * v / nv)
-                    return (gp - gm) * nv / (2 * _h)
+                    vd = jnp.asarray(v[:_nd].reshape(np.asarray(d_fit_j).shape), dtype=jnp.float32)
+                    vgs, o = [], _nd
+                    for sh in _shapes:
+                        n = int(np.prod(sh))
+                        vgs.append(jnp.asarray(v[o:o + n].reshape(sh), dtype=jnp.float32)); o += n
+                    hd, hgs = _hvp_pair(vd, vgs)
+                    return _flat(hd, hgs)
 
                 # The first smoke test failed EXACTLY here: plain CG stalled (residuals 0.09-1.6,
                 # some GROWING) and the resulting S had a negative eigenvalue with one parameter
@@ -3239,6 +3346,8 @@ class GradientDescentFitter(ParamFitter):
                             f"asym {rec['schur']['asym']:.3f}, "
                             f"cg iters {[c['iters'] for c in cg_info]}, "
                             f"{rec['schur']['wall_s']} s")
+              except _SchurDone:
+                pass
         finally:
             self.norm_params, self.current_params = _norm_saved, _cur_saved
         p0 = rec['points'].get('P0_fit', {}).get('loss')
