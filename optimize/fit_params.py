@@ -988,6 +988,17 @@ class ParamFitter:
         self._tp_hess_steps = [float(x) for x in
                                os.environ.get('LARND_TP_HESS_STEPS', '1e-3:3e-3').replace(',', ':').split(':')
                                if x.strip()]
+        # SCHUR COMPLEMENT (LARND_TP_SCHUR=1): marginalise the per-batch nuisances out of the
+        # calibration covariance. Fig 71's covariance is CONDITIONAL on geometry and dEdx; the full
+        # covariance needs S = H_cc - H_cn H_nn^-1 H_nc. The nuisances are BATCH-LOCAL (each batch
+        # has its own log_dedx and spline coefficients, only calibration is shared), so the full
+        # Hessian is block-arrow and the Schur complement is a per-batch sum: S = sum_b S_b. That
+        # also means a subset of batches estimates the per-batch mean of S_b, which scales.
+        self._tp_schur = os.environ.get('LARND_TP_SCHUR', '0') == '1'
+        self._tp_schur_nb = int(os.environ.get('LARND_TP_SCHUR_NB', '20'))
+        self._tp_schur_cgit = int(os.environ.get('LARND_TP_SCHUR_CGIT', '30'))
+        self._tp_schur_tol = float(os.environ.get('LARND_TP_SCHUR_TOL', '1e-2'))
+        self._tp_schur_lam = float(os.environ.get('LARND_TP_SCHUR_LAM', '1e-2'))
         _pin = os.environ.get('LARND_CALIB_PIN', '').strip()
         self._calib_pinned = [x for x in _pin.replace(',', '+').split('+') if x.strip()] if _pin else []
         self._chain_update_freq = max(1, int(chain_update_freq))
@@ -3102,6 +3113,132 @@ class GradientDescentFitter(ParamFitter):
                     logger.info(f"[TRUTHPOINT] batch {i:3d} {name:14s} calibration Hessian stored "
                                 f"(finite difference, steps {self._tp_hess_steps})")
                 logger.info(f"[TRUTHPOINT] batch {i:3d} {name:14s} loss = {float(lv):.4f}")
+            # ── SCHUR COMPLEMENT over this batch's nuisances ──────────────────────────────────
+            # All derivatives by central finite differences of the joint gradient (one training-
+            # iteration of memory per pass; the HVP tape OOMs at 400 cm). One compute_loss call
+            # returns the calibration AND dEdx AND geometry gradients together, so every FD pass
+            # yields both the H_nc column sample and the H_nn matvec sample it is part of.
+            #
+            # The correction Delta_jk = <hnc_j, x_k> with H_nn x_k = hnc_k needs no extra passes
+            # for the H_cn contraction (H_cn = H_nc^T). Delta must come out SYMMETRIC although it
+            # is computed asymmetrically -- stored and checked at analysis, it is the internal
+            # consistency test of the whole construction. And diag(inv(S)) must be >= diag(inv(H_cc)):
+            # marginalising can only inflate.
+            if self._tp_schur and i < self._tp_schur_nb and 'P0_fit' in rec['points']:
+                _t0 = time()
+                P5 = self.relevant_params_list
+                _h = 1e-3
+                self._set_calib_physical(calib_fit)
+                _np_base = self.norm_params
+                _shapes = [np.asarray(c).shape for c in g_fit]
+                _nd = int(np.asarray(d_fit_j).size)
+
+                def _flat(gd, gc):
+                    return np.concatenate([np.ravel(np.asarray(gd, np.float64))] +
+                                          [np.ravel(np.asarray(c, np.float64)) for c in gc])
+
+                def _to_nuis(v):
+                    ld = jnp.asarray(np.asarray(d_fit_j, np.float64) + v[:_nd].reshape(np.asarray(d_fit_j).shape), dtype=jnp.float32)
+                    out, o = [], _nd
+                    for c, sh in zip(g_fit, _shapes):
+                        n = int(np.prod(sh))
+                        out.append(jnp.asarray(np.asarray(c, np.float64) + v[o:o + n].reshape(sh), dtype=jnp.float32))
+                        o += n
+                    return ld, out
+
+                def _grads(dcal=None, vn=None):
+                    if dcal is not None:
+                        self.norm_params = _np_base.replace(
+                            **{k: getattr(_np_base, k) + dv for k, dv in dcal.items()})
+                    else:
+                        self.norm_params = _np_base
+                    self.update_params()
+                    if vn is not None:
+                        _ld, _gg = _to_nuis(vn)
+                    else:
+                        _ld, _gg = d_fit_j, g_fit
+                    _, g, gd, gc, _, _, _ = self.compute_loss(
+                        tracks, i, *ref, epoch=epoch, with_loss=False, with_grad=True,
+                        use_physical_params=False, log_dedx=_ld, parent_ids=parent_ids,
+                        chain_angles_per_track=_gg)
+                    return (np.array([float(getattr(g, k)) for k in P5]),
+                            _flat(gd, gc))
+
+                _gc0, _gn0 = _grads()
+                N = _gn0.size
+                # H_nc columns: FD of the NUISANCE gradient along each calibration direction
+                HNC = np.zeros((N, 5))
+                for j, k in enumerate(P5):
+                    _, gp = _grads(dcal={k: +_h})
+                    _, gm = _grads(dcal={k: -_h})
+                    HNC[:, j] = (gp - gm) / (2 * _h)
+
+                def _mv_raw(v):
+                    nv = float(np.linalg.norm(v))
+                    if nv == 0:
+                        return np.zeros_like(v)
+                    _, gp = _grads(vn=+_h * v / nv)
+                    _, gm = _grads(vn=-_h * v / nv)
+                    return (gp - gm) * nv / (2 * _h)
+
+                # The first smoke test failed EXACTLY here: plain CG stalled (residuals 0.09-1.6,
+                # some GROWING) and the resulting S had a negative eigenvalue with one parameter
+                # DEFLATING, which a true Schur complement cannot do. Cause: H_nn carries
+                # near-singular directions -- dEdx segments below the min-dx freeze threshold and
+                # ghost spline coefficients have prior-only curvature, orders of magnitude below
+                # the data-constrained directions. Those directions are NOT FITTED in training, so
+                # the honest treatment is to exclude them, not to invert across them.
+                #
+                # (1) Hutchinson: diag(H_nn) ~ E[v o Hv] over random sign vectors. 6 probes.
+                rng = np.random.default_rng(1234 + i)
+                dg = np.zeros(N)
+                for _pi in range(6):
+                    v = rng.choice([-1.0, 1.0], size=N)
+                    dg += v * _mv_raw(v)
+                dg /= 6.0
+                # (2) ACTIVE mask: direction is fitted if its diagonal is within 1e-4 of the median
+                #     positive diagonal. Excluded directions are projected out of everything.
+                pos = dg[dg > 0]
+                dmed = float(np.median(pos)) if pos.size else 1.0
+                act = dg > 1e-4 * dmed
+                # (3) Jacobi preconditioner on the active space + relative Tikhonov.
+                lam = self._tp_schur_lam * dmed
+                Mi = np.where(act, 1.0 / np.maximum(dg, 1e-4 * dmed), 0.0)
+
+                def _mv(v):
+                    return np.where(act, _mv_raw(v * act), 0.0) + lam * v * act
+
+                X = np.zeros((N, 5)); cg_info = []
+                for j in range(5):
+                    b = HNC[:, j] * act
+                    x = np.zeros(N); r = b.copy(); z = Mi * r; pdir = z.copy()
+                    rz = float(r @ z); b0 = float(np.linalg.norm(b)) or 1.0; it = 0
+                    bad = False
+                    for it in range(1, self._tp_schur_cgit + 1):
+                        Ap = _mv(pdir)
+                        pAp = float(pdir @ Ap)
+                        if pAp <= 0:
+                            bad = True
+                            break
+                        a = rz / pAp
+                        x += a * pdir; r -= a * Ap
+                        if float(np.linalg.norm(r)) < self._tp_schur_tol * b0:
+                            break
+                        z = Mi * r; rz_new = float(r @ z)
+                        pdir = z + (rz_new / rz) * pdir; rz = rz_new
+                    cg_info.append({'rhs': P5[j], 'iters': it,
+                                    'res': float(np.linalg.norm(r)) / b0, 'indefinite': bad})
+                    X[:, j] = x
+                DELTA = (HNC * act[:, None]).T @ X         # Delta_jk = <hnc_j, x_k> on the active space
+                rec['schur'] = {
+                    'delta': {P5[j]: {P5[k]: float(DELTA[j, k]) for k in range(5)} for j in range(5)},
+                    'n_nuisance': int(N), 'n_active': int(act.sum()), 'cg': cg_info,
+                    'asym': float(np.max(np.abs(DELTA - DELTA.T)) / max(np.max(np.abs(DELTA)), 1e-30)),
+                    'wall_s': round(time() - _t0, 1)}
+                logger.info(f"[SCHUR] batch {i:3d}: N={N} nuisances ({int(act.sum())} active), "
+                            f"asym {rec['schur']['asym']:.3f}, "
+                            f"cg iters {[c['iters'] for c in cg_info]}, "
+                            f"{rec['schur']['wall_s']} s")
         finally:
             self.norm_params, self.current_params = _norm_saved, _cur_saved
         p0 = rec['points'].get('P0_fit', {}).get('loss')
