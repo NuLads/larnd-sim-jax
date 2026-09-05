@@ -141,6 +141,11 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   mid-oscillation sample; all three arms sit within **0.4%** on the objective. The *degeneracy
   matrix* itself is unaffected (evaluation-only), but acting on it via alternation is now an open
   question, not a result. The fix is one flag: `SCILRDECAY` 0.91 → 0.73.
+- **WE ARE NOT STATISTICS-LIMITED ANYWHERE — and by more than we thought (§6w, `HESS`).** The
+  calibration Hessian, validated against the fig 58 scan to 1–2%, puts every parameter **3.3–71×**
+  from its 1σ floor (superseding the 4–16× previously quoted; E field is 71× off, not 11×, because
+  the old scan-based floor was 7× too large). It also delivers the first calibration correlation
+  matrix: **A_b and lifetime are 71% anticorrelated**, which inflates both their error bars by 1.67×.
 - **WE ARE NOT STATISTICS-LIMITED ANYWHERE (§6w).** From the curvature of the objective at the
   `BT2` fit, every parameter sits **4–16×** from its statistical floor: A_b 0.017% vs 0.27%
   achieved, E field 0.003% vs 0.03%, tran. diff. 0.373% vs 1.48%, long. diff. 0.722% vs 7.45%,
@@ -3233,6 +3238,67 @@ optimiser's landing point.
 
 **Seed 1 was not submitted.** The pilot answered the question — a second seed would have produced a
 second unresolvable curve at another 30 GPU-hours.
+
+### The calibration covariance: the first real error bars (`HESS`)
+
+![Hessian](plots/noise_report/fig71_hessian.png)
+
+Profiling by re-fitting failed by a factor 2 105. A **Hessian** is evaluated at one point, so it has
+no landing-point noise at all. Computed by central finite differences of the **gradient** — the
+forward-over-reverse HVP path OOMs at 400 cm batches, asking 8.3 GB per allocation — at two step
+sizes agreeing to 7–11%, which is the systematic on everything below.
+
+**Panel (a) is the validation, and it is the reason to believe the rest.** The fig 58 loss scan
+measured the same curvature by a completely different route (finite differences of the *loss*, ±5%
+grid, other calibration parameters held fixed). Computing the matching quantity from the Hessian —
+`1/√H_ii`, also "others fixed" — the two agree to **1–2%**:
+
+| param | fig 58 scan | Hessian, others fixed | ratio |
+|---|---|---|---|
+| lifetime | 0.2581% | 0.2577% | **1.00** |
+| transverse diffusion | 0.3729% | 0.3808% | 1.02 |
+| A_b | 0.0166% | 0.0162% | 0.98 |
+| longitudinal diffusion | 0.7218% | 0.6455% | 0.89 |
+| E field | 0.0027% | 0.0004% | **0.15** |
+
+**The one disagreement is the scan's fault, and it is checkable.** Repeating the scan's parabola fit
+on ±5%, ±10% and ±20% baselines: lifetime (0.258 / 0.255 / 0.245), transverse and longitudinal
+diffusion are all stable, so the loss is genuinely quadratic there. But E field moves
+0.0027 → 0.0051 → 0.0098 and A_b 0.0166 → 0.0187 → 0.0366 — factors of 3.6 and 2.2. Those two are so
+tightly constrained that a ±5% grid sits ~1 700 σ and ~170 σ from the minimum, far outside the
+quadratic region, so the scan measures an average chord curvature. **The E field floor previously
+quoted was 7× too large.**
+
+> **Panel (b) is the new physics: A_b and lifetime are 71% ANTICORRELATED.** The calibration
+> correlation matrix has never been measured in this campaign, and it is far from diagonal. Both
+> parameters control how much charge reaches the pixels — A_b at production, lifetime during drift —
+> so the fit trades one against the other almost freely. **This is the degeneracy the whole campaign
+> has been fighting, now quantified rather than inferred.** Lesser entries: transverse ↔
+> longitudinal diffusion −0.31, longitudinal diffusion ↔ lifetime +0.24 and ↔ E field +0.24.
+
+**What the correlation costs (panel c).** Letting the other four calibration parameters move inflates
+each 1σ — lifetime **×1.67**, A_b **×1.66**, the rest 1.04–1.24. The two inflated by 1.67 are exactly
+the pair joined by the −0.71. **So the honest 1σ on lifetime is 0.43%, not 0.26%.**
+
+**And the corrected distance to the floor (panel d):**
+
+| param | 1σ floor | `BT2` achieved | ratio |
+|---|---|---|---|
+| A_b | 0.027% | 0.269% | ×10 |
+| **E field** | **0.0004%** | 0.030% | **×71** |
+| transverse diffusion | 0.44% | 1.46% | ×3.3 |
+| longitudinal diffusion | 0.80% | 7.41% | ×9.3 |
+| lifetime | 0.43% | 1.65% | ×3.8 |
+
+This **supersedes the "4–16× from the floor" figure** quoted previously in §6w and in the handoff.
+The true range is 3.3–71×, and E field — which we call "solved" at 0.03% — is in fact the furthest
+of any parameter from what the data could support.
+
+**What this is and is not.** Still *conditional* on geometry and dE/dx, which are held at their
+fitted values, so these remain **lower bounds** on the full profile uncertainty — but bounds that now
+include the calibration correlations and are validated against an independent method. Marginalising
+the ~9 000 nuisances as well needs the Schur complement of the full Hessian, which is the next build
+and reuses the CG machinery already written for the geometry block.
 
 ### Is the lifetime error the optimiser's or the objective's? (`LSCAN`)
 

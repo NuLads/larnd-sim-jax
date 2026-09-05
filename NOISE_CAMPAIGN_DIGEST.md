@@ -1135,6 +1135,36 @@ GGN/Newton code from the dE/dx block is the start.
 for 30 GPU-hours.
 
 
+![Hessian](plots/noise_report/fig71_hessian.png)
+
+**Tests** — the calibration Hessian at the fitted point, the deterministic route to an error bar
+after profiling-by-re-fitting failed by 2105× (fig 70). Central finite differences of the GRADIENT
+(the forward-over-reverse HVP path OOMs at 400 cm, 8.3 GB per allocation), two step sizes agreeing
+to 7–11%.
+**Concludes — VALIDATED against an independent method.** The fig 58 loss scan measured the same
+curvature by differencing the LOSS on a ±5% grid with the other calibration params fixed. The
+matching Hessian quantity, 1/√H_ii, agrees to **1–2%**: lifetime ×1.00, tran. diff. ×1.02, A_b ×0.98,
+long. diff. ×0.89.
+**Concludes — and the one disagreement is the SCAN's fault.** E field ×0.15. Repeating the scan's
+parabola on ±5/±10/±20% baselines: lifetime and both diffusions are stable (loss genuinely
+quadratic), but E field moves 0.0027→0.0051→0.0098 and A_b 0.0166→0.0187→0.0366. Those two are so
+tightly constrained that ±5% is ~1700σ and ~170σ out. **The E field floor previously quoted was 7×
+too large.**
+**THE NEW PHYSICS — A_b AND LIFETIME ARE 71% ANTICORRELATED.** The calibration correlation matrix,
+never measured before, is far from diagonal. Both set how much charge arrives (A_b at production,
+lifetime during drift) so the fit trades them freely. **This is the degeneracy the campaign has been
+fighting, now quantified.** Also tran↔long diff. −0.31, long diff.↔lifetime +0.24.
+**Concludes — what it costs.** Letting the other calibration params move inflates each 1σ: lifetime
+**×1.67**, A_b ×1.66, rest 1.04–1.24 — the two inflated are exactly the pair joined by −0.71. The
+honest lifetime 1σ is **0.43%, not 0.26%**.
+**Concludes — corrected distance to the floor: 3.3–71×**, superseding "4–16×". A_b ×10, E field
+**×71**, tran. diff. ×3.3, long. diff. ×9.3, lifetime ×3.8. E field, which we call "solved", is the
+FURTHEST of any parameter from what the data supports.
+**Read the caption** — still CONDITIONAL on geometry and dE/dx, so a lower bound; but one that now
+includes calibration correlations and is independently validated. Marginalising the ~9 000 nuisances
+needs the Schur complement — the next build.
+
+
 ![Objective bias](plots/noise_report/fig66_objective_bias.png)
 
 **Tests** — is the calibration error the OPTIMISER's or the OBJECTIVE's? Evaluation only, at BT2's,
