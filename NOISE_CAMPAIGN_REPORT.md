@@ -3239,6 +3239,55 @@ optimiser's landing point.
 **Seed 1 was not submitted.** The pilot answered the question — a second seed would have produced a
 second unresolvable curve at another 30 GPU-hours.
 
+### The uncertainty ladder: dE/dx marginalised, and what it reframes (`SCH*`, `LDSCAN`, `TS1` n=6)
+
+![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
+
+Four readouts land together here; the ladder is the one that changes the campaign's frame.
+
+**1 — The dE/dx-marginalised error bars.** The Schur complement over the dE/dx block, computed
+*exactly* via its banded+rank-1 structure and a direct solve (the code documents three failed
+routes: `jacfwd(jacrev)` at 129 GB; **any** forward-over-reverse tangent through `simulate_signals`
+at 8.3 GB, regardless of which argument carries it; and FD-matvec CG, which diverges because FD
+noise fills the Krylov space). 100 batches × 5 jobs, Δ symmetric to ≤0.012, validated on a pilot
+where every inflation came out ≥ 1 as mathematics requires.
+
+The lifetime ladder at `BT2`: **0.30% (conditional) → 0.58% (calibration correlations) → 0.9–1.1%
+(dE/dx marginalised)** against 1.65% achieved. The band is the method systematic — 0.91% from the
+raw summed S, 1.11% after projecting out one small negative eigenvalue (FD band noise, living in
+the diffusion subspace on 4 of 5 jobs; A_b, E field and lifetime entries are stable across all
+five, the two diffusions are not and are not quoted).
+
+> **The reframe: lifetime is ×1.5–1.8 from its floor, not ×6.4 — with geometry, the most
+> information-bearing block, still unmarginalised.** The plausible endpoint is that the achieved
+> lifetime error is *close to its statistical limit given the nuisance burden*. That converts
+> "improve the optimiser" into "reduce the nuisance burden or break the degeneracy" as the only
+> remaining routes to a better lifetime.
+
+**2 — The A_b↔lifetime degeneracy deepens under marginalisation** — 4 of 5 jobs, mean −0.78 →
+−0.83 (the exception is the seed whose clipped eigenvalue sits closest to that subspace). Part of
+the A_b↔lifetime trade routes *through* the dE/dx field, and marginalising dE/dx hands that freedom
+to the calibration pair.
+
+**3 — Longitudinal diffusion is a genuinely displaced axis (`LDSCAN`, ±80%).** The earlier ±20%
+grids never contained its optimum; this one does, and the picture is bad in an informative way: the
+conditional optimum sits **10–44% below truth and moves *further away* as the nuisances move to
+truth** (seed 1: −9.7% at the fit → −33% with both nuisances true). Since the joint minimum is at
+truth (§6w), this axis's displacement must be compensated by the other calibration parameters —
+longitudinal diffusion is the most entangled direction of the problem, consistent with it being the
+worst-recovered parameter. It should not be interpreted in isolation at all.
+
+**4 — The production recipe is settled.** `TS1` confirmed at **n = 6/6** on every quantity
+(position −55.1 ± 2.1 µm, loss −756 ± 55, dE/dx MAE −0.002, all 6/6 vs `BT2`). The 4 000-iteration
+variant is **not free**: +10 µm and +378 loss on 3/3 — compressing the schedule cuts total optimiser
+travel, not just the terminal LR, so my earlier "converges by ~3 500" projection did not survive.
+`TS1` at 10 000 iterations / 13.5 h is the production recommendation; the 6 h variant buys ~85% of
+the gain if wall clock ever dominates.
+
+**Still pending:** the drift-profile arm's Hessian (`schDP`) — the fits themselves cost nothing on
+quality (position −0.2 µm, drift term active at 0.297) and the question of whether dpw = 1e6 reduces
+the −0.83 is exactly what the curvature evaluation answers.
+
 ### The calibration covariance: the first real error bars (`HESS`)
 
 ![Hessian](plots/noise_report/fig71_hessian.png)

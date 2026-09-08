@@ -1135,6 +1135,31 @@ GGN/Newton code from the dE/dx block is the start.
 for 30 GPU-hours.
 
 
+![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
+
+**Tests** — the dE/dx block marginalised out of the calibration covariance, EXACTLY: banded+rank-1
+structure, 5 FD probe pairs, direct banded+Sherman-Morrison solve. Three failed routes documented in
+the code (129 GB jacfwd·jacrev; 8.3 GB for ANY sim tangent; FD-CG noise divergence). 5 jobs × 100
+batches; pilot-validated with every inflation ≥ 1.
+**Concludes — THE LADDER: lifetime floor 0.30 → 0.58 → 0.9–1.1%** (band = PSD-projection
+systematic) **vs 1.65% achieved — ×1.5–1.8 away, not ×6.4, with geometry still unmarginalised.**
+Lifetime is close to its statistical limit given the nuisance burden; the remaining routes are
+reducing the nuisance burden or breaking the degeneracy, not optimising harder.
+**Concludes — the A_b↔lifetime degeneracy DEEPENS under marginalisation** (4/5, mean −0.78 → −0.83):
+part of the trade routes through the dE/dx field.
+**Concludes — long. diffusion is a genuinely displaced axis (±80% scan).** Its conditional optimum
+sits 10–44% BELOW truth and moves AWAY as nuisances improve; since the joint minimum is at truth,
+its displacement is compensated by the other calibration parameters. Do not interpret it in
+isolation.
+**Concludes — the recipe is settled: TS1 confirmed at n = 6/6** (position −55.1 ± 2.1 µm, loss
+−756 ± 55). The 4 000-iteration variant is NOT free (+10 µm, +378 loss, 3/3 worse): schedule
+compression cuts total optimiser travel. TS1 at 10 000 it is production; ~6 h variant = ~85% of the
+gain.
+**Read the caption** — diffusion-row entries of the marginalised covariance are unstable (the
+clipped eigenvalue lives there) and are not quoted. schDP (does drift-profile info reduce the
+−0.83?) pending.
+
+
 ![Hessian](plots/noise_report/fig71_hessian.png)
 
 **Tests** — the calibration Hessian at the fitted point, the deterministic route to an error bar
