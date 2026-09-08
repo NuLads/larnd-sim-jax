@@ -230,7 +230,16 @@ class TracksDataset:
         # Only load useful tracks
         # assuming tracks are in orders as a unit of trajectory
         # Trim at event boundaries so no event is split during initial load.
-        if max_batch_len is not None and max_nbatch is not None and max_nbatch > 0:
+        #
+        # NOT under random_nevents: this pre-trim keeps only the FIRST max_batch_len*(max_nbatch+2)
+        # cm of the file, and it runs BEFORE the event-selection code below -- so with it active,
+        # the random selection draws from a pool the trim has already reduced to the events that
+        # fill the batches anyway, every seed selects that same pool, and data_seed is silently a
+        # no-op. That is exactly what happened when the first data-replica ensemble was attempted:
+        # three different data_seeds produced bit-identical batch sets. Skipping the trim costs a
+        # full-file load (~10 M rows) at init, which is the price of an actual random selection.
+        if (max_batch_len is not None and max_nbatch is not None and max_nbatch > 0
+                and not random_nevents):
             length_load_threshold = max_batch_len * (max_nbatch + 2)
 
             cum_dx = np.cumsum(tracks['dx'])

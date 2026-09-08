@@ -72,7 +72,13 @@ fi
 SCIMEANW=${SCIMEANW:-100000.0}
 SCIDXPARAM=${SCIDXPARAM:-perseg}
 MAX_BATCH_LEN=${SCILEN:-50}
-DATA_SEED=1
+# Data-replica knobs. SCIDATASEED varies WHICH tracks are drawn; SCIDATASZ (number of events,
+# randomly selected) must be set alongside it or the selection machinery never engages -- and note
+# the dataio pre-trim is skipped under random selection, which is what makes the seed act at all
+# (it was a silent no-op before 2026-09-08; see optimize/dataio.py).
+DATA_SEED=${SCIDATASEED:-1}
+EXTRA_DATA_ARGS=""
+[ -n "${SCIDATASZ:-}" ] && EXTRA_DATA_ARGS="--data_sz ${SCIDATASZ} --random_nevents"
 SEED=${SLURM_ARRAY_TASK_ID:-0}
 LOSS=llhd
 N_NEIGH=4
@@ -222,7 +228,7 @@ python3 -m optimize.example_run \
     --iterations ${ITERATIONS} \
     --max_nbatch ${MAX_NBATCH} \
     --max_batch_len ${MAX_BATCH_LEN} \
-    --data_seed ${DATA_SEED} \
+    --data_seed ${DATA_SEED} ${EXTRA_DATA_ARGS} \
     --seed ${SEED} \
     --lr 1e-1 \
     --optimizer_fn Adam \
