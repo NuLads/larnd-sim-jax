@@ -1,160 +1,104 @@
-# What the last round of studies established, and what to do next
+# Where we stand — differentiable LArTPC calibration, September 2026
 
-**Scope:** the work since the block matrix — `TS2` (fig 68), the fit→truth path (fig 69), the failed
-profile (fig 70), and the calibration covariance (fig 71). One narrative, ranked by relevance, each
-claim tied to its figure. Full detail: `NOISE_CAMPAIGN_REPORT.md` §6w.
-
----
-
-## The one-paragraph summary
-
-**The optimisation phase of this campaign is over, and it ended with a measurement, not a hunch.**
-The path from our best fit to the truth is open — monotone downhill, no barrier — but the fits stop
-short because the valley is ill-conditioned and the annealed learning rate runs out of step size
-(fig 69). The remaining errors now come with real, independently-validated error bars (fig 71),
-which expose the campaign's central degeneracy in one number: **recombination and lifetime are 71%
-anticorrelated**. Everything actionable now points at one build — **second-order machinery** — which
-simultaneously closes the measured-reachable gap (as a preconditioner) and delivers full error bars
-(as a Schur complement). Meanwhile `TS1` — freeze calibration, re-anneal the nuisances, 13.5 h — is
-the best-value configuration we have and should be adopted.
+**This replaces the 5 September synthesis.** Everything below is measured, each claim tied to a
+figure; the corrections table at the end tracks what changed. Full detail:
+`NOISE_CAMPAIGN_REPORT.md` §6w (figs 61–72).
 
 ---
 
-## Finding 1 — the gap to truth is open, and the optimiser is what stops short
+## The story in one paragraph
 
-![Full path](plots/noise_report/fig69_fullpath.png)
-
-We evaluated the loss along the straight line from each converged fit to the truth, with
-calibration, dE/dx and geometry all moving **together** (single blocks moved alone can make the loss
-*worse*, so only the joint line answers this). The result, in every arm and every seed:
-
-- **monotone downhill from the fit to truth** — no barrier, no shelf;
-- **the minimum is AT truth**, not beyond — past α = 1 the loss climbs steeply. Along this
-  direction the objective's optimum *is* the truth;
-- the fits stop anyway, because the schedule anneals the learning rate to ~8 × 10⁻⁵ of peak: they
-  **run out of step size while a downhill gradient still exists**. Shape (shallow near the fit,
-  steepening toward truth) = an **ill-conditioned valley**.
-
-**Relevance:** this converts "why is the fit stuck?" from speculation into a measurement. More
-first-order iterations are *not* the answer — `G20K` already showed doubling them plateaus. A
-**preconditioner** is.
-
-Bonus: `TS1` closes **86–87%** of the baseline's gap to truth vs `G20K`'s 77–79% at half the
-compute — independent confirmation on a measure neither was tuned against.
+The campaign has moved through three phases and each closed cleanly. **Optimisation** (figs 61–68):
+solved — `TS1` (freeze calibration, re-anneal nuisances from `BT2`, 13.5 h) is confirmed at
+**n = 6/6** as the best fit, and the path from any fit to truth is measured to be open, monotone,
+and blocked only by conditioning. **Understanding the objective** (figs 66, 69): the objective
+prefers truth jointly; single blocks moved alone make it worse; the remaining gap is reachability.
+**Uncertainties** (figs 70–72): profiling by re-fitting is impossible here (×2 105 too noisy), but
+curvature works — and the resulting error-bar ladder delivers the campaign's biggest reframe:
+**lifetime's achieved 1.65% error is only ×1.5–1.8 from its statistical floor once the dE/dx
+nuisances are marginalised, with geometry still to come.** The fit is not underperforming on
+lifetime; the *measurement* is nearly exhausted, because recombination and lifetime are up to 83%
+anticorrelated. The frontier is no longer the optimiser — it is the degeneracy.
 
 ---
 
-## Finding 2 — we now have real error bars, and they are validated
+## The scoreboard
 
-![Hessian](plots/noise_report/fig71_hessian.png)
-
-The 5×5 calibration Hessian at the fitted point (finite differences of the gradient; two step sizes
-agreeing to 7–11%). **Validation first:** where the old fig 58 loss-scan is trustworthy, the Hessian
-reproduces it to **1–2%** (lifetime ratio 1.00). Where they disagree — E field, A_b — the *scan* is
-at fault: those parameters are so tight that its ±5% grid sits 170–1 700 σ from the minimum, outside
-the quadratic region. **The E field floor we had been quoting was 7× too large.**
-
-The corrected picture (1σ floors with calibration correlations included, vs achieved at `BT2`):
-
-| | 1σ floor | achieved | distance |
+| parameter | achieved (`BT2`, mean \|err\|, n = 6) | 1σ floor (dE/dx-marginalised) | distance |
 |---|---|---|---|
-| A_b | 0.027% | 0.269% | ×10 |
-| **E field** | **0.0004%** | 0.030% | **×71** |
-| transverse diffusion | 0.44% | 1.46% | ×3.3 |
-| longitudinal diffusion | 0.80% | 7.41% | ×9.3 |
-| **lifetime** | **0.43%** | 1.65% | ×3.8 |
+| A_b | 0.27% | ~0.05% | ~×6 |
+| E field | 0.030% | ~0.0005% | **~×60 — the real headroom** |
+| transverse diffusion | 1.46% | ~0.4–0.5% (unstable rows: indicative) | ~×3 |
+| longitudinal diffusion | 7.41% | ~0.9% (indicative) | ~×8, but see below |
+| **lifetime** | **1.65%** | **0.9–1.1%** | **×1.5–1.8 — nearly at the limit** |
+| position | 165 → **105 µm** (`TS1`) | repr. floor ~80 µm | — |
 
-**Relevance:** (i) this supersedes the "4–16× from the floor" claim in the handoff — the true range
-is **3.3–71×**, and E field, which we call "solved", is actually the furthest from what the data
-supports. (ii) The floors are what a publication's error bars must be measured against. Caveat,
-stated plainly: these are still **conditional** on geometry and dE/dx (lower bounds); the full
-marginalisation is the Schur-complement build below.
+*Floors are still conditional on geometry; marginalising it (needs remat through the simulation)
+can only raise them further — every "distance" above is an upper bound.*
 
 ---
 
-## Finding 3 — the central degeneracy, finally quantified
+## The five load-bearing results
 
-Panel (b) of fig 71: the calibration correlation matrix, never measured before in this campaign.
-**A_b ↔ lifetime = −0.71.** Both control how much charge reaches the pixels — A_b at production,
-lifetime during drift — so the fit trades one against the other nearly freely. This single number
-explains a season of observations: why lifetime co-adapts, why its errors are seed-dependent, why
-every loss improvement seemed to come at its expense.
+**1. The production recipe (figs 67–68, 72).** `TS1` — warm-start everything from `BT2`, freeze
+calibration, re-anneal geometry+dE/dx 10 000 it — beats the 2×-cost `G20K` on the objective and is
+confirmed **6/6 seeds**: position −55.1 ± 2.1 µm, loss −756 ± 55. Stage 2 (release calibration)
+trades rather than wins → optional. The 4 000-it shortcut costs +10 µm / +378 loss (3/3): schedule
+compression cuts total optimiser travel. **Adopt `TS1` at 10 000 iterations.**
 
-It costs exactly what it should: marginalising over the other calibration parameters inflates the
-lifetime and A_b error bars by **×1.67** each — the two parameters joined by the −0.71 — so the
-honest lifetime 1σ is **0.43%, not 0.26%**.
+**2. No barrier to truth (fig 69).** The joint fit→truth line is monotone downhill in every arm and
+seed, minimum *at* truth. Fits stop because the annealed LR runs out of step size in an
+ill-conditioned valley. `TS1` closes 86–87% of the baseline's gap.
 
-**Can the correlation be exploited?** We checked, honestly: knowing A_b *perfectly* would tighten
-lifetime by 30% (0.43 → 0.30%), but a realistic external A_b constraint does almost nothing — even a
-0.05%-wide prior only moves lifetime to 0.41%, because our own fit already determines A_b to 0.027%
-conditionally. **The lever is not an external prior; it is breaking the degeneracy inside the
-forward model** (e.g. anything that separates production-charge effects from drift-attenuation
-effects, such as the drift-profile information already explored earlier in the campaign).
+**3. Uncertainties come from curvature, not re-fitting (figs 70–71).** Re-fit profiling fails by
+×2 105 (optimiser landing noise ≫ signal). The FD-gradient Hessian is validated against an
+independent scan to 1–2%, and exposed that the old scan-based floors for A_b and E field were
+measured outside the quadratic region (E field's was 7× too large).
 
----
+**4. The ladder (fig 72).** Marginalising dE/dx exactly (banded+rank-1, direct solve — after three
+documented failures: 129 GB, 8.3 GB-per-tangent, FD-CG divergence) raises the lifetime floor to
+0.9–1.1%. **A_b↔lifetime = −0.71 conditional, −0.83 marginalised**: the trade partly routes through
+the dE/dx field. This is the campaign's central degeneracy, quantified.
 
-## Finding 4 — how *not* to measure uncertainties (kept because it is instructive)
-
-![Profile](plots/noise_report/fig70_profile.png)
-
-The textbook route — profile likelihood by re-fitting at pinned parameter values — **fails by a
-factor of 2 105** here, and the noise budget shows it can never work in this setting: each profile
-point is an independent stochastic re-optimisation of ~9 000 nuisance parameters, and where it
-*lands* scatters more in loss (41 nats/batch between points) than the entire lifetime signal across
-a ±10% grid (7.5 nats/batch). Averaging it away would need ~4 million times more sampling.
-
-**Relevance:** this is why fig 71 uses curvature, and it is a general lesson for any differentiable-
-simulation fit with a large nuisance space: **uncertainties must come from derivatives at the fitted
-point, not from re-fitting.**
+**5. Longitudinal diffusion is not a standalone parameter (fig 72c).** Its conditional optimum sits
+10–44% *below* truth and moves further away as nuisances improve; since the joint minimum is at
+truth, other calibration parameters compensate it. Its 7.4% error is a symptom of entanglement, not
+a parameter-specific failure.
 
 ---
 
-## Finding 5 — the production recipe question is settled (with one surprise)
+## What would move the needle now (ranked)
 
-![TS2 slopegraph](plots/noise_report/fig68_ts2.png)
+**1. Break the A_b↔lifetime degeneracy in the forward model.** The only route to a better lifetime
+(external A_b priors are shown ineffective — even a 0.05% prior moves lifetime 0.43 → 0.41%).
+`schDP` — the drift-profile arm's curvature, running now — is the first concrete test: does
+dpw = 1e6 reduce the −0.83? Fit-quality cost is already measured at zero.
 
-The two-stage recipe (freeze calibration → re-anneal nuisances → release calibration):
+**2. Go after E field's ~×60 headroom.** The one parameter with a large, *stable* measured gap
+between achieved and floor. Nothing has ever been tuned for it because 0.03% looked "solved".
 
-- **Stage 1 (`TS1`) does essentially all the work**: loss 9 009 → 8 072, position 165 → 105 µm, at
-  13.5 h — beating the 26.4 h `G20K` on the objective on 3/3 seeds. It also converges by iteration
-  ~3 500, so a ~5.4 h variant likely exists.
-- **Stage 2 (`TS2`) trades rather than wins**: it buys transverse diffusion (−0.93, 3/3) and gives
-  back position (+2.7 µm, 0/3); against `G20K` at equal compute it wins the loss and loses
-  transverse diffusion. **Treat stage 2 as optional.**
+**3. Remat through `simulate_signals`.** One engineering task unlocks both remaining builds: the
+geometry marginalisation (completing the error bars) and the preconditioner (the measured remedy
+for the ill-conditioned valley). Until then, geometry-conditional floors are lower bounds.
 
-**Relevance:** `TS1` is the configuration to adopt and confirm at n = 6. Note the arms now differ by
-*less than the seed-to-seed spread* — visible in fig 68's fanned lifetime panel — which is itself
-evidence that squeezing the optimiser further is done.
+**4. Real-data validation.** The simulation-on-simulation programme is converged enough to freeze:
+recipe (`TS1`), error bars (ladder), and known caveats (long. diffusion entanglement). The next
+qualitatively new information is real detector hits.
+
+**Not worth further effort:** longer runs, schedule variants, block orderings, re-fit profiling,
+external priors on A_b — each now has a measured null or a measured wall behind it.
 
 ---
 
-## What was corrected along the way (so stale numbers don't circulate)
+## Corrections ledger (so stale numbers don't circulate)
 
-| old claim | corrected to | where |
+| claim | corrected to | when |
 |---|---|---|
-| "every parameter 4–16× from its floor" | **3.3–71×**; E field floor was 7× too large | fig 71 |
-| lifetime 1σ ≈ 0.26% (conditional scan) | **0.43%** once calibration correlations are included | fig 71 |
-| "lifetime is objective-limited at ~2%" | retracted earlier: the objective **prefers truth**; the error is reachability | fig 66 (corrected) → fig 69 |
-| two-stage recipe as production candidate | stage 1 only; stage 2 optional | fig 68 |
+| "4–16× from the statistical floor" | 3.3–71× (conditional) → and for lifetime **×1.5–1.8** after marginalisation | figs 71→72 |
+| lifetime 1σ ≈ 0.26% | 0.43% (calib corr) → **0.9–1.1%** (dE/dx marg) | figs 71→72 |
+| E field floor 0.003% | 0.0004% — old scan outside the quadratic region | fig 71 |
+| "lifetime objective-limited at ~2%" | retracted; objective prefers truth, error is reachability | fig 66 corr. |
+| "TS1 converges by ~3 500 → 5.4 h variant free" | falsified: 4 000-it run is +10 µm / +378 loss | fig 72 |
+| two-stage recipe as production | stage 1 only; stage 2 optional | fig 68 |
 
----
-
-## The path forward, ranked
-
-**1. Build the second-order machinery.** Everything above converges on it:
-   - **Schur complement** of the full Hessian over the ~9 000 nuisances → full (not conditional)
-     error bars. Reuses the CG/HVP machinery already written for the geometry block.
-   - The same objects, used as a **preconditioner**, are the measured remedy for the
-     ill-conditioned valley — the only route left to the 1.3–2.3% of loss still on the table.
-
-**2. Adopt `TS1`; confirm at n = 6 and test the 4 000-iteration (~5.4 h) variant.** ~9 cheap jobs.
-
-**3. Attack the A_b↔lifetime degeneracy in the forward model**, not with external priors (shown
-   ineffective). The drift-profile direction from earlier in the campaign is the natural candidate,
-   now with a quantified target: reduce |ρ| from 0.71 and the lifetime error bar shrinks with it.
-
-**4. Longitudinal diffusion** remains the worst-recovered parameter (7.4%, floor 0.80%, ×9.3) and
-   has never had a dedicated diagnosis.
-
-*Not worth more effort:* longer runs, schedule variants, block orderings — the arms now differ by
-less than seed scatter, and fig 69 shows why: the limit is conditioning, not effort.
+**Pending:** `schDP` (drift-profile vs the −0.83) — 2 jobs running, ~1–2 h.

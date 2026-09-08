@@ -141,11 +141,19 @@ guess/target noise mismatch and re-ran the stage ladder with electronics noise O
   mid-oscillation sample; all three arms sit within **0.4%** on the objective. The *degeneracy
   matrix* itself is unaffected (evaluation-only), but acting on it via alternation is now an open
   question, not a result. The fix is one flag: `SCILRDECAY` 0.91 → 0.73.
-- **WE ARE NOT STATISTICS-LIMITED ANYWHERE — and by more than we thought (§6w, `HESS`).** The
-  calibration Hessian, validated against the fig 58 scan to 1–2%, puts every parameter **3.3–71×**
-  from its 1σ floor (superseding the 4–16× previously quoted; E field is 71× off, not 11×, because
-  the old scan-based floor was 7× too large). It also delivers the first calibration correlation
-  matrix: **A_b and lifetime are 71% anticorrelated**, which inflates both their error bars by 1.67×.
+- **LIFETIME IS NEARLY STATISTICS-LIMITED — the "far from the floor" story ends here (§6w, `SCH*`).**
+  The floors climb as nuisances are marginalised: lifetime **0.30% (conditional) → 0.58%
+  (calibration correlations) → 0.9–1.1% (dE/dx marginalised, exact)** against 1.65% achieved —
+  **×1.5–1.8 away, with geometry still unmarginalised.** This supersedes both the "4–16×" and the
+  "3.3–71×" figures for lifetime. E field remains genuinely far from its floor (~×60); A_b ~×6.
+  Only reducing the nuisance burden or breaking the degeneracy can now improve lifetime — not
+  optimising harder.
+- **THE A_b↔LIFETIME DEGENERACY IS −0.71 CONDITIONAL AND DEEPENS TO −0.83 UNDER MARGINALISATION
+  (§6w).** Part of the trade routes through the dE/dx field. The first calibration correlation
+  matrix this campaign has had; whether drift-profile information reduces it is `schDP`, pending.
+- **THE PRODUCTION RECIPE IS `TS1`, CONFIRMED AT n = 6/6 (§6w):** position −55.1 ± 2.1 µm, loss
+  −756 ± 55 vs `BT2`, every seed. The 4 000-iteration variant costs +10 µm and +378 loss (3/3) —
+  schedule compression cuts total optimiser travel — so 10 000 it / 13.5 h is the recommendation.
 - **WE ARE NOT STATISTICS-LIMITED ANYWHERE (§6w).** From the curvature of the objective at the
   `BT2` fit, every parameter sits **4–16×** from its statistical floor: A_b 0.017% vs 0.27%
   achieved, E field 0.003% vs 0.03%, tran. diff. 0.373% vs 1.48%, long. diff. 0.722% vs 7.45%,

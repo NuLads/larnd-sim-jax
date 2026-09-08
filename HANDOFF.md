@@ -3,7 +3,7 @@
 **Repo:** `larnd-sim-jax`, branch `dedx_soft_barrier` (many commits ahead of `origin`, **not pushed**)
 **Full detail:** `NOISE_CAMPAIGN_REPORT.md` (long) and `NOISE_CAMPAIGN_DIGEST.md` (figure-by-figure,
 67 figures). Both are also published to the Obsidian vault under `06_Analyses/`.
-**As of:** 1 September 2026. Nothing is running; the queue is empty. `TS2` completed 1 Sep — see finding 3 and §5.
+**As of:** 8 September 2026. See `FINDINGS_SYNTHESIS.md` for the current state of play — the September studies (figs 69–72) supersede several numbers below, most importantly: **lifetime is ×1.5–1.8 from its (dE/dx-marginalised) floor, not 3.8×**; `TS1` is confirmed at n = 6/6 as the production recipe; the 4 000-iteration variant is NOT free; and the A_b↔lifetime degeneracy is −0.71 → −0.83 under marginalisation.
 
 ---
 

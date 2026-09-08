@@ -39,8 +39,13 @@ cross-check that reframed the whole thing.
   against BT2's 8.0e−5 (×700) and A_b still wanders ±0.13 vs BT2's ±0.001: the "×2.3" compared a
   frozen endpoint against a mid-oscillation sample, and all three arms sit within 0.4% on the
   objective. Fig 58's matrix is unaffected; acting on it is now open, not settled.
-- **WE ARE NOT STATISTICS-LIMITED ANYWHERE (fig 58).** Every parameter sits 4–16× from its
-  statistical floor. None of the remaining error is irreducible.
+- **LIFETIME IS NEARLY STATISTICS-LIMITED (figs 71–72).** The floor climbs as nuisances are
+  marginalised — 0.30 → 0.58 → **0.9–1.1%** vs 1.65% achieved, **×1.5–1.8 away with geometry still
+  unmarginalised** — superseding fig 58's "4–16×" for lifetime. E field stays far from its floor
+  (~×60). The A_b↔lifetime degeneracy is −0.71 conditional, deepening to −0.83 marginalised.
+  Improving lifetime now means reducing the nuisance burden or breaking the degeneracy.
+- **THE PRODUCTION RECIPE IS TS1, CONFIRMED n = 6/6 (fig 72):** −55.1 ± 2.1 µm, loss −756 ± 55 vs
+  BT2. The 4 000-it variant costs +10 µm / +378 loss; 10 000 it is the recommendation.
 - **GEOMETRY IS OPTIMISER-LIMITED AND HOLDS MOST OF THE INFORMATION (figs 56, 58).** Its optimum is
   α* = 0.988 with no shrinkage, it is worth 5.1× the dE/dx question, and it is the dominant
   degeneracy — while A_b and E field are decoupled from both nuisance blocks.
