@@ -22,6 +22,12 @@ anticorrelated. The frontier is no longer the optimiser — it is the degeneracy
 
 ---
 
+![The uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
+
+*Fig 72 — the figure behind the scoreboard. Panel (a): each marginalisation raises the floor, and
+lifetime's achieved error (dotted) is nearly on top of the final rung. Panel (b): the A_b↔lifetime
+degeneracy deepening. Panel (c): longitudinal diffusion's displaced, entangled axis.*
+
 ## The scoreboard
 
 | parameter | achieved (`BT2`, mean \|err\|, n = 6) | 1σ floor (dE/dx-marginalised) | distance |
@@ -46,14 +52,36 @@ confirmed **6/6 seeds**: position −55.1 ± 2.1 µm, loss −756 ± 55. Stage 2
 trades rather than wins → optional. The 4 000-it shortcut costs +10 µm / +378 loss (3/3): schedule
 compression cuts total optimiser travel. **Adopt `TS1` at 10 000 iterations.**
 
+![TS1 — the production recipe](plots/noise_report/fig67_ts1.png)
+
+*Fig 67 — the recipe. Panel (b) is the efficiency frontier: `TS1` reaches a lower loss than the
+26 h `G20K` at 13.5 h. Panel (f): its calibration is `BT2`'s, frozen — the fit gain, not a
+calibration gain. Since confirmed at n = 6/6.*
+
 **2. No barrier to truth (fig 69).** The joint fit→truth line is monotone downhill in every arm and
 seed, minimum *at* truth. Fits stop because the annealed LR runs out of step size in an
 ill-conditioned valley. `TS1` closes 86–87% of the baseline's gap.
+
+![No barrier](plots/noise_report/fig69_fullpath.png)
+
+*Fig 69 — the fit→truth path with all three blocks moving together: monotone downhill everywhere,
+minimum AT truth (dashed red). The fits stop because the annealed learning rate runs out of step
+size, not because the gradient vanishes.*
 
 **3. Uncertainties come from curvature, not re-fitting (figs 70–71).** Re-fit profiling fails by
 ×2 105 (optimiser landing noise ≫ signal). The FD-gradient Hessian is validated against an
 independent scan to 1–2%, and exposed that the old scan-based floors for A_b and E field were
 measured outside the quadratic region (E field's was 7× too large).
+
+![Why curvature and not re-fitting](plots/noise_report/fig70_profile.png)
+
+*Fig 70 — the method boundary. Re-fit profiling is ×2 105 too noisy and cannot be averaged away;
+the noise is the optimiser's landing point, not the data.*
+
+![The validated Hessian](plots/noise_report/fig71_hessian.png)
+
+*Fig 71 — the instrument that works. Panel (a): the Hessian reproduces an independent scan to 1–2%
+where that scan is trustworthy. Panel (b): the A_b↔lifetime correlation, −0.71 conditional.*
 
 **4. The ladder (fig 72).** Marginalising dE/dx exactly (banded+rank-1, direct solve — after three
 documented failures: 129 GB, 8.3 GB-per-tangent, FD-CG divergence) raises the lifetime floor to
@@ -73,6 +101,12 @@ a parameter-specific failure.
 (external A_b priors are shown ineffective — even a 0.05% prior moves lifetime 0.43 → 0.41%).
 `schDP` — the drift-profile arm's curvature, running now — is the first concrete test: does
 dpw = 1e6 reduce the −0.83? Fit-quality cost is already measured at zero.
+
+![The degeneracy matrix](plots/noise_report/fig58_degeneracy_matrix.png)
+
+*Fig 58 — for orientation on move 1: which calibration parameter couples to which nuisance block.
+A_b and E field are decoupled from both nuisances; the A_b↔lifetime coupling is internal to the
+calibration block, which is why it survives every nuisance improvement.*
 
 **2. Go after E field's ~×60 headroom.** The one parameter with a large, *stable* measured gap
 between achieved and floor. Nothing has ever been tuned for it because 0.03% looked "solved".
