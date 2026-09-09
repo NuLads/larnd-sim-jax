@@ -3247,6 +3247,58 @@ optimiser's landing point.
 **Seed 1 was not submitted.** The pilot answered the question — a second seed would have produced a
 second unresolvable curve at another 30 GPU-hours.
 
+### The data-replica ensemble: is the bias real, or one sample? (`DSREP`, `schDP`)
+
+![Replica ensemble](plots/noise_report/fig73_replica_ensemble.png)
+
+**The question** (long overdue, it turned out): are the biases we see intrinsic to the procedure, or
+fluctuations of the input data? **It had never been asked**, and the reason is itself a finding:
+`--data_seed` was a **silent no-op for the entire campaign**. The load-time pre-trim keeps only the
+file's first ~40.8k cm and runs *before* the event selection, so every seed selected the same pool —
+verified: three data seeds produced bit-identical batch sets. **All ~120 campaign fits share one
+physical track sample.** Fixed by skipping the pre-trim under random selection; verified end-to-end
+(600 events/seed from the 93 533-event pool, 0.33% pairwise overlap).
+
+**The study:** truth pinned at the seed-0 draw, 8 independent track samples, full `BT2` fits.
+Ensemble mean − truth = intrinsic bias; spread = data fluctuation; and the campaign's fixed sample
+can be located within the replica distribution.
+
+| parameter | ensemble (mean ± SE) | significance | fixed sample | verdict |
+|---|---|---|---|---|
+| A_b | +0.061 ± 0.042 | 1.5σ | +0.47 | **the "6/6-positive A_b bias" was THE SAMPLE** (3.5σ off) |
+| E field | −0.036 ± 0.006 | 5.9σ | −0.03 | intrinsic, tiny |
+| **lifetime** | **+8.57 ± 1.60** | **5.4σ, 8/8 positive** | **−3.04** | **large intrinsic bias; the fixed sample is a 2.6σ low outlier** |
+| long. diffusion | +14.0 ± 3.4 | 4.1σ, 8/8 positive | +7.0 | large intrinsic bias |
+| tran. diffusion | +1.09 ± 0.49 | 2.2σ | +1.03 | suggestive |
+
+**Two campaign-level conclusions, one in each direction.**
+
+**(i) The A_b bias evaporates.** The +0.27%, 6/6-positive signal that motivated prior-shape work was
+common-mode from the single shared sample. On random samples A_b is unbiased at the 0.04% level.
+
+**(ii) Lifetime is far worse than we believed.** At this truth, the procedure on random samples is
+biased **+8.6%** — and the campaign's fixed sample, giving −3.0% at the same truth, sits at the
+**2.6σ low tail (p ≈ 1%)**. The consistently small lifetime errors across all six truth seeds were
+substantially the luck of that one sample. The obvious confound was checked and refuted: the file's
+first events are ordinary 50–280 cm muons (file median 99 cm), so this is not a topology difference.
+
+**And the error budget is reframed a second time (panel c).** The sample-to-sample spread exceeds
+the within-sample dE/dx-marginalised floor by ×2.5–35 (lifetime: spread 4.5% vs floor ~1%). Fig 72's
+"lifetime is nearly statistics-limited" survives only per-sample: **across samples, the dominant
+term is how the bias itself moves with sample composition** — the drift-depth make-up (lever arm) of
+whichever tracks were drawn.
+
+**`schDP` closes the drift-profile question with a null.** The conditional A_b↔lifetime correlation
+is untouched on both seeds (−0.765 → −0.763, −0.785 → −0.779); seed 1's apparent marginal
+improvement (−0.40) is a PSD-projection artefact. Consistent with fig 58: the coupling is direct
+(charge normalisation), so a dE/dx-block penalty cannot reach it. dpw = 1e6 costs nothing and buys
+nothing.
+
+**Caveats and the confirming step.** One truth point; Arm B (4 replicas at the seed-1 truth,
+lifetime 1160 µs) tests whether the +8.6% is truth-dependent — the lever-arm mechanism predicts it
+should grow at short lifetime. And a residual systematic difference between "first events" and
+"random events" beyond topology cannot be fully excluded.
+
 ### The uncertainty ladder: dE/dx marginalised, and what it reframes (`SCH*`, `LDSCAN`, `TS1` n=6)
 
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)

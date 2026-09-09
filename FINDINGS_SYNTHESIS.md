@@ -135,4 +135,13 @@ external priors on A_b — each now has a measured null or a measured wall behin
 | "TS1 converges by ~3 500 → 5.4 h variant free" | falsified: 4 000-it run is +10 µm / +378 loss | fig 72 |
 | two-stage recipe as production | stage 1 only; stage 2 optional | fig 68 |
 
-**Pending:** `schDP` (drift-profile vs the −0.83) — 2 jobs running, ~1–2 h.
+| A_b intrinsic bias +0.27% (6/6 seeds) | **the sample** — null (+0.06 ± 0.04) on 8 data replicas | fig 73 |
+| "lifetime nearly statistics-limited" | per-sample only: on random samples the procedure is biased **+8.6 ± 1.6%** at the seed-0 truth, and sample-composition variation (spread 4.5%) dominates the budget | fig 73 |
+| drift-profile term as a degeneracy breaker | null — conditional correlation untouched on both seeds | `schDP` |
+
+**⚠️ 9 September addendum (fig 73):** `data_seed` was a silent no-op campaign-wide (IO pre-trim ran
+before event selection), so **all previous fits share one track sample** — and that sample turns out
+to sit at the 2.6σ *favourable* tail for lifetime. On 8 independent samples at pinned truth the
+procedure shows a **+8.6 ± 1.6% lifetime bias**. The frontier is unchanged in kind (the degeneracy)
+but the achieved-lifetime numbers quoted above inherit a sample-luck caveat until Arm B (a second
+truth point) reports.

@@ -1140,6 +1140,30 @@ GGN/Newton code from the dE/dx block is the start.
 for 30 GPU-hours.
 
 
+![Replica ensemble](plots/noise_report/fig73_replica_ensemble.png)
+
+**Tests** — is the bias intrinsic or a data fluctuation? Truth PINNED at the seed-0 draw, ONLY the
+track sample varied: 8 independent BT2 fits on random 600-event draws (0.33% overlap). **Enabled by
+fixing a silent IO defect: data_seed was a no-op campaign-wide** (the load-time pre-trim ran before
+event selection → every seed selected the same pool → all ~120 campaign fits share ONE track
+sample).
+**Concludes — THE A_b BIAS WAS THE SAMPLE.** Ensemble +0.061 ± 0.042 (1.5σ = null); the fixed
+sample's +0.47 sits 3.5σ off the replica distribution. The "6/6-positive" signal was common-mode.
+**Concludes — LIFETIME IS FAR WORSE THAN BELIEVED.** Ensemble **+8.57 ± 1.60% (5.4σ, 8/8
+positive)** at this truth, while the fixed sample gave −3.0% at the SAME truth — a **2.6σ low
+outlier (p ≈ 1%)**. The campaign's small lifetime errors were substantially one sample's luck.
+Topology confound checked and refuted (first events are ordinary 50–280 cm muons).
+**Concludes — the error budget reframes AGAIN (panel c).** Sample-to-sample spread exceeds the
+within-sample floor ×2.5–35 (lifetime 4.5% vs ~1%): fig 72's "nearly statistics-limited" holds only
+per-sample; ACROSS samples, composition-driven bias variation dominates. long_diff: +14.0 ± 3.4
+intrinsic. eField: −0.036 ± 0.006, intrinsic but tiny.
+**Concludes — schDP is a NULL:** conditional A_b↔lifetime correlation untouched on both seeds
+(−0.765→−0.763, −0.785→−0.779); the seed-1 marginal "improvement" is a PSD-projection artefact. A
+dE/dx-block penalty cannot reach a direct calibration-calibration coupling. dpw=1e6 buys nothing.
+**Next** — Arm B (4 replicas at the seed-1 truth, 1160 µs): is the +8.6% truth-dependent, as the
+lever-arm mechanism predicts?
+
+
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
 **Tests** — the dE/dx block marginalised out of the calibration covariance, EXACTLY: banded+rank-1
