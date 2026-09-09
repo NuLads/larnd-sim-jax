@@ -95,7 +95,10 @@ DEDX_START_ITER=0
 DEDX_FREEZE_ITER=${SCIDEDXFREEZE:-$((ITERATIONS+200))}
 # 0 = calibration live from iteration 0 (normal). 1 = frozen for the whole run, expressed as a
 # start-iteration beyond the end so it can never degrade into a partial freeze.
-CALIB_START_ITER=0
+# SCICALIBSTART: gate calibration off until this iteration (0 = live from the start). The freeze
+# knob overrides it. Note plain LARND_CALIB_START_ITER in --export is CLOBBERED by the export
+# below -- use this knob.
+CALIB_START_ITER=${SCICALIBSTART:-0}
 [ "${SCICALIBFREEZE}" = "1" ] && CALIB_START_ITER=$((ITERATIONS+200))
 # dEdx LR annealing: final LR as a FRACTION of the initial one, reached at the end of the run.
 # Empty = constant LR = previous behaviour (the dEdx block historically never annealed at all,
