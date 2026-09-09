@@ -3299,6 +3299,36 @@ lifetime 1160 µs) tests whether the +8.6% is truth-dependent — the lever-arm 
 should grow at short lifetime. And a residual systematic difference between "first events" and
 "random events" beyond topology cannot be fully excluded.
 
+### The mechanism narrows: it is the LANDING POINT, not the objective (`TPREP`)
+
+The decisive test the replica study demanded: every "the objective prefers truth" result (figs 66,
+69) had been measured on the lucky fixed sample. Re-running the truth-point evaluation **on the
+biased replicas themselves** (reps 1, 7, 8 — biases +6.5, +14.6, +16.4%):
+
+| replica | lifetime bias | truth − fit | joint path | minimum |
+|---|---|---|---|---|
+| 1 | +6.5% | **−8.7%** (truth better) | monotone ↓ | at truth |
+| 7 | +14.6% | **−10.1%** (truth better) | monotone ↓ | at truth |
+| 8 | +16.4% | **−9.9%** (truth better) | monotone ↓ | at truth |
+
+**The objective is sound on typical samples too.** Truth wins by 9–10% everywhere, the path from
+each biased fit to truth is monotone downhill from the very first step (−0.9 to −1.0% already at
+α = 0.25, so the gradient at the landing point is *nonzero and points at truth*), and moving single
+blocks alone reproduces the familiar pattern (geometry alone helps, calibration/dE/dx alone hurt).
+
+> **So the +8.6% lifetime bias is a LANDING-POINT phenomenon.** The fits are not at stationary
+> points — they are where the annealed learning rate froze them, partway down an ill-conditioned
+> valley whose soft direction is the A_b↔lifetime degeneracy (−0.83). Where the early, hot phase of
+> the optimisation carries lifetime along that soft direction depends on the sample; the anneal
+> then locks it in. The ensemble says that landing distribution is wide (σ ≈ 4.5%) and off-centre
+> (+8.6%) — and the fixed sample happened to land low. This unifies figs 69 (stops on step size),
+> 71–72 (the soft direction), and 73 (the landing varies with sample), and it acquits both the
+> objective and the priors of *displacing the minimum*.
+
+**What it predicts:** anything that stiffens or re-centres the soft direction should shrink the
+bias — the drift-penalty dose–response fits (`dw8`/`dw1`, running) are exactly that test, and the
+preconditioner (the standing second-order build) is the general remedy.
+
 ### Replica convergence: not a pathology, and the obvious mechanism disfavoured (`DSREP`, fig 74)
 
 ![Replica convergence](plots/noise_report/fig74_replica_convergence.png)

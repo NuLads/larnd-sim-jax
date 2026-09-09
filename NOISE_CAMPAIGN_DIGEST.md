@@ -1181,6 +1181,19 @@ lifetime via the lever arm). The first version quoted +0.53% by using the SIM-IN
 convention (chord segmentation, ~0.4% lower systematically) — conventions matter. Re-centre to
 ~1.885; do not expect it to fix lifetime.
 
+**`TPREP` (no figure yet — folds into the mechanism figure once the drift fits land).**
+**Tests** — the truth-point evaluation ON the biased replicas (1, 7, 8), since all fig 66/69
+evidence came from the lucky fixed sample.
+**Concludes — the objective is sound on typical samples too:** truth beats each biased fit by
+**9–10%**, the joint path is monotone downhill with a NONZERO gradient at the fit (−1% by α = 0.25),
+minimum at truth, on all three.
+**THE MECHANISM NARROWS — it is the LANDING POINT.** The fits sit where the annealed LR froze them
+along the ill-conditioned A_b↔lifetime soft direction; where the hot early phase carries lifetime
+depends on the sample; the ensemble's landing distribution is wide (σ ≈ 4.5%) and off-centre
+(+8.6%), and the fixed sample landed low. Unifies figs 69 + 71–73; acquits the objective AND the
+priors of displacing the minimum. Predicts: stiffen/re-centre the soft direction → bias shrinks —
+exactly what the running drift-penalty dose–response tests.
+
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
 **Tests** — the dE/dx block marginalised out of the calibration covariance, EXACTLY: banded+rank-1
