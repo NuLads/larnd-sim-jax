@@ -1195,6 +1195,19 @@ depends on the sample; the ensemble's landing distribution is wide (σ ≈ 4.5%)
 priors of displacing the minimum. Predicts: stiffen/re-centre the soft direction → bias shrinks —
 exactly what the running drift-penalty dose–response tests.
 
+**`CLSCAN` + trace timing (no figure yet — folds into the mechanism figure).**
+**Tests** — the conditional lifetime slice on reps 7/8, and when the bias forms in time.
+**Concludes — with nuisances at FIT the slice minimum is ON the fit** (+14.2/+16.6 = co-adaptation
+confirmed) — freezing everything else and profiling lifetime does NOT locate truth.
+**Concludes — with nuisances at TRUTH it still does not return** (+10/+18): dE/dx-at-truth pulls
+toward truth (14→8 on rep 7), geometry-at-truth pushes slightly AWAY, and the rest is held by the
+OTHER FOUR calibration parameters — the soft manifold is partly calibration-internal.
+**Concludes — the bias is an UNFINISHED RELAXATION.** Every replica overshoots +12..+40% in the hot
+phase (geometry still near its bad init), then descends toward truth as nuisances converge; the
+anneal truncates the descent. Fix candidates running on rep 8: hot8 (slower calib decay), late8
+(calibration gated until iter 2 000), gtru8 (geometry init at truth), dw8 (drift penalty ×2), plus
+deg7/8 to name the holding parameters.
+
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
 **Tests** — the dE/dx block marginalised out of the calibration covariance, EXACTLY: banded+rank-1

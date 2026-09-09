@@ -3299,6 +3299,42 @@ lifetime 1160 µs) tests whether the +8.6% is truth-dependent — the lever-arm 
 should grow at short lifetime. And a residual systematic difference between "first events" and
 "random events" beyond topology cannot be fully excluded.
 
+### The conditional slice on biased replicas, and when the bias forms (`CLSCAN`)
+
+Two follow-ups sharpen the landing-point picture — and break part of it, informatively.
+
+**The conditional lifetime slice (the "freeze everything else at fit, scan lifetime" question).**
+On reps 7 and 8 (biases +14.6 / +16.4%):
+
+| nuisance state | rep 7 slice minimum | rep 8 slice minimum |
+|---|---|---|
+| geometry FIT, dE/dx FIT | **+14.2%** (= the fit) | **+16.6%** (= the fit) |
+| geometry TRUE, dE/dx FIT | +16.3% | +20.4% |
+| geometry FIT, dE/dx TRUE | **+7.9%** | +14.7% |
+| geometry TRUE, dE/dx TRUE | +10.0% | +18.4% |
+
+With nuisances at the fit, the slice minimum sits **on the fit** — the co-adaptation prediction,
+confirmed. But with both nuisances at *truth* the minimum does **not** return to truth: it stays at
++10 to +18%. The decomposition: **dE/dx-at-truth pulls lifetime substantially toward truth**
+(rep 7: 14 → 8), **geometry-at-truth pushes it slightly away**, and the residual is held by the
+**other four calibration parameters at their fitted values** — the compensation is partly
+*calibration-internal* (consistent with the −0.83 A_b↔lifetime and the long-diffusion entanglement),
+not only in the nuisance blocks. The soft manifold spans all three blocks at once.
+
+**When the bias forms (zero-cost, from the replica histories).** Every replica **overshoots
+lifetime upward enormously in the hot phase** — +12 to +40% by iteration 500–1 000, while geometry
+is still near its bad linear-guess init — then **relaxes back toward truth as the nuisances
+converge, and the calibration anneal truncates the relaxation partway**. Rep 7: +40 → +28 → +17 →
++14.6, still descending at the last checkpoint. The final "bias" is literally the unfinished
+descent, frozen at whatever the schedule allowed.
+
+> **Fix candidates now under test on the worst replica (rep 8, +16.4%), all landing overnight:**
+> `hot8` — calibration decay halved in the exponent (relaxation gets more travel);
+> `late8` — calibration gated off until iteration 2 000 (skip the overshoot phase entirely) with
+> the slower decay; `gtru8` — geometry initialised at truth (removes the overshoot's suspected
+> cause); `dw8@1e3/1e4` — the drift-axis penalty dose–response. Plus `deg7/8`, the fig 58 analogue
+> on the biased replicas, to name which calibration parameters hold the residual.
+
 ### The mechanism narrows: it is the LANDING POINT, not the objective (`TPREP`)
 
 ![TPREP](plots/noise_report/fig75_tprep.png)
