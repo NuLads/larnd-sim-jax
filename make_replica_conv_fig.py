@@ -12,10 +12,12 @@ bias. The data says no: across replicas the mismatch does not correlate with the
 (r = -0.10), and the simple charge-trade sign is the WRONG WAY (target > true mean should push
 the fitted lifetime DOWN, the bias is UP).
 
-WHAT (e) DOES ESTABLISH is a systematic defect worth fixing anyway: the imposed target exceeds
-the true mean of EVERY ONE of the 8 random samples (+0.44 to +0.71%, mean +0.53), because 1.887
-was tuned on the unrepresentative fixed sample (true mean 1.8803, the highest of all nine). The
-constraint is mis-centred for typical data even though it is not, by itself, the lifetime story.
+WHAT (e) DOES ESTABLISH, with the convention now right: the imposed 1.887 IS the fixed sample's
+own target-matched true mean (1.8869), i.e. the target was tuned on the one sample the campaign
+ever used -- and that sample sits at the top of the sample distribution (replicas: 1.8852 +-
+0.0011). So the target exceeds every random sample's true mean, but only by ~+0.10% in the
+relevant convention (lever arm -> ~+1.2% of lifetime, small against the +8.6% bias). Re-centre it
+to ~1.885 when convenient; do not expect it to fix lifetime.
 
 Panel (f): final position vs lifetime error gives r = +0.52 -- suggestive that harder-to-fit
 samples bias lifetime more, but far from significant at n = 8 (p ~ 0.19). The one visible
@@ -55,14 +57,22 @@ def load(path):
     d['pos'] = sm(np.ravel(h['pos_residual_iter']) * 1e4)
     d['mae'] = sm(np.asarray([x for x in h['dedx_mae_truth_iter'] if x == x], float))
     d['mean'] = sm(np.asarray([x for x in h['mean_dedx_iter'] if x == x], float))
-    # the SAMPLE's true length-weighted mean dEdx
-    num = den = 0.0
-    for b, td in h['true_dedx_cache'].items():
-        l = np.asarray(h['seg_dx_cache'][b], float)[:len(td)]
-        td = np.asarray(td, float)
-        ok = (td > 0) & (l > 0)
-        num += float((l[ok] * td[ok]).sum()); den += float(l[ok].sum())
-    d['true_mean'] = num / den
+    # the SAMPLE's true length-weighted mean dEdx, in BOTH conventions. The one that matters for
+    # the mean constraint is TARGET-MATCHED: the likelihood pulls the fitted per-segment dEdx
+    # toward the arc-length-matched TARGET truth, so that is the mean the imposed 1.887 competes
+    # with. The SIM-INPUT convention (the guess file's own dEdx on its chord segmentation) sits a
+    # systematic ~0.4% lower on every sample -- a segmentation/matching offset, not physics -- and
+    # the first version of this figure used it by mistake, overstating the target mis-centering as
+    # +0.53% when it is +0.10% in the relevant convention.
+    for lab, key in [('true_mean_sim', 'true_dedx_cache'),
+                     ('true_mean', 'true_dedx_matched_cache')]:
+        num = den = 0.0
+        for b, td in h[key].items():
+            l = np.asarray(h['seg_dx_cache'][b], float)[:len(td)]
+            td = np.asarray(td, float)
+            ok = (td > 0) & (l > 0)
+            num += float((l[ok] * td[ok]).sum()); den += float(l[ok].sum())
+        d[lab] = num / den
     return d
 
 
@@ -121,9 +131,9 @@ a.plot(xs, b0 + b1 * xs, color=C['grey'], lw=1.6, ls=':')
 a.axhline(0, color=C['green'], lw=1.6); a.axvline(0, color=C['grey'], lw=1)
 a.set_xlabel('imposed ⟨dE/dx⟩ target − sample TRUE mean  (%)')
 a.set_ylabel('lifetime error (%)')
-a.set_title(f'(e) THE OBVIOUS MECHANISM, DISFAVOURED: mean-target mismatch vs\n'
-            f'lifetime error gives r = {r:+.2f} (and the wrong sign for a charge trade).\n'
-            f'But note: the imposed target exceeds the true mean of ALL 8 samples.',
+a.set_title(f'(e) THE OBVIOUS MECHANISM, DISFAVOURED: mean-target mismatch\n'
+            f'(target-matched convention) vs lifetime error: r = {r:+.2f}.\n'
+            f'The target still exceeds ALL 8 sample means, but only by ~+0.1%.',
             fontsize=9.0)
 
 # ---------------- (f) convergence quality does not predict the bias ----------------

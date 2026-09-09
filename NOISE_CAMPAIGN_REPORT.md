@@ -3319,10 +3319,17 @@ charge-scale error ×11 into lifetime. Tested directly (panel e): the mismatch d
 with the lifetime error across replicas (r = −0.10), and the simple charge-trade sign is the wrong
 way. Whatever drives the +8.6%, it is not the mean-target mis-centering.
 
-**3 — But that target IS mis-centred, and should be fixed regardless.** The imposed 1.887 exceeds
-the true mean of **every one of the 8 random samples** (+0.44 to +0.71%, mean +0.53) — because it
-was tuned on the unrepresentative fixed sample, whose true mean (1.8803) is the highest of all nine.
-A defect found, even if not the lifetime story.
+**3 — Where 1.887 comes from, and why it exceeds every sample's mean (corrected).** The imposed
+target **is the fixed sample's own true mean**: in the target-matched convention (the one the
+constraint competes with) that sample's true length-weighted ⟨dE/dx⟩ is 1.8869 — the target was
+tuned, via the §6u scan, on the one sample the campaign ever used. The random samples average
+1.8852 ± 0.0011, so the fixed sample sits at the top of the sample distribution and the target
+exceeds all 8 replicas — but only by **~+0.10%** in the relevant convention (lever arm → ~+1.2% of
+lifetime, small against the +8.6% bias). *A convention caution recorded here because it bit:* the
+first version of this figure used the **sim-input** truth (the guess file's dE/dx on its chord
+segmentation), which sits a systematic ~0.4% lower on every sample, and overstated the
+mis-centering as +0.53%. Re-centre the target to ~1.885 when convenient; do not expect it to fix
+lifetime.
 
 ### The uncertainty ladder: dE/dx marginalised, and what it reframes (`SCH*`, `LDSCAN`, `TS1` n=6)
 

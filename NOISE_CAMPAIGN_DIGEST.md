@@ -1174,9 +1174,12 @@ whose position PLATEAUS (~240 µm from it ~6 000). With r = +0.52 (n = 8, not si
 final position and lifetime error, sample "difficulty" may contribute — watch, don't conclude.
 **Concludes — the obvious mechanism is DISFAVOURED.** The fixed dE/dx mean target (1.887) vs each
 sample's true mean: r = −0.10 with lifetime error, and the charge-trade sign is the wrong way.
-**Concludes — but the target IS mis-centred:** it exceeds the true mean of ALL 8 random samples
-(mean +0.53%) because it was tuned on the unrepresentative fixed sample (1.8803, highest of nine).
-Fix it regardless.
+**Concludes — where 1.887 comes from (corrected):** it IS the fixed sample's own target-matched
+true mean (1.8869), tuned on the one sample via the §6u scan; the replicas average 1.8852 ± 0.0011,
+so the target exceeds all 8 — but only by **~+0.10%** in the relevant convention (~+1.2% of
+lifetime via the lever arm). The first version quoted +0.53% by using the SIM-INPUT truth
+convention (chord segmentation, ~0.4% lower systematically) — conventions matter. Re-centre to
+~1.885; do not expect it to fix lifetime.
 
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
