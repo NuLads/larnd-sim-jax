@@ -3301,6 +3301,8 @@ should grow at short lifetime. And a residual systematic difference between "fir
 
 ### The mechanism narrows: it is the LANDING POINT, not the objective (`TPREP`)
 
+![TPREP](plots/noise_report/fig75_tprep.png)
+
 The decisive test the replica study demanded: every "the objective prefers truth" result (figs 66,
 69) had been measured on the lucky fixed sample. Re-running the truth-point evaluation **on the
 biased replicas themselves** (reps 1, 7, 8 — biases +6.5, +14.6, +16.4%):

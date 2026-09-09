@@ -1181,7 +1181,8 @@ lifetime via the lever arm). The first version quoted +0.53% by using the SIM-IN
 convention (chord segmentation, ~0.4% lower systematically) — conventions matter. Re-centre to
 ~1.885; do not expect it to fix lifetime.
 
-**`TPREP` (no figure yet — folds into the mechanism figure once the drift fits land).**
+![TPREP](plots/noise_report/fig75_tprep.png)
+
 **Tests** — the truth-point evaluation ON the biased replicas (1, 7, 8), since all fig 66/69
 evidence came from the lucky fixed sample.
 **Concludes — the objective is sound on typical samples too:** truth beats each biased fit by
