@@ -3299,6 +3299,31 @@ lifetime 1160 µs) tests whether the +8.6% is truth-dependent — the lever-arm 
 should grow at short lifetime. And a residual systematic difference between "first events" and
 "random events" beyond topology cannot be fully excluded.
 
+### Replica convergence: not a pathology, and the obvious mechanism disfavoured (`DSREP`, fig 74)
+
+![Replica convergence](plots/noise_report/fig74_replica_convergence.png)
+
+Convergence of the loss, position and dE/dx across the 8 replicas, coloured by each replica's final
+lifetime error. Three things come out:
+
+**1 — The lifetime bias is not a convergence pathology.** Loss, position and dE/dx MAE descend with
+the same shape in every sample; the high-bias (red) samples are not distinguishable in (a)–(c) —
+with **one exception**: the worst-lifetime replica (+16.4%) is also the only one whose position
+*plateaus* (~240 µm from iteration ~6 000 while all others keep descending). Together with
+r = +0.52 between final position and lifetime error (panel f — suggestive, not significant at
+n = 8), sample "difficulty" may contribute, but cannot be concluded from this ensemble.
+
+**2 — The obvious mechanism is disfavoured.** The dE/dx mean constraint imposes the *same* target
+(1.887) on every sample while each sample's true mean differs — and the lever arm would amplify a
+charge-scale error ×11 into lifetime. Tested directly (panel e): the mismatch does **not** correlate
+with the lifetime error across replicas (r = −0.10), and the simple charge-trade sign is the wrong
+way. Whatever drives the +8.6%, it is not the mean-target mis-centering.
+
+**3 — But that target IS mis-centred, and should be fixed regardless.** The imposed 1.887 exceeds
+the true mean of **every one of the 8 random samples** (+0.44 to +0.71%, mean +0.53) — because it
+was tuned on the unrepresentative fixed sample, whose true mean (1.8803) is the highest of all nine.
+A defect found, even if not the lifetime story.
+
 ### The uncertainty ladder: dE/dx marginalised, and what it reframes (`SCH*`, `LDSCAN`, `TS1` n=6)
 
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)

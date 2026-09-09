@@ -1164,6 +1164,20 @@ dE/dx-block penalty cannot reach a direct calibration-calibration coupling. dpw=
 lever-arm mechanism predicts?
 
 
+![Replica convergence](plots/noise_report/fig74_replica_convergence.png)
+
+**Tests** — convergence of loss / position / dE/dx across the 8 replicas, coloured by each
+replica's final lifetime error, fixed sample dashed black.
+**Concludes — the lifetime bias is NOT a convergence pathology.** All samples descend identically
+in shape. One exception, honestly flagged: the worst-lifetime replica (+16.4%) is the only one
+whose position PLATEAUS (~240 µm from it ~6 000). With r = +0.52 (n = 8, not significant) between
+final position and lifetime error, sample "difficulty" may contribute — watch, don't conclude.
+**Concludes — the obvious mechanism is DISFAVOURED.** The fixed dE/dx mean target (1.887) vs each
+sample's true mean: r = −0.10 with lifetime error, and the charge-trade sign is the wrong way.
+**Concludes — but the target IS mis-centred:** it exceeds the true mean of ALL 8 random samples
+(mean +0.53%) because it was tuned on the unrepresentative fixed sample (1.8803, highest of nine).
+Fix it regardless.
+
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
 **Tests** — the dE/dx block marginalised out of the calibration covariance, EXACTLY: banded+rank-1
