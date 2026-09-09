@@ -1,41 +1,18 @@
-"""Fig 73 — the data-replica ensemble: the bias question answered, and the answer cuts both ways.
+"""Fig 73 (reworked for legibility) — the data-replica ensemble, one panel per conclusion.
 
-THE STUDY. Truth PINNED at the seed-0 draw; ONLY the track sample varies (data_seed 1-8, 600
-random events each from the 93,533-event pool, 0.33% pairwise overlap, verified before launch).
-8 independent BT2 fits. Enabled by fixing a silent IO defect: the load-time pre-trim ran before
-event selection, so data_seed had been a NO-OP for the entire campaign -- every one of its ~120
-fits shares ONE physical track sample (the file's first ~40.8k cm; topology checked ordinary).
+DESIGN: every parameter panel uses the SAME grammar, so any one of them reads in seconds --
+  green line   = truth (zero error)
+  blue dots    = the 8 replicas (independent track samples, truth pinned)
+  black marker = ensemble mean, with the +-SE band shaded
+  red star     = the campaign's single fixed sample (what every previous result used)
+Bias is real when the black band sits off the green line; the red star's position vs the blue
+cloud says whether the campaign's sample was representative. Linear axes throughout (the first
+version's symlog forest plot buried the story).
 
-WHAT THE ENSEMBLE SEPARATES. mean - truth = intrinsic bias of the procedure at this truth;
-spread = the data fluctuation; and the campaign's fixed sample can be located within the replica
-distribution.
-
-THE VERDICT, parameter by parameter:
-  A_b        +0.061 +- 0.042  (1.5 sigma)  -> NULL. The campaign's celebrated "6/6-positive
-             +0.27%" A_b bias does NOT reproduce on random samples: the fixed sample sits 3.5
-             sigma off the replica distribution. THE A_B BIAS WAS THE SAMPLE.
-  E field    -0.036 +- 0.006  (5.9 sigma)  -> real, tiny, matches the fixed sample. Intrinsic.
-  lifetime   +8.57 +- 1.60    (5.4 sigma, 8/8 positive)  -> a LARGE intrinsic bias at this truth
-             -- while the fixed sample gave -3.0% at the SAME truth, a 2.6-sigma low outlier
-             under the replica distribution (p ~ 1% two-sided). The campaign's small lifetime
-             errors were substantially the luck of one sample.
-  long.diff  +14.0 +- 3.4     (4.1 sigma, 8/8 positive)  -> large intrinsic bias, direction
-             consistent with the campaign's +7.4 mean.
-  tran.diff  +1.09 +- 0.49    (2.2 sigma)  -> suggestive positive bias, below decisive.
-
-AND THE SPREADS INDICT THE ERROR BUDGET: lifetime's sample-to-sample spread is 4.5%, x4.5 the
-dEdx-marginalised within-sample floor. The floor is the per-sample statistical limit; the spread
-includes how the bias itself moves with sample composition (drift-depth make-up, i.e. the lever
-arm). Fig 72's "lifetime is nearly statistics-limited" survives only in the narrow per-sample
-sense: ACROSS samples, composition-driven bias variation dominates the budget.
-
-CAVEATS, honestly: one truth point (Arm B at a second truth is the confirming step); and the fixed
-sample being 2.6-sigma low is uncomfortable enough that a further systematic difference between
-"first events" and "random events" cannot be fully excluded -- though the obvious one (topology)
-was checked and refuted: first events are ordinary 50-280 cm muons, median event length 99 cm
-file-wide.
+Study: truth pinned at the seed-0 draw; ONLY the track sample varies (data_seed 1-8, 600 random
+events each, 0.33% pairwise overlap). Enabled by fixing data_seed, a silent no-op campaign-wide.
 """
-import glob, os, pickle, re, io, contextlib
+import glob, os, pickle, io, contextlib
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -44,14 +21,13 @@ with contextlib.redirect_stdout(io.StringIO()):
     import robust_convergence as R
 
 OUT = 'plots/noise_report'
-C = dict(blue='#0072B2', orange='#E69F00', green='#009E73', red='#D55E00',
-         purple='#CC79A7', grey='#888888', ink='#222222')
-plt.rcParams.update({'font.size': 9, 'axes.grid': True, 'grid.alpha': .25,
+C = dict(blue='#0072B2', orange='#E69F00', green='#009E73', red='#D55E00', grey='#888888',
+         ink='#222222')
+plt.rcParams.update({'font.size': 10, 'axes.grid': True, 'grid.alpha': .22,
                      'axes.spines.top': False, 'axes.spines.right': False,
+                     'axes.spines.left': False,
                      'figure.dpi': 130, 'savefig.bbox': 'tight'})
 P = R.P
-PL = {'Ab': 'A$_b$', 'eField': 'E field', 'lifetime': 'lifetime',
-      'tran_diff': 'tran. diff.', 'long_diff': 'long. diff.'}
 FLOOR = {'Ab': 0.048, 'eField': 0.0005, 'tran_diff': 0.45, 'long_diff': 0.9, 'lifetime': 1.0}
 W = 200
 
@@ -64,80 +40,82 @@ def sm(v, w=W):
 
 def read(path):
     h = pickle.load(open(path, 'rb'))
-    d = {}
-    for p in P:
-        t = float(np.ravel(h[p + '_target'])[0])
-        d[p] = 100 * (np.median(sm(np.ravel(h[p + '_iter'])[1:])[-300:]) / t - 1)
-    return d
+    return {p: 100 * (np.median(sm(np.ravel(h[p + '_iter'])[1:])[-300:])
+                      / float(np.ravel(h[p + '_target'])[0]) - 1) for p in P}
 
 
 REP = {ds: read(glob.glob(f'fit_result/sci_full_DSREP{ds}/history_iter10000_*.pkl')[0])
        for ds in range(1, 9)}
 OLD = read(glob.glob('fit_result/sci_full_BT2/history_iter10000_*seed0.pkl')[0])
 
-fig, ax = plt.subplots(1, 3, figsize=(16.6, 5.6))
+PANELS = [
+    ('lifetime', 'LIFETIME — the bad news', 
+     'REAL bias: all 8 replicas land ABOVE truth (+8.6 ± 1.6%).\nThe campaign’s sample was a lucky outlier (p ≈ 1%).'),
+    ('Ab', 'A$_b$ — the good news',
+     'The famous “+0.27% bias” EVAPORATES: replicas centre on truth.\nIt was the campaign’s sample all along (red star, 3.5σ off).'),
+    ('long_diff', 'LONGITUDINAL DIFFUSION',
+     'REAL bias, and big: all 8 replicas above truth (+14.0 ± 3.4%).'),
+    ('tran_diff', 'TRANSVERSE DIFFUSION',
+     'Suggestive only (+1.1 ± 0.5%, 2.2σ) — not established.'),
+    ('eField', 'E FIELD',
+     'A real bias, but tiny: −0.036 ± 0.006% (5.9σ).'),
+]
 
-# ---------------- (a) all parameters ----------------
-a = ax[0]
-for j, p in enumerate(P):
+fig = plt.figure(figsize=(16.4, 9.6))
+gs = fig.add_gridspec(2, 3, hspace=.52, wspace=.16)
+rng = np.random.default_rng(3)
+
+for k, (p, name, verdict) in enumerate(PANELS):
+    a = fig.add_subplot(gs[k // 3, k % 3])
     v = np.array([REP[d][p] for d in range(1, 9)])
     m, se = v.mean(), v.std(ddof=1) / np.sqrt(8)
-    for x in v:
-        a.plot(x, j, 'o', ms=7, color=C['blue'], alpha=.55)
-    a.errorbar(m, j, xerr=se, fmt='s', ms=11, color=C['ink'], capsize=5, zorder=5)
-    a.plot(OLD[p], j, '*', ms=17, color=C['red'], zorder=6)
-    sg = abs(m) / se
-    a.text(1.01, j, f'{m:+.2f}±{se:.2f} ({sg:.1f}σ)', transform=a.get_yaxis_transform(),
-           fontsize=7.6, va='center')
-a.axvline(0, color=C['green'], lw=2)
-a.set_yticks(range(5)); a.set_yticklabels([PL[p] for p in P], fontsize=9); a.invert_yaxis()
-a.set_xscale('symlog', linthresh=1)
-a.set_xlabel('signed error at the PINNED truth (%)')
-a.set_title('(a) 8 replicas (blue), ensemble mean±SE (black), and the\n'
-            'campaign\'s fixed sample (red star). Truth = green line.', fontsize=9.3)
+    jit = rng.uniform(-.16, .16, 8)
+    a.axvline(0, color=C['green'], lw=3, zorder=1)
+    a.axvspan(m - se, m + se, ymin=.25, ymax=.75, color=C['ink'], alpha=.14, zorder=1)
+    a.plot(v, jit, 'o', ms=11, color=C['blue'], alpha=.75, zorder=3,
+           label='8 replicas (independent samples)' if k == 0 else None)
+    a.plot(m, 0, 'D', ms=13, color=C['ink'], zorder=4,
+           label='ensemble mean ± SE' if k == 0 else None)
+    a.plot(OLD[p], 0, '*', ms=22, color=C['red'], zorder=5,
+           label='the campaign’s single sample' if k == 0 else None)
+    lo = min(v.min(), OLD[p], 0); hi = max(v.max(), OLD[p], 0)
+    pad = .18 * (hi - lo)
+    a.set_xlim(lo - pad, hi + pad)
+    a.set_ylim(-.6, .6); a.set_yticks([])
+    a.annotate('truth', (0, .52), fontsize=9, color=C['green'], ha='center', fontweight='bold')
+    a.set_xlabel(f'{name.split(" — ")[0].title() if "—" in name else name.title()} error at the pinned truth (%)',
+                 fontsize=9)
+    a.set_title(f'{name}\n{verdict}', fontsize=9.6)
+    if k == 0:
+        a.legend(fontsize=8.2, frameon=True, framealpha=.95, loc='lower right')
 
-# ---------------- (b) lifetime detail ----------------
-a = ax[1]
-v = np.array([REP[d]['lifetime'] for d in range(1, 9)])
-a.hist(v, bins=np.arange(-6, 20, 2), color=C['blue'], alpha=.6, edgecolor='white')
-a.axvline(v.mean(), color=C['ink'], lw=2.4)
-a.annotate(f'  ensemble {v.mean():+.1f}±{v.std(ddof=1)/np.sqrt(8):.1f}%\n  (8/8 positive)',
-           (v.mean(), 2.6), fontsize=8.4)
-a.axvline(OLD['lifetime'], color=C['red'], lw=2.4, ls='--')
-a.annotate(f'the campaign\'s sample\n{OLD["lifetime"]:+.1f}% — a 2.6σ low\noutlier (p ≈ 1%)',
-           (OLD['lifetime'] - .5, 1.8), fontsize=8.0, color=C['red'], ha='right')
-a.axvline(0, color=C['green'], lw=2)
-a.annotate(' truth', (0, 2.95), fontsize=8, color=C['green'])
-a.set_xlabel('lifetime signed error (%)')
-a.set_ylabel('replicas')
-a.set_title('(b) LIFETIME: a +8.6% intrinsic bias on random samples —\n'
-            'the campaign\'s small errors were substantially one sample\'s luck.', fontsize=9.3)
+# ---------------- (f) the budget ----------------
+a = fig.add_subplot(gs[1, 2])
+labs = ['lifetime', 'long. diff.', 'tran. diff.', 'A$_b$']
+keys = ['lifetime', 'long_diff', 'tran_diff', 'Ab']
+y = np.arange(len(keys))
+fl = [FLOOR[k] for k in keys]
+sp = [np.array([REP[d][k] for d in range(1, 9)]).std(ddof=1) for k in keys]
+a.barh(y - .19, fl, height=.38, color=C['green'], edgecolor='white',
+       label='floor for ONE sample (fig 72)')
+a.barh(y + .19, sp, height=.38, color=C['orange'], edgecolor='white',
+       label='scatter BETWEEN samples (this study)')
+for i in range(len(keys)):
+    a.text(sp[i] + .25, y[i] + .19, f'×{sp[i]/fl[i]:.1f} larger', va='center', fontsize=9,
+           color=C['orange'])
+a.set_yticks(y); a.set_yticklabels(labs, fontsize=10); a.invert_yaxis()
+a.set_xlim(0, max(sp) * 1.45)
+a.set_xlabel('% of the fitted value')
+a.set_title('THE ERROR BUDGET\nWhich tracks you drew matters MORE than\nthe statistics of the tracks you have.',
+            fontsize=9.6)
+a.legend(fontsize=8.2, frameon=False, loc='lower right')
 
-# ---------------- (c) spread vs the floors ----------------
-a = ax[2]
-xs = np.arange(5)
-sp = [np.array([REP[d][p] for d in range(1, 9)]).std(ddof=1) for p in P]
-fl = [FLOOR[p] for p in P]
-a.bar(xs - .19, fl, width=.38, color=C['green'], edgecolor='white',
-      label='within-sample floor (dE/dx-marg, fig 72)')
-a.bar(xs + .19, sp, width=.38, color=C['orange'], edgecolor='white',
-      label='sample-to-sample spread (this study)')
-for i in range(5):
-    a.text(i + .19, sp[i] * 1.15, f'×{sp[i]/fl[i]:.1f}', ha='center', fontsize=8.2)
-a.set_yscale('log')
-a.set_xticks(xs); a.set_xticklabels([PL[p] for p in P], fontsize=8, rotation=18, ha='right')
-a.set_ylabel('% of the fitted value')
-a.set_title('(c) the spread EXCEEDS the per-sample floor ×2.5–35:\n'
-            'sample-composition bias variation dominates the error budget.', fontsize=9.3)
-a.legend(fontsize=7.2, frameon=False)
-
-fig.suptitle('Fig 73 — the data-replica ensemble (truth pinned, 8 independent track samples; '
-             'enabled by fixing data_seed, a silent no-op campaign-wide).\nThe A$_b$ "bias" was '
-             'the sample (null at +0.06 ± 0.04); lifetime carries a REAL +8.6 ± 1.6% bias at this '
-             'truth on random samples, and the campaign\'s\nfixed sample sits at the 2.6σ low tail '
-             '— its small lifetime errors were substantially luck. Sample-composition variation, '
-             'not per-sample statistics,\nnow dominates the error budget.', fontsize=10.0)
-fig.tight_layout(rect=[0, 0, 1, .84])
+fig.suptitle(
+    'Fig 73 — same truth, eight different input datasets: which biases are real?\n'
+    'green = truth  |  blue = 8 independent track samples  |  black ◆ = their mean ± SE  |  '
+    'red ★ = the single sample every previous result used',
+    fontsize=11.6, y=.995)
+fig.tight_layout(rect=[0, 0, 1, .915])
 os.makedirs(OUT, exist_ok=True)
 fig.savefig(f'{OUT}/fig73_replica_ensemble.png'); plt.close(fig)
 print('wrote', f'{OUT}/fig73_replica_ensemble.png')
