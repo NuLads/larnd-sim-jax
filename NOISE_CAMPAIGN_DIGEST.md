@@ -1208,6 +1208,23 @@ anneal truncates the descent. Fix candidates running on rep 8: hot8 (slower cali
 (calibration gated until iter 2 000), gtru8 (geometry init at truth), dw8 (drift penalty ×2), plus
 deg7/8 to name the holding parameters.
 
+![Mechanism closed](plots/noise_report/fig76_mechanism.png)
+
+**Tests** — five strategies on the worst replica (rep 8, landing +16.4%): slower calib anneal,
+calibration gated to iter 2 000, geometry initialised at truth, drift penalty, and a two-pass from
+the replica's own converged fit.
+**Concludes — ONE CAUSE, THREE SYMPTOMS.** Geometry-at-truth fixes lifetime (+16.4 → **+5.8**),
+long. diffusion (+34 → **+6.9**) and position (243 → **117 µm**) at once, with the best loss by
+870. The drift-axis pathology is the geometry hot-phase transient.
+**Concludes — the shortcuts fail:** gating calibration is catastrophic (+55%, the nuisances
+co-adapt to the frozen wrong calibration); slower annealing barely helps (+14.6); the drift
+penalty clips the tail (+10.4) but worsens moderate replicas.
+**Concludes — CONVERGED ≠ TRUE (panel c):** warm-starting geometry from the replica's own
+converged fit re-injects the bias — the co-adapted nuisances remember the wrong lifetime.
+**Programme conclusion** — remedies in order: (1) independent geometry initialisation (bounds:
+~⅔ of the lifetime bias, half the position residual); (2) the preconditioned joint step;
+(3) schedule work is dead.
+
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
 **Tests** — the dE/dx block marginalised out of the calibration covariance, EXACTLY: banded+rank-1

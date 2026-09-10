@@ -3335,6 +3335,38 @@ descent, frozen at whatever the schedule allowed.
 > cause); `dw8@1e3/1e4` — the drift-axis penalty dose–response. Plus `deg7/8`, the fig 58 analogue
 > on the biased replicas, to name which calibration parameters hold the residual.
 
+### The mechanism, closed (`fig 76`)
+
+![Mechanism](plots/noise_report/fig76_mechanism.png)
+
+Final numbers on replica 8 (baseline landing +16.4%):
+
+| strategy | lifetime | long. diff. | position | loss |
+|---|---|---|---|---|
+| baseline single pass | +16.4% | +34.4% | 243 µm | 9 168 |
+| `hot8` slower calib anneal | +14.6% | +26.9% | 249 µm | 9 403 |
+| `late8` calibration gated to 2 000 | **+55.4%** | +71.6% | 528 µm | 11 948 |
+| **`gtru8` geometry init at truth** | **+5.8%** | **+6.9%** | **117 µm** | **8 299** |
+| drift penalty w=1e3 | +10.4% | +17.4% | 219 µm | 9 335 |
+
+**One cause, three symptoms.** Starting geometry right fixes lifetime, longitudinal diffusion and
+position *simultaneously*, and gives the best loss by 870 — everything the campaign has struggled
+with on the drift axis traces back to the geometry hot-phase transient.
+
+**And the inheritance result (panel c), which rules out the cheap shortcut:** `pass2r8` warm-starts
+geometry from the replica's own *converged* fit and does **not** reproduce `gtru8` — the
+co-adapted geometry remembers the biased lifetime and pulls the re-annealed calibration back toward
+it. **Converged is not true.** Bootstrapping any pass from a previous co-adapted fit re-injects the
+bias.
+
+> **Programme conclusion.** The production remedies, in order: (1) **better independent geometry
+> initialisation** — from reconstruction or external tracking information, not from a previous fit
+> — the `gtru8` result bounds the available gain at roughly two-thirds of the lifetime bias and
+> half the position residual; (2) the **preconditioned joint step** (the standing second-order
+> build), the only optimiser-side route that moves the blocks coherently instead of letting them
+> co-adapt sequentially; (3) schedule work is *dead* — `hot8` and `late8` bracket it: slower
+> annealing barely helps, staging actively harms.
+
 ### The fix candidates: first verdicts (`dw*`, `hot8`, `late8`, `gtru8`)
 
 **Drift penalty — mixed, not the fix.** Dose–response on rep 8: lifetime +16.4 → **+10.4** (w=1e3)
