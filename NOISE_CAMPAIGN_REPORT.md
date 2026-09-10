@@ -3335,6 +3335,20 @@ descent, frozen at whatever the schedule allowed.
 > cause); `dw8@1e3/1e4` — the drift-axis penalty dose–response. Plus `deg7/8`, the fig 58 analogue
 > on the biased replicas, to name which calibration parameters hold the residual.
 
+### The replica degeneracy scans (`deg7`/`deg8`)
+
+The fig 58 analogue on the two most biased replicas, wide grid. What it adds:
+
+- **`long_diff`'s error is geometry-compensation**: rep 8 fits it at **+34.4%**, but with geometry
+  at truth its conditional optimum collapses to **−5.4%**. Its huge replica-ensemble bias (+14
+  mean) is the geometry block wearing a longitudinal-diffusion costume.
+- **`lifetime` is released by no single move**: its conditional optimum stays at +8 to +20% across
+  *all four* nuisance combos on both replicas (best case: dE/dx-at-truth, rep 7, +7.9%). Combined
+  with `P2_calib_true` *hurting* (fig 75c), no single-axis or single-block change reaches truth —
+  **the displacement lives on a joint soft manifold spanning all three blocks**, and only the joint
+  line (α → 1, everything together) descends to truth.
+- A_b and E field want to sit within ~0.2% of truth in every combo — clean everywhere, as always.
+
 ### The mechanism narrows: it is the LANDING POINT, not the objective (`TPREP`)
 
 ![TPREP](plots/noise_report/fig75_tprep.png)
