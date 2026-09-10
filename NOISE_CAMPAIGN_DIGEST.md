@@ -1219,11 +1219,14 @@ long. diffusion (+34 → **+6.9**) and position (243 → **117 µm**) at once, w
 **Concludes — the shortcuts fail:** gating calibration is catastrophic (+55%, the nuisances
 co-adapt to the frozen wrong calibration); slower annealing barely helps (+14.6); the drift
 penalty clips the tail (+10.4) but worsens moderate replicas.
-**Concludes — CONVERGED ≠ TRUE (panel c):** warm-starting geometry from the replica's own
-converged fit re-injects the bias — the co-adapted nuisances remember the wrong lifetime.
-**Programme conclusion** — remedies in order: (1) independent geometry initialisation (bounds:
-~⅔ of the lifetime bias, half the position residual); (2) the preconditioned joint step;
-(3) schedule work is dead.
+**Concludes — TRUTH IS NOT REQUIRED (panel c).** pass2r8, warm-starting geometry+dE/dx from the
+replica's OWN converged fit, reaches lifetime **+11.7%**, long. diff. +11.0%, position **132 µm**,
+loss 8 347 — **94% of gtru8's loss gain and most of its position gain with no truth**, but only 44%
+of its lifetime gain. (An earlier version called this a failure from a mid-transient trace at
+iteration 3 400 — warm-started arms must be judged at their ENDPOINTS.)
+**Programme conclusion** — (1) adopt the truth-free two-pass (one extra fit, no external input);
+(2) independent geometry information buys the rest (~6 points of lifetime, bounded by gtru8);
+(3) the preconditioned joint step; (4) schedule work is dead, and GN geometry OOM-kills at 400 cm.
 
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 

@@ -3353,19 +3353,25 @@ Final numbers on replica 8 (baseline landing +16.4%):
 position *simultaneously*, and gives the best loss by 870 — everything the campaign has struggled
 with on the drift axis traces back to the geometry hot-phase transient.
 
-**And the inheritance result (panel c), which rules out the cheap shortcut:** `pass2r8` warm-starts
-geometry from the replica's own *converged* fit and does **not** reproduce `gtru8` — the
-co-adapted geometry remembers the biased lifetime and pulls the re-annealed calibration back toward
-it. **Converged is not true.** Bootstrapping any pass from a previous co-adapted fit re-injects the
-bias.
+**And truth is NOT required — correcting a call I made from a mid-run trace.** `pass2r8`
+warm-starts geometry *and* dE/dx from the replica's own converged fit (no truth anywhere) and
+finishes at **lifetime +11.7%, long. diffusion +11.0%, position 132 µm, loss 8 347** — **94% of
+`gtru8`'s loss gain and most of its position gain with no truth information**, though only **44% of
+its lifetime gain**. I judged it a failure from its trace at iteration 3 400, mid-transient, before
+the relaxation from +26% to +11.7%. The honest statement is *partial* inheritance. `pass3r8`
+(iterating the bootstrap) is running to see whether 16.4 → 11.7 → ? converges toward `gtru8`'s +5.8
+or stalls.
 
-> **Programme conclusion.** The production remedies, in order: (1) **better independent geometry
-> initialisation** — from reconstruction or external tracking information, not from a previous fit
-> — the `gtru8` result bounds the available gain at roughly two-thirds of the lifetime bias and
-> half the position residual; (2) the **preconditioned joint step** (the standing second-order
-> build), the only optimiser-side route that moves the blocks coherently instead of letting them
-> co-adapt sequentially; (3) schedule work is *dead* — `hot8` and `late8` bracket it: slower
-> annealing barely helps, staging actively harms.
+> **Programme conclusion.** (1) **Adopt the truth-free two-pass** — one extra fit, no external
+> input, and it already delivers most of the recoverable loss and position and half the lifetime
+> bias. (2) **Independent geometry information** buys the rest; `gtru8` bounds that remaining gain
+> at ~6 points of lifetime. (3) The **preconditioned joint step** is the optimiser-side route to the
+> same place. (4) Schedule work is *dead* — `hot8` and `late8` bracket it — and a Gauss-Newton
+> geometry solver OOM-kills at 400 cm batches (retry at 4× host memory running).
+
+> **A caution for the record.** Warm-started arms must be judged at their **endpoints**: this
+> section first called `pass2r8` a failure from a mid-transient trace. Their transients are large
+> and uninformative — trap 1b in a different costume.
 
 ### The fix candidates: first verdicts (`dw*`, `hot8`, `late8`, `gtru8`)
 
