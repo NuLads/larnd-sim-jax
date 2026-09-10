@@ -3335,6 +3335,27 @@ descent, frozen at whatever the schedule allowed.
 > cause); `dw8@1e3/1e4` — the drift-axis penalty dose–response. Plus `deg7/8`, the fig 58 analogue
 > on the biased replicas, to name which calibration parameters hold the residual.
 
+### The fix candidates: first verdicts (`dw*`, `hot8`, `late8`, `gtru8`)
+
+**Drift penalty — mixed, not the fix.** Dose–response on rep 8: lifetime +16.4 → **+10.4** (w=1e3)
+→ +10.1 (w=1e4), long_diff +34 → +17 — a real squeeze on the extreme tail. But on the moderate
+rep 1 it *worsens* lifetime (+6.5 → +9.9), and the loss degrades in every arm. It clips one tail
+rather than re-centring the landing distribution. Not production.
+
+**Preliminary traces (fits still running to 10 k):**
+
+| candidate | idea | lifetime @6 000 (baseline +17.8) | verdict so far |
+|---|---|---|---|
+| `late8` | gate calibration off until iter 2 000 | **+120%**, position 694 µm | **failed pathologically** — the nuisances co-adapted to the *wrong frozen calibration* during the gate; release caused a violent transient. The circularity risk, realised. |
+| `hot8` | calibration decay halved | +31% at 5 000 | behind baseline; hotter calibration wanders further before relaxing |
+| **`gtru8`** | geometry initialised at truth | **+8.5% and descending**, position 129 µm | **the winner** — the landing bias roughly halves when the geometry transient is removed, confirming the overshoot's cause |
+
+**The production analogue of `gtru8` is now running** (`pass2r8`): geometry *and* dE/dx
+warm-started from rep 8's own converged fit, calibration re-annealed from nominal with the full
+10 k schedule — the full-length, schedule-clean version of what `ALT` attempted at 3 k. If the
+overshoot disappears when geometry starts converged, this two-pass recipe should land far closer
+to truth than the single-pass +16.4%, at 2× total cost.
+
 ### The replica degeneracy scans (`deg7`/`deg8`)
 
 The fig 58 analogue on the two most biased replicas, wide grid. What it adds:
