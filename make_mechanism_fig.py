@@ -11,15 +11,16 @@ THE ARC (all on replica 8, the worst case, lifetime landing +16.4%):
   * gtru8 (geometry INITIALISED AT TRUTH) fixes most of everything: lifetime +5.8, long_diff
     +6.9 (from +34), position 117 um, loss 8299 (best by 870) -- the overshoot never happens
     when geometry starts right;
-  * pass2r8 (geometry warm-started from the replica's own CONVERGED fit) does NOT reproduce
-    gtru8: the co-adapted geometry REMEMBERS the biased lifetime and pulls the re-annealed
-    calibration back toward it. Converged is not the same as true.
+  * pass2r8 (geometry+dEdx warm-started from the replica's own CONVERGED fit -- NO truth used)
+    recovers most of it: lifetime +11.7, long_diff +11.0, position 132 um, loss 8347. That is
+    94% of gtru8's LOSS gain and most of its POSITION gain with no truth information, but only
+    44% of its LIFETIME gain -- the co-adapted state is partially, not wholly, inherited.
 
-THE CONCLUSION FOR THE PROGRAMME: the landing bias is caused by the geometry transient and is
-inherited by anything bootstrapped from a co-adapted state. The production remedies are
-(1) better INDEPENDENT geometry initialisation -- from reconstruction, not from a previous fit --
-and (2) the preconditioned joint step, which is the only optimiser-side route that moves the
-blocks coherently instead of letting them co-adapt sequentially.
+THE CONCLUSION FOR THE PROGRAMME, and it is more encouraging than the first read of pass2r8
+suggested: truth is NOT required. A second pass that merely re-anneals calibration against
+converged nuisances captures nearly all of the recoverable loss and position, and half the
+lifetime. The remaining lifetime gap is what an independent geometry constraint -- or a
+preconditioned joint step -- would buy. Schedule work remains dead (hot8/late8).
 """
 import glob, os, pickle, re, io, contextlib
 import numpy as np
@@ -65,7 +66,7 @@ ARMS = [('baseline', 'fit_result/sci_full_DSREP8/history_iter*.pkl', C['ink'],
         ('gtru8', 'fit_result/sci_full_GTRU8/history_iter*.pkl', C['green'],
          'geometry init AT TRUTH → +5.8'),
         ('pass2r8', 'fit_result/sci_full_PASS2R8/history_iter*.pkl', C['purple'],
-         'geometry from own CONVERGED fit (running)')]
+         'truth-free 2nd pass → +11.7')]
 
 fig, ax = plt.subplots(1, 3, figsize=(16.8, 5.8))
 
@@ -92,6 +93,8 @@ for tag, pat, col, _ in ARMS[:4]:
     LIF.append(abs(tr(pat)[-1]))
     LNG.append(abs(tr(pat, 'long_diff')[-1]))
     POS.append(tr(pat, 'pos')[-1])
+labs.append('pass2r8'); colv.append(C['purple'])
+LIF.append(11.73); LNG.append(11.02); POS.append(132.0)
 labs.append('drift w=1e3'); colv.append(C['blue'])
 LIF.append(10.38); LNG.append(17.35); POS.append(218.9)
 xs = np.arange(len(labs))
@@ -111,23 +114,23 @@ a.legend(fontsize=7.8, frameon=False)
 a = ax[2]
 for tag, pat, col, lab in [('gtru8', ARMS[3][1], C['green'], 'geometry at TRUTH'),
                            ('pass2r8', ARMS[4][1], C['purple'],
-                            'geometry from own CONVERGED fit'),
+                            'truth-free 2nd pass → +11.7'),
                            ('baseline', ARMS[0][1], C['ink'], 'cold start (reference)')]:
     e = tr(pat)
     a.plot(np.arange(len(e)), e, color=col, lw=2.2, label=lab)
 a.axhline(0, color=C['green'], lw=2, ls=':')
 a.set_xlim(0, 10000); a.set_ylim(-12, 40)
 a.set_xlabel('iteration'); a.set_ylabel('lifetime error (%)')
-a.set_title('(c) CONVERGED ≠ TRUE: warm-starting from the co-adapted fit\n'
-            're-injects the bias — the nuisances remember the wrong lifetime.', fontsize=10)
+a.set_title('(c) TRUTH IS NOT REQUIRED: a truth-free second pass recovers\n'
+            '94% of the loss gain and 44% of the lifetime gain.', fontsize=10)
 a.legend(fontsize=8, frameon=False, loc='upper right')
 
 fig.suptitle('Fig 76 — the landing-bias mechanism, closed (replica 8, baseline lifetime landing '
-             '+16.4%). The bias is a hot-phase overshoot caused by the geometry\ntransient, '
-             'relaxing too slowly for the anneal. Gating calibration fails (+55%); a slower anneal '
-             'barely helps (+14.6%); geometry initialised at truth fixes\nlifetime (+5.8%), long. '
-             'diffusion (+6.9%) and position (117 µm) at once — and a converged-but-co-adapted '
-             'geometry does NOT substitute for a true one.', fontsize=10.4)
+             '+16.4%). The bias is a hot-phase overshoot while geometry is far\nfrom truth. Gating '
+             'calibration fails (+55%); a slower anneal barely helps (+14.6%); geometry at truth '
+             'fixes lifetime (+5.8%), long. diffusion (+6.9%)\nand position (117 µm) at once. And '
+             'TRUTH IS NOT REQUIRED: a truth-free second pass reaches +11.7% with 94% of the loss '
+             'gain (panel c).', fontsize=10.4)
 fig.tight_layout(rect=[0, 0, 1, .85])
 os.makedirs(OUT, exist_ok=True)
 fig.savefig(f'{OUT}/fig76_mechanism.png'); plt.close(fig)
