@@ -1228,6 +1228,18 @@ iteration 3 400 — warm-started arms must be judged at their ENDPOINTS.)
 (2) independent geometry information buys the rest (~6 points of lifetime, bounded by gtru8);
 (3) the preconditioned joint step; (4) schedule work is dead, and GN geometry OOM-kills at 400 cm.
 
+**`pass3r8` — THE RECIPE (folds into fig 76 series).**
+**Tests** — iterate the truth-free bootstrap: pass N re-anneals calibration from nominal against
+pass N−1's nuisances.
+**Concludes — IT CONVERGES TO TRUTH: 16.4 → 11.7 → 0.66% lifetime** on the worst replica, long.
+diff. +34 → +5.5, position 243 → 122 µm, loss on the truth-geometry bound (8 298 vs 8 299).
+Settled (end ptp 0.005%). The pass-3 trace still overshoots early but the relaxation now COMPLETES
+— the landing bias was the truncated relaxation all along.
+**Concludes — alternatives bracketed:** wu3000 helps lifetime only (+6.0) and is fragile (wu6000:
++59%); GN geometry definitively dead (1 600 s/iteration after the memory fix).
+**Next** — confirmation: pass 2 on reps 1/3/7, pass 4 on rep 8 (stay-at-truth check). If the
+ensemble collapses like rep 8, fig 73's +8.6% intrinsic bias is SOLVED by iteration, ~40 h/dataset.
+
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
 **Tests** — the dE/dx block marginalised out of the calibration covariance, EXACTLY: banded+rank-1

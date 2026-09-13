@@ -3335,6 +3335,35 @@ descent, frozen at whatever the schedule allowed.
 > cause); `dw8@1e3/1e4` — the drift-axis penalty dose–response. Plus `deg7/8`, the fig 58 analogue
 > on the biased replicas, to name which calibration parameters hold the residual.
 
+### THE RECIPE: the iterated truth-free bootstrap converges to truth (`pass3r8`)
+
+The follow-through on the two-pass result closes the story, and it is the campaign's best single
+number:
+
+| pass | lifetime | long. diff. | position | loss |
+|---|---|---|---|---|
+| 1 (cold) | +16.40% | +34.4% | 243 µm | 9 168 |
+| 2 | +11.73% | +11.0% | 132 µm | 8 347 |
+| **3** | **+0.66%** | **+5.5%** | **122 µm** | **8 298** |
+| (`gtru8` truth bound) | +5.82% | +6.9% | 117 µm | 8 299 |
+
+**16.4 → 11.7 → 0.7, no truth anywhere.** Each pass re-anneals calibration from nominal against
+the previous pass's nuisances. Pass 3 is *settled* (flat at +0.4…+0.7 for its last 4 000
+iterations, end ptp 0.005%) and its loss sits exactly on the truth-geometry bound. Its trace shows
+the mechanism resolving: it still overshoots early (+16.8 at iteration 500), but with good
+nuisances the relaxation now **completes** within the schedule — the landing bias was always the
+truncated relaxation, and better nuisances make the relaxation fast enough to finish.
+
+The other overnight arms bracket the alternatives: `wu3000` (long calibration warmup) reaches
+lifetime +6.0 but fixes nothing else (long. diff. +27, position 250, loss *worse*) — a fragile
+knob, and `wu6000` shows how fragile (+59%, catastrophic). Gauss-Newton geometry is **definitively
+dead at this scale**: after the memory fix it ran at 1 600 s *per iteration*.
+
+> **Production recipe candidate: the iterated bootstrap.** ~13.5 h per pass, 3 passes, fully
+> automatic, no external input. Confirmation suite running: pass 2 on replicas 1/3/7 (bias range
+> +6.5…+14.6) and pass 4 on replica 8 (does it *stay* at truth?). If the ensemble mean bias
+> collapses the way replica 8 did, the +8.6% intrinsic bias of fig 73 is solved by iteration.
+
 ### The mechanism, closed (`fig 76`)
 
 ![Mechanism](plots/noise_report/fig76_mechanism.png)
