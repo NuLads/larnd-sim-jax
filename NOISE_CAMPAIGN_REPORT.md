@@ -3404,13 +3404,23 @@ every time, and the endpoint is a fresh draw from a ±8%-wide landing distributi
 was that distribution's lucky tail, exactly the trap the campaign already fell into once with the
 lucky track sample (fig 73).
 
-**What this predicts, now under test (`RLXR3/7/8`, `RLXP38`, landing tonight):** don't re-anneal —
-**relax**. Warm-start *all three blocks* at the previous endpoint (calibration included, via
-`SCIINIT`) and give calibration only a gentle schedule (peak LR 1e-3, decay 0.955/epoch): pure
-relaxation with no overshoot to recover from. `RLXR3/7/8` run this from the pass-1 endpoints of
-replicas 3/7/8; `RLXP38` runs it from rep 8's +0.65% point, which a *destructive* restart killed —
-if a gentle pass keeps it near truth while still lowering the loss, the landing distribution's
-width is the schedule's fault, not the objective's.
+**What this predicts, now under test (`RLXR3/7/8`, `RLXP38`):** don't re-anneal — **relax**.
+Warm-start *all three blocks* at the previous endpoint (calibration included, via `SCIINIT`) and
+give calibration only a gentle schedule: pure relaxation with no overshoot to recover from.
+`RLXR3/7/8` run this from the pass-1 endpoints of replicas 3/7/8; `RLXP38` runs it from rep 8's
++0.65% point, which a *destructive* restart killed — if a gentle pass keeps it near truth while
+still lowering the loss, the landing distribution's width is the schedule's fault, not the
+objective's.
+
+> **Launch bug, caught in flight (and a knob worth knowing about).** The first RLX submission set
+> `SCICLR=1e-3` believing it was the calibration LR — it is the **chain (geometry)** LR, and the
+> calibration `--lr` was **hard-coded at 1e-1** in `start_sci_case.sh` (so *every* run in this
+> campaign has had calibration peak LR 1e-1; only its decay was ever tuned). The mis-configured
+> jobs ran calibration at full LR with a *slower* decay and geometry 10× slower — the exact
+> opposite of the experiment — and the in-flight trace showed it immediately (lifetime excursion
+> to **+90%** by iteration 700). Killed at ~3 200 iterations, `start_sci_case.sh` given a real
+> `SCILR` knob, and resubmitted with `SCILR=3e-3` (the LR band where the standard schedule's
+> relaxation phase actually operates), `SCILRDECAY=0.955`, nuisance schedules standard.
 
 ### The mechanism, closed (`fig 76`)
 

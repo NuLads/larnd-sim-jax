@@ -234,7 +234,7 @@ python3 -m optimize.example_run \
     --max_batch_len ${MAX_BATCH_LEN} \
     --data_seed ${DATA_SEED} ${EXTRA_DATA_ARGS} \
     --seed ${SEED} \
-    --lr 1e-1 \
+    --lr ${SCILR:-1e-1} \
     --optimizer_fn Adam \
     --lr_scheduler ${LR_SCHEDULER} \
     --lr_kw '{\"decay_rate\" : '${SCILRDECAY:-0.999}', \"init_value\" : 0, \"warmup_steps\": ${SCIWARMUP:-500}}' \

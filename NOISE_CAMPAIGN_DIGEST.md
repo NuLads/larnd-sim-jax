@@ -1251,8 +1251,12 @@ track sample, one level up. Loss and lifetime decouple across passes (loss −80
 trendless): the soft manifold, re-sampled.
 **Next** — the sharpened prediction: the destructive step is the RE-ANNEAL (calibration restarted
 at nominal at full LR). `RLXR3/7/8` + `RLXP38` test pure RELAXATION instead — all three blocks
-warm-started (calibration via SCIINIT), peak calib LR 1e-3, decay 0.955 — from the pass-1
-endpoints and from the +0.65% point respectively. Landing tonight.
+warm-started (calibration via SCIINIT), gentle calibration schedule — from the pass-1 endpoints
+and from the +0.65% point respectively.
+**Trap logged** — first submission was inverted: `SCICLR` is the CHAIN LR, and the calibration
+`--lr` was hard-coded 1e-1 in the launcher (true of every campaign run; only the decay was ever
+tuned). Caught from the in-flight trace (+90% excursion by iter 700), killed, launcher given a
+real `SCILR` knob, resubmitted with SCILR=3e-3 / SCILRDECAY=0.955, nuisances standard.
 
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
