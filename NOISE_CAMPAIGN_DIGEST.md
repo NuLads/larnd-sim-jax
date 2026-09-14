@@ -1240,6 +1240,20 @@ Settled (end ptp 0.005%). The pass-3 trace still overshoots early but the relaxa
 **Next** — confirmation: pass 2 on reps 1/3/7, pass 4 on rep 8 (stay-at-truth check). If the
 ensemble collapses like rep 8, fig 73's +8.6% intrinsic bias is SOLVED by iteration, ~40 h/dataset.
 
+**`p2r1/3/7` + `p4r8` — the confirmation suite RETRACTS the recipe (fig 77).**
+**Tests** — the bootstrap on 3 more replicas, and a 4th pass on rep 8 from its +0.65% point.
+**Concludes — NO ensemble collapse: pass 2 WORSENS 2/3 replicas** (rep 3 +9.1 → +19.4, rep 7
++14.6 → +17.1, rep 1 +6.5 → +5.9) — the rep-8 ladder is not a property of the procedure.
+**Concludes — the fixed point is not fixed: pass 4 lands at +16.5%** at a *worse* final loss than
+pass 3 (8 324 vs 8 293). A full re-anneal re-runs the hot-phase overshoot and re-draws the landing
+point from a ±8%-wide distribution; rep 8's 0.65% was the lucky tail — the same trap as the lucky
+track sample, one level up. Loss and lifetime decouple across passes (loss −800 nats, lifetime
+trendless): the soft manifold, re-sampled.
+**Next** — the sharpened prediction: the destructive step is the RE-ANNEAL (calibration restarted
+at nominal at full LR). `RLXR3/7/8` + `RLXP38` test pure RELAXATION instead — all three blocks
+warm-started (calibration via SCIINIT), peak calib LR 1e-3, decay 0.955 — from the pass-1
+endpoints and from the +0.65% point respectively. Landing tonight.
+
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
 **Tests** — the dE/dx block marginalised out of the calibration covariance, EXACTLY: banded+rank-1

@@ -3337,6 +3337,13 @@ descent, frozen at whatever the schedule allowed.
 
 ### THE RECIPE: the iterated truth-free bootstrap converges to truth (`pass3r8`)
 
+> **⚠️ RETRACTED as a recipe by the confirmation suite (next section, fig 77).** The ladder below
+> is real but does not generalise: pass 2 *worsens* 2 of 3 other replicas, and pass 4 on this
+> replica — re-annealing from the +0.66% point — lands back at +16.5% with a *worse* loss. The
+> 0.66% was a lucky draw from a wide landing distribution, not a converged fixed point. Kept
+> unedited below because the mechanism reading (relaxation completing within the schedule) is
+> what the confirmation falsified, and that matters for what comes next.
+
 The follow-through on the two-pass result closes the story, and it is the campaign's best single
 number:
 
@@ -3363,6 +3370,47 @@ dead at this scale**: after the memory fix it ran at 1 600 s *per iteration*.
 > automatic, no external input. Confirmation suite running: pass 2 on replicas 1/3/7 (bias range
 > +6.5…+14.6) and pass 4 on replica 8 (does it *stay* at truth?). If the ensemble mean bias
 > collapses the way replica 8 did, the +8.6% intrinsic bias of fig 73 is solved by iteration.
+
+### The confirmation suite: the bootstrap does NOT generalise (`p2r1/3/7`, `p4r8`, fig 77)
+
+![Multi-pass ensemble](plots/noise_report/fig77_multipass_ensemble.png)
+
+The overnight confirmation wave (pass 2 on replicas 1/3/7; pass 4 on replica 8) delivers a clean
+**negative** on the iterated bootstrap:
+
+| replica | pass 1 | pass 2 | pass 3 | pass 4 |
+|---|---|---|---|---|
+| rep 1 | +6.5% | +5.9% | *(running)* | |
+| rep 3 | +9.1% | **+19.4%** | *(running)* | |
+| rep 7 | +14.6% | **+17.1%** | *(running)* | |
+| rep 8 | +16.4% | +11.8% | +0.65% | **+16.5%** |
+
+Three facts, each decisive on its own:
+
+1. **Pass 2 worsens lifetime on 2 of 3 new replicas** (rep 3 doubles its error) and barely moves
+   the third. The rep-8 ladder was not a property of the procedure.
+2. **Pass 4 destroys the good point.** Re-annealing from rep 8's +0.65% endpoint lands at +16.5%
+   — and at a **higher final loss** than pass 3 (8 324 vs 8 293). A full re-anneal can end *worse
+   in loss* than the point it started from: it is not even monotone in its own objective across
+   passes.
+3. **Loss and lifetime decouple** (fig 77b): loss improves pass-over-pass by ~800 nats while
+   lifetime scatters by ±8% with no trend. The optimiser walks down the soft manifold; where it
+   lands *along* the manifold — the lifetime direction — is re-drawn every pass by the hot-phase
+   overshoot.
+
+**The sharpened mechanism statement:** the destructive element is the **re-anneal itself** —
+calibration restarted at nominal at full LR against imperfect nuisances re-runs the overshoot
+every time, and the endpoint is a fresh draw from a ±8%-wide landing distribution. Rep 8's 0.65%
+was that distribution's lucky tail, exactly the trap the campaign already fell into once with the
+lucky track sample (fig 73).
+
+**What this predicts, now under test (`RLXR3/7/8`, `RLXP38`, landing tonight):** don't re-anneal —
+**relax**. Warm-start *all three blocks* at the previous endpoint (calibration included, via
+`SCIINIT`) and give calibration only a gentle schedule (peak LR 1e-3, decay 0.955/epoch): pure
+relaxation with no overshoot to recover from. `RLXR3/7/8` run this from the pass-1 endpoints of
+replicas 3/7/8; `RLXP38` runs it from rep 8's +0.65% point, which a *destructive* restart killed —
+if a gentle pass keeps it near truth while still lowering the loss, the landing distribution's
+width is the schedule's fault, not the objective's.
 
 ### The mechanism, closed (`fig 76`)
 
