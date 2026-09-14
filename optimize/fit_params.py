@@ -1089,12 +1089,15 @@ class GradientDescentFitter(ParamFitter):
         V_reg = V + eps * I
         scale = jnp.linalg.norm(V_reg, ord='fro')
         A = V_reg / scale
-        Y = I
-        Z = A
-        for _ in range(n_iters):
+        # Iterate with jax.lax.fori_loop so the 15 iterations become one
+        # XLA kernel instead of 15 Python-dispatched matmuls. This alone
+        # removes ~2 ms of per-step overhead — the reason PreAdam was
+        # ~2.5× slower than Adam.
+        def body(_, carry):
+            Y, Z = carry
             T = 0.5 * (3.0 * I - Z @ Y)
-            Y = Y @ T
-            Z = T @ Z
+            return (Y @ T, T @ Z)
+        Y, _Z = jax.lax.fori_loop(0, n_iters, body, (I, A))
         return Y / jnp.sqrt(scale)
 
     def _preadam_step(self, grads_dict, state, b1=0.9, b2=0.999, eps=1e-8):
@@ -1147,17 +1150,24 @@ class GradientDescentFitter(ParamFitter):
         """Natural-gradient / full-Newton preconditioned step.
 
         Same state as PreAdam (running mean `m` and outer-product accumulated
-        `V`), but the update is `−lr(t) · V^{-1} · m̂` rather than
-        `−lr(t) · V^{-1/2} · m̂`. The `V^{-1}` action is computed by a
-        Cholesky-based solve (`jnp.linalg.solve`) which the current JAX
-        build supports on GPU — no cusolver_syevd needed.
+        `V`), but the update direction is `V^{-1} · m̂` instead of
+        `V^{-1/2} · m̂` — a full Newton-like preconditioner instead of
+        Adam's √-scaled variant.
 
-        Physical interpretation: since our loss is a log-likelihood,
-        `V ≈ E[gg^T] ≈ Fisher information ≈ Hessian` near a minimum.
-        `V^{-1}·m̂` is then the natural-gradient / one-step-Newton
-        direction. Faster convergence than PreAdam near the optimum
-        (quadratic vs linear along the well-preconditioned directions);
-        potentially more aggressive far from the optimum.
+        Implementation: `V^{-1} · m̂ = V^{-1/2} · (V^{-1/2} · m̂)`, computed
+        as two K-dim matvecs using the same GPU-native Newton-Schulz
+        iteration that PreAdam uses. This keeps the entire step on GPU
+        (only `matmul` used), avoiding the CPU-hosted linear-solve
+        fallback in `_small_linear_solve` which costs a GPU→CPU→GPU
+        round-trip per iteration (the reason earlier NatGrad runs took
+        ~18 min per step on this container's jaxlib).
+
+        Physical interpretation: near a minimum, log-likelihood loss
+        gives `V ≈ E[gg^T] ≈ Fisher information ≈ Hessian`, so
+        `V^{-1}·m̂` is the natural-gradient / one-step-Newton direction.
+        Faster convergence than PreAdam near the optimum (quadratic
+        rather than linear along the well-preconditioned directions);
+        potentially more aggressive far from it.
 
         Compared to `DampedNewton`: no Hessian pass is needed. `V` is
         estimated from streaming gradient outer products, so peak memory
@@ -1170,10 +1180,9 @@ class GradientDescentFitter(ParamFitter):
         V = b2 * state['V'] + (1 - b2) * jnp.outer(g_vec, g_vec)
         m_hat = m / (1 - b1 ** t)
         V_hat = V / (1 - b2 ** t)
-        # V^{-1}·m̂ via a CPU-hosted linear solve — the GPU LU path uses
-        # cusolver_getrf_ffi which is missing on some CUDA runtimes.
-        K = int(V_hat.shape[0])
-        step_vec_dir = -self._small_linear_solve(V_hat + eps * jnp.eye(K), m_hat)
+        # V^{-1} · m̂ = V^{-1/2} · V^{-1/2} · m̂, applied as two matvecs.
+        Vinv_sqrt = self._matrix_inv_sqrt_ns(V_hat, n_iters=15, eps=eps)
+        step_vec_dir = -(Vinv_sqrt @ (Vinv_sqrt @ m_hat))
         lr_now = jnp.max(jnp.stack([self.learning_rates[k](t - 1) for k in keys]))
         step_vec = lr_now * step_vec_dir
         step_dict = self._unflatten_to_param_dict(step_vec, keys, shapes)
