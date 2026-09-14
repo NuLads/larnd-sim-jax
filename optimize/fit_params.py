@@ -824,11 +824,14 @@ class ParamFitter:
 
     
     def prepare_fit(self):
-        # make a folder for the pixel target
-
+        # Make a folder for the pixel target.
+        # Do NOT rmtree an existing dir: multiple scan-array tasks (Ab, kb,
+        # eField, tran_diff, long_diff, lifetime) share the same out_label
+        # and therefore the same target cache. Wiping it on startup destroys
+        # another concurrent task's in-progress `batch{i}_target.npz` files.
+        # Target params are the nominal ones (via --scan_tgt_nom) so the
+        # cache content is identical across concurrent tasks — safe to share.
         target_dir = 'target_' + self.out_label
-        if os.path.exists(target_dir):
-            shutil.rmtree(target_dir, ignore_errors=True)
         os.makedirs(target_dir, exist_ok=True)
 
         if not os.path.exists(f'fit_result/{self.test_name}'):
@@ -876,13 +879,56 @@ class GradientDescentFitter(ParamFitter):
                  lr_scheduler=None, optimizer=None, lr=None, lr_kw=None, epoch_size=1, **kwargs):
         super().__init__(**kwargs)
 
+        # Supported first- and second-order optimizers.
+        #   "Adam", "SGD"                  — legacy per-parameter optax paths,
+        #                                    routed through optax.multi_transform.
+        #   "PreAdam" (Preconditioned Adam)
+        #                                  — full-matrix Adam variant. Maintains
+        #                                    a K×K second-moment matrix (K =
+        #                                    number of fit params) and precon-
+        #                                    ditions gradients by V^(-1/2), so
+        #                                    the update step is scale- and
+        #                                    rotation-aware (the (Ab, τ)
+        #                                    valley's inverse curvature is
+        #                                    absorbed into V). Bypasses per-
+        #                                    param LR; uses a single global LR.
+        #   "DampedNewton" (Levenberg-Marquardt)
+        #                                  — full-Hessian Newton with a
+        #                                    damping term λI added for
+        #                                    stability against noisy per-batch
+        #                                    Hessians. Step = -(H + λI)^{-1}·g.
+        #                                    Bypasses optax entirely; the fit
+        #                                    loop computes the Hessian each
+        #                                    iteration and calls a Newton step.
+        self.optimizer_fn_name = optimizer_fn
+        self._needs_hess = (optimizer_fn == "DampedNewton")
+        # "Full-vector" optimizers bypass optax.multi_transform (which
+        # routes each param through an independent optimizer). Grouping
+        # them here so the branch below stays readable.
+        self._full_vector_optimizers = ("PreAdam", "NatGrad", "DampedNewton")
         if optimizer_fn == "Adam":
             self.optimizer_fn = optax.adam
         elif optimizer_fn == "SGD":
             self.optimizer_fn = optax.sgd
+        elif optimizer_fn == "PreAdam":
+            # Full-matrix Adam. V^{-1/2}·m̂ via Newton-Schulz iteration
+            # on GPU — no cusolver dependency, no CPU round-trip.
+            self.optimizer_fn = None
+        elif optimizer_fn == "NatGrad":
+            # Natural-gradient / one-step-Newton preconditioning. Uses
+            # V^{-1}·m̂ via jnp.linalg.solve (Cholesky solve on GPU).
+            # Same streaming-covariance state as PreAdam, but a stronger
+            # (Newton-like) preconditioning than Adam's √-scaled variant.
+            self.optimizer_fn = None
+        elif optimizer_fn == "DampedNewton":
+            self.optimizer_fn = None
+            # Damping strength. Fixed λ; could be made adaptive later.
+            self._newton_damping = float(kwargs.pop("newton_damping", 1e-3))
         else:
-            raise NotImplementedError("Only SGD and Adam supported")
-        self.optimizer_fn_name = optimizer_fn
+            raise NotImplementedError(
+                f"optimizer_fn must be one of Adam / SGD / PreAdam / "
+                f"NatGrad / DampedNewton, got {optimizer_fn!r}"
+            )
 
         self.max_clip_norm_val = max_clip_norm_val
         if self.max_clip_norm_val is not None:
@@ -924,7 +970,26 @@ class GradientDescentFitter(ParamFitter):
         # Set up optimizer -- can pass in directly, or construct as SGD from relevant params and/or lr
 
         if optimizer is None:
-            if self.max_clip_norm_val is not None:
+            if self.optimizer_fn_name in self._full_vector_optimizers:
+                # Full-parameter-vector optimizers — bypass multi_transform
+                # which routes each param through an independent optimizer.
+                # Custom state initialization; standard optax state not used.
+                self.optimizer = None       # signals custom path in process_grads
+                if self.optimizer_fn_name in ("PreAdam", "NatGrad"):
+                    # Same streaming-covariance state schema for both:
+                    # m (K-vector), V (K×K), t (step count).
+                    self.opt_state = self._preadam_init_state(self.norm_params)
+                else:                       # DampedNewton
+                    self.opt_state = None
+                if self.max_clip_norm_val is not None:
+                    self._clip_transform = optax.clip_by_global_norm(self.max_clip_norm_val)
+                    self._clip_state = self._clip_transform.init(
+                        extract_relevant_params(self.norm_params, self.relevant_params_list),
+                    )
+                else:
+                    self._clip_transform = None
+                    self._clip_state = None
+            elif self.max_clip_norm_val is not None:
                 self.optimizer = optax.chain(
                     optax.clip_by_global_norm(self.max_clip_norm_val),
                     optax.multi_transform({key: self.optimizer_fn(value) for key, value in self.learning_rates.items()},
@@ -937,8 +1002,9 @@ class GradientDescentFitter(ParamFitter):
                 )
         else:
             raise ValueError("Passing directly optimizer is not supported")
-    
-        self.opt_state = self.optimizer.init(extract_relevant_params(self.norm_params, self.relevant_params_list))
+
+        if self.optimizer is not None:
+            self.opt_state = self.optimizer.init(extract_relevant_params(self.norm_params, self.relevant_params_list))
 
         if self.resume_from is not None:
             logger.info(f"Resuming from checkpoint {self.resume_from}")
@@ -959,7 +1025,207 @@ class GradientDescentFitter(ParamFitter):
     def apply_updates(self, params, update):
         setattr(self, params, getattr(self, params).replace(**{key: getattr(getattr(self, params), key) + val for key, val in update.items()}))
 
-    def process_grads(self, grads):
+    @staticmethod
+    def _flatten_param_dict(d, keys):
+        """Concatenate a param-name → scalar-or-array dict into a flat 1-D
+        vector in the fixed order `keys`. Returns (vec, shapes).
+
+        Uses `jnp.shape()` (not `.shape`) so Python scalars — which is what
+        `extract_relevant_params` returns for scalar Params fields via
+        `getattr` — are handled the same as jnp arrays. `jnp.shape(0.5)`
+        gives `()`; `jnp.reshape(0.5, (-1,))` gives `[0.5]`.
+        """
+        parts = [jnp.reshape(jnp.asarray(d[k]), (-1,)) for k in keys]
+        shapes = [tuple(jnp.shape(d[k])) for k in keys]
+        return jnp.concatenate(parts), shapes
+
+    @staticmethod
+    def _unflatten_to_param_dict(vec, keys, shapes):
+        """Inverse of _flatten_param_dict. Preserves the scalar-vs-array
+        distinction — a shape of `()` produces a 0-D jnp array."""
+        out = {}
+        idx = 0
+        for k, shp in zip(keys, shapes):
+            n = int(np.prod(shp)) if len(shp) else 1
+            out[k] = jnp.reshape(vec[idx:idx + n], shp) if len(shp) else vec[idx]
+            idx += n
+        return out
+
+    def _preadam_init_state(self, params):
+        """State for full-matrix Adam: first moment vector, second-moment
+        matrix, step count."""
+        vec, _ = self._flatten_param_dict(
+            extract_relevant_params(params, self.relevant_params_list),
+            self.relevant_params_list,
+        )
+        K = int(vec.size)
+        return dict(m=jnp.zeros(K), V=jnp.zeros((K, K)), t=jnp.array(0))
+
+    @staticmethod
+    def _matrix_inv_sqrt_ns(V, n_iters=15, eps=1e-8):
+        """Compute V^{-1/2} for a small PSD matrix via Newton-Schulz iteration.
+
+        Fully GPU-native (only uses `matmul` — no eigendecomposition and no
+        cusolver dependency). Quadratic convergence; 15 iterations on a
+        10×10 matrix is ~45 tiny matmuls, effectively free.
+
+        Iteration:
+            X ← V / ‖V‖_F      (scale so eigenvalues sit inside the unit
+                                interval → ‖X − I‖ ≤ 1, which is Newton-
+                                Schulz's convergence radius)
+            Y ← I,   Z ← X
+            repeat:
+                T = ½(3·I − Z·Y)
+                Y ← Y·T        (→ X^{-1/2})
+                Z ← T·Z        (→ X^{1/2})
+            V^{-1/2} = Y / √‖V‖_F
+
+        ‖V‖_F ≥ λ_max for PSD V (Frobenius norm dominates spectral norm),
+        so the normalized matrix has eigenvalues in (0, 1] and the
+        iteration converges. Adding `eps·I` first keeps V strictly PD.
+        """
+        K = int(V.shape[0])
+        I = jnp.eye(K, dtype=V.dtype)
+        V_reg = V + eps * I
+        scale = jnp.linalg.norm(V_reg, ord='fro')
+        A = V_reg / scale
+        Y = I
+        Z = A
+        for _ in range(n_iters):
+            T = 0.5 * (3.0 * I - Z @ Y)
+            Y = Y @ T
+            Z = T @ Z
+        return Y / jnp.sqrt(scale)
+
+    def _preadam_step(self, grads_dict, state, b1=0.9, b2=0.999, eps=1e-8):
+        """Full-matrix Adam step. Returns (updates_dict, new_state).
+
+        Update = `−lr(t) · V^{-1/2} · m̂`, computed on a K-vector in the
+        flattened param space (K = number of fit params). PreAdam couples
+        all params, so the per-param LR schedules aren't independent — we
+        use the max of the per-param schedules as a single scalar. Setting
+        per-param LRs still lets the caller down-weight specific params
+        relative to each other (by shrinking their schedule).
+
+        `V^{-1/2}` is computed by Newton-Schulz iteration on GPU (see
+        `_matrix_inv_sqrt_ns`). No cusolver dependency, no CPU-GPU
+        round-trip, exact `Adam-with-full-matrix` semantics.
+        """
+        keys = self.relevant_params_list
+        g_vec, shapes = self._flatten_param_dict(grads_dict, keys)
+        t = state['t'] + 1
+        m = b1 * state['m'] + (1 - b1) * g_vec
+        V = b2 * state['V'] + (1 - b2) * jnp.outer(g_vec, g_vec)
+        m_hat = m / (1 - b1 ** t)
+        V_hat = V / (1 - b2 ** t)
+        Vinv_sqrt = self._matrix_inv_sqrt_ns(V_hat, n_iters=15, eps=eps)
+        step_vec_dir = -(Vinv_sqrt @ m_hat)
+        # Take the maximum per-param LR schedule at step t.
+        lr_now = jnp.max(jnp.stack([self.learning_rates[k](t - 1) for k in keys]))
+        step_vec = lr_now * step_vec_dir
+        step_dict = self._unflatten_to_param_dict(step_vec, keys, shapes)
+        return step_dict, dict(m=m, V=V, t=t)
+
+    def _small_linear_solve(self, A, b):
+        """K×K linear solve executed on CPU.
+
+        Rationale: the GPU path routes ``jnp.linalg.solve`` through
+        ``cusolver_getrf_ffi``, which is not registered on some CUDA/cuSOLVER
+        runtimes (e.g. this container's setup) and raises
+        ``XlaRuntimeError: UNIMPLEMENTED``. For K ≈ 6 the CPU cost is
+        negligible and the CPU path has full ``getrf`` support.
+
+        Inputs are explicitly ``device_put`` to CPU so downstream ops execute
+        on CPU regardless of where ``A`` / ``b`` were originally allocated.
+        """
+        cpu = jax.devices("cpu")[0]
+        A_cpu = jax.device_put(A, cpu)
+        b_cpu = jax.device_put(b, cpu)
+        return jnp.linalg.solve(A_cpu, b_cpu)
+
+    def _natgrad_step(self, grads_dict, state, b1=0.9, b2=0.999, eps=1e-8):
+        """Natural-gradient / full-Newton preconditioned step.
+
+        Same state as PreAdam (running mean `m` and outer-product accumulated
+        `V`), but the update is `−lr(t) · V^{-1} · m̂` rather than
+        `−lr(t) · V^{-1/2} · m̂`. The `V^{-1}` action is computed by a
+        Cholesky-based solve (`jnp.linalg.solve`) which the current JAX
+        build supports on GPU — no cusolver_syevd needed.
+
+        Physical interpretation: since our loss is a log-likelihood,
+        `V ≈ E[gg^T] ≈ Fisher information ≈ Hessian` near a minimum.
+        `V^{-1}·m̂` is then the natural-gradient / one-step-Newton
+        direction. Faster convergence than PreAdam near the optimum
+        (quadratic vs linear along the well-preconditioned directions);
+        potentially more aggressive far from the optimum.
+
+        Compared to `DampedNewton`: no Hessian pass is needed. `V` is
+        estimated from streaming gradient outer products, so peak memory
+        is essentially the same as vanilla Adam.
+        """
+        keys = self.relevant_params_list
+        g_vec, shapes = self._flatten_param_dict(grads_dict, keys)
+        t = state['t'] + 1
+        m = b1 * state['m'] + (1 - b1) * g_vec
+        V = b2 * state['V'] + (1 - b2) * jnp.outer(g_vec, g_vec)
+        m_hat = m / (1 - b1 ** t)
+        V_hat = V / (1 - b2 ** t)
+        # V^{-1}·m̂ via a CPU-hosted linear solve — the GPU LU path uses
+        # cusolver_getrf_ffi which is missing on some CUDA runtimes.
+        K = int(V_hat.shape[0])
+        step_vec_dir = -self._small_linear_solve(V_hat + eps * jnp.eye(K), m_hat)
+        lr_now = jnp.max(jnp.stack([self.learning_rates[k](t - 1) for k in keys]))
+        step_vec = lr_now * step_vec_dir
+        step_dict = self._unflatten_to_param_dict(step_vec, keys, shapes)
+        return step_dict, dict(m=m, V=V, t=t)
+
+    def _newton_step(self, grads_dict, hess_pytree, lr_scale=1.0):
+        """Levenberg-Marquardt Newton step.
+
+        `hess_pytree` is what `jax.jacfwd(jax.jacrev(loss_wrapper))(norm_params)`
+        returns — a `Params[Params]` object where the outer level indexes the
+        first-derivative parameter and the inner level the second. Each leaf
+        is a scalar d²f/dp_i/dp_j. This uses **attribute access**, not
+        subscripting, since `Params` is a NamedTuple-like container. If
+        JAX ever returns a plain dict instead (older versions, or a
+        different `Params` implementation), we fall back to `[k]` indexing.
+
+        The Hessian is dense over *all* model params, but we only care about
+        the K × K sub-block spanned by the fit parameters. We extract that
+        sub-block, symmetrize (JAX autodiff isn't guaranteed bit-symmetric),
+        LM-damp with `newton_damping`, and solve for the step direction.
+        """
+        keys = self.relevant_params_list
+        K = len(keys)
+        g_vec, shapes = self._flatten_param_dict(grads_dict, keys)
+
+        def _get(pytree, name):
+            # Handles both attribute-style pytrees (Params NamedTuple,
+            # dataclasses.dataclass, flax.struct, equinox modules) and
+            # plain dicts.
+            try:
+                return getattr(pytree, name)
+            except AttributeError:
+                return pytree[name]
+
+        H = jnp.stack([
+            jnp.stack([jnp.reshape(_get(_get(hess_pytree, k_out), k_in), ())
+                       for k_in in keys])
+            for k_out in keys
+        ])
+        H_sym = 0.5 * (H + H.T)                     # symmetrize
+        # See _small_linear_solve: keep the K×K solve off the GPU LU path
+        # to avoid missing cusolver_getrf_ffi custom-call implementations.
+        step_vec = -self._small_linear_solve(
+            H_sym + self._newton_damping * jnp.eye(K), g_vec,
+        )
+        # Optional overall LR scaling on Newton steps (default 1). Useful
+        # to keep the very first step from over-shooting when the damped
+        # Hessian is still noisy.
+        step_dict = self._unflatten_to_param_dict(lr_scale * step_vec, keys, shapes)
+        return step_dict
+
+    def process_grads(self, grads, hess=None):
         # We extract only the relevant parameters to pass to the optimizer
         relevant_grads = extract_relevant_params(grads, self.relevant_params_list)
 
@@ -974,9 +1240,31 @@ class GradientDescentFitter(ParamFitter):
                 for key in self.relevant_params_list
             }
 
-        # Update the optimizer state and get the updates for norm_params
-        updates, self.opt_state = self.optimizer.update(relevant_grads, self.opt_state)
-        
+        # Dispatch to the appropriate optimizer path.
+        if self.optimizer_fn_name in self._full_vector_optimizers:
+            # Optional global-norm clip applied to the raw gradient before
+            # the custom preconditioner runs (matches Adam/SGD behavior).
+            if self._clip_transform is not None:
+                relevant_grads, self._clip_state = self._clip_transform.update(
+                    relevant_grads, self._clip_state,
+                )
+            if self.optimizer_fn_name == "PreAdam":
+                updates, self.opt_state = self._preadam_step(relevant_grads, self.opt_state)
+            elif self.optimizer_fn_name == "NatGrad":
+                updates, self.opt_state = self._natgrad_step(relevant_grads, self.opt_state)
+            else:  # DampedNewton
+                if hess is None:
+                    raise RuntimeError(
+                        "DampedNewton requires a Hessian; the fit loop must "
+                        "call compute_loss(..., with_hess=True) and pass "
+                        "hess into process_grads(). Check the loop wiring."
+                    )
+                # Hessian returned by compute_loss is nested: hess[k_out][k_in].
+                updates = self._newton_step(relevant_grads, hess)
+        else:
+            # Legacy Adam / SGD via optax multi_transform.
+            updates, self.opt_state = self.optimizer.update(relevant_grads, self.opt_state)
+
         # Apply the updates directly to the unconstrained norm_params
         self.apply_updates('norm_params', updates)
 
@@ -1069,8 +1357,15 @@ class GradientDescentFitter(ParamFitter):
                         this_target = target
                     ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = self.get_simulated_target(this_target, i, evts_sim, regen=False)
 
-                    # loss
-                    loss_val, grads, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True)
+                    # loss (+ Hessian when the optimizer needs one)
+                    _with_hess = self._needs_hess
+                    loss_val, grads, aux, hess, _ = self.compute_loss(
+                        selected_tracks_sim, i,
+                        ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z,
+                        ref_ticks, ref_hit_prob, ref_event, ref_pixel_id,
+                        epoch=epoch, with_loss=True, with_grad=True,
+                        with_hess=_with_hess,
+                    )
 
                     # split the code, ugly, but no additional operation if there's no averaging
                     if self.sz_mini_bt > 1:
@@ -1086,7 +1381,7 @@ class GradientDescentFitter(ParamFitter):
                             update_grads = jax.tree_util.tree_map(lambda x: x / self.sz_mini_bt, summed_grads)
                             avg_loss = np.mean(bt_loss)
  
-                            modified_grads = self.process_grads(update_grads) #Grads are modified ans applied in this function
+                            modified_grads = self.process_grads(update_grads, hess=(hess if self._needs_hess else None)) #Grads are modified ans applied in this function
                             stop_time = time()
 
                             for param in self.relevant_params_list:
@@ -1123,7 +1418,7 @@ class GradientDescentFitter(ParamFitter):
                             bt_loss = []
                     else:
 
-                        modified_grads = self.process_grads(grads) #Grads are modified ans applied in this function
+                        modified_grads = self.process_grads(grads, hess=(hess if self._needs_hess else None)) #Grads are modified ans applied in this function
 
                         stop_time = time()
 
