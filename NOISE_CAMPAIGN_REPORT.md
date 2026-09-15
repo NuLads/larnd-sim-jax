@@ -3466,6 +3466,28 @@ there). If the ensemble bias collapses on the replicas, the campaign's landing b
 coupling all along; if not, the remaining suspects are data-side (drift-profile information
 content at 400 cm).
 
+### Endpoint correlations and phase planes (figs 80–81)
+
+![Endpoint correlations](plots/noise_report/fig80_endpoint_correlations.png)
+
+Across all 24 comparable endpoints (identical objective; DW*/LATE8/WU6000 excluded): **Δloss,
+position and dE/dx MAE form one tight axis** — r = +0.80 (loss↔pos), +0.84 (loss↔dE/dx), +0.89
+(pos↔dE/dx). They are a single quantity, "fit quality". **Lifetime correlates with nothing**: the
+loss (−0.22), position (−0.02), dE/dx (−0.22) — and, unexpectedly, not even longitudinal
+diffusion at endpoints (+0.18), although the two co-move *within* trajectories. The soft plane's
+coupling is dynamic, not static: transients drag them together, but their landing points scatter
+independently.
+
+![Phase planes](plots/noise_report/fig81_phase_planes.png)
+
+The seed-8 phase planes make it visual: position and dE/dx are **single-valued functions of the
+loss** — all six arms ride the same curve into the same corner — while lifetime and long.
+diffusion are spaghetti, landing anywhere from 0 to +17% at the same final loss. Consequences:
+(1) no loss-based selection, early stopping, or convergence criterion can ever pick a good
+lifetime; (2) position or dE/dx MAE can stand in for the loss as cheap fit-quality monitors;
+(3) recovering lifetime requires an observable *outside* this loss — which is exactly what the
+scale/shape reparametrisation (running) and drift-axis information aim at.
+
 ### The mechanism, closed (`fig 76`)
 
 ![Mechanism](plots/noise_report/fig76_mechanism.png)
