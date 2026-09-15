@@ -3488,6 +3488,16 @@ lifetime; (2) position or dE/dx MAE can stand in for the loss as cheap fit-quali
 (3) recovering lifetime requires an observable *outside* this loss — which is exactly what the
 scale/shape reparametrisation (running) and drift-axis information aim at.
 
+**The decisive versions (figs 82–83).** Restricted to the multi-arm seeds (where "seed best" is a
+genuinely converged fit), the contrast is maximal: distance-from-best-loss reads off position
+(r = +0.84) and dE/dx (r = +0.88) but carries **zero** information on lifetime (r = +0.02) — runs
+within 150 nats of the best loss span +0.7…+24.2%. And selection-on-loss is not just useless but
+*harmful*: on 3 of 4 seeds the best-loss arm has a worse lifetime than another available arm, and
+on seed 7 it picks the worst of the entire ladder (+24.2% chosen vs +14.0% available).
+
+![Loss two axes](plots/noise_report/fig82_loss_two_axes.png)
+![Loss selection fails](plots/noise_report/fig83_loss_selection.png)
+
 ### The mechanism, closed (`fig 76`)
 
 ![Mechanism](plots/noise_report/fig76_mechanism.png)
