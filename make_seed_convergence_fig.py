@@ -29,14 +29,25 @@ def sm(v, w=W):
     return np.median(sliding_window_view(v, w), axis=1) if len(v) > w else v
 
 
+_CACHE = {}
+
+
 def load(tag):
+    if tag in _CACHE:
+        return _CACHE[tag]
     fs = glob.glob(f'fit_result/sci_full_{tag}/history_iter10000_*.pkl')
     if not fs:
         return None
     h = pickle.load(open(fs[0], 'rb'))
-    t = float(np.ravel(h['lifetime_target'])[0])
-    return {'lt': 100 * (np.ravel(h['lifetime_iter'])[1:] / t - 1),
-            'loss': np.asarray(h['losses_iter'], float)}
+    d = {'loss': np.asarray(h['losses_iter'], float),
+         'pos': np.ravel(h['pos_residual_iter']) * 1e4,
+         'dedx': np.ravel(h['dedx_mae_truth_iter'])}
+    for p, key in [('Ab', 'Ab'), ('eField', 'eField'), ('tran_diff', 'tran_diff'),
+                   ('long_diff', 'long_diff'), ('lt', 'lifetime')]:
+        t = float(np.ravel(h[key + '_target'])[0])
+        d[p] = 100 * (np.ravel(h[key + '_iter'])[1:] / t - 1)
+    _CACHE[tag] = d
+    return d
 
 
 # per seed: the re-anneal chain (list of (tag, color, label)) and branches [(tag, start_offset_k, color, label)]
@@ -50,7 +61,7 @@ BRANCH = {3: [('RLXR3', 1, C['rlx'], 'gentle relax')],
               ('RLXP38', 3, C['rlxp'], 'gentle from pass 3')]}
 
 
-def draw(key, ylab, title, fname, ylim=None):
+def draw(key, ylab, title, fname, ylim=None, zero_line=False):
     fig, axes = plt.subplots(2, 4, figsize=(14, 6), sharex=False)
     handles = {}
     for s, ax in zip(range(1, 9), axes.ravel()):
@@ -74,7 +85,7 @@ def draw(key, ylab, title, fname, ylim=None):
             handles.setdefault(lab, ln)
         for b in range(10, off, 10):
             ax.axvline(b, color=C['grey'], lw=.6, ls=':')
-        if key == 'lt':
+        if key == 'lt' or zero_line:
             ax.axhline(0, color=C['green'], lw=1.2)
         if ylim:
             ax.set_ylim(*ylim)
@@ -102,3 +113,35 @@ draw('loss', 'loss (rolling median)',
      'Every pass/branch lowers the loss (restart spikes aside) —\nthe objective improves '
      'monotonically across arms while lifetime (79a) does not follow.',
      'fig79b_seed_convergence_loss.png', ylim=(8100, 12000))
+
+draw('Ab', 'A_b error (%)',
+     'Fig 79c — A_b, same layout. Settles fast, stays within ~±0.5% on every seed and every '
+     'restart: the parameter the transients do NOT poison.',
+     'fig79c_seed_convergence_Ab.png', ylim=(-1.5, 1.5), zero_line=True)
+
+draw('eField', 'E field error (%)',
+     'Fig 79d — E field, same layout. The stiffest direction: pinned within ~±0.1% everywhere; '
+     'restarts barely register.',
+     'fig79d_seed_convergence_eField.png', ylim=(-0.3, 0.3), zero_line=True)
+
+draw('tran_diff', 'transverse diffusion error (%)',
+     'Fig 79e — transverse diffusion, same layout. Noisy transients, but re-centres near truth '
+     '(±3%) on all seeds and arms.',
+     'fig79e_seed_convergence_tran_diff.png', ylim=(-12, 12), zero_line=True)
+
+draw('long_diff', 'longitudinal diffusion error (%)',
+     'Fig 79f — longitudinal diffusion, same layout. The other soft-manifold victim: large, '
+     'seed-dependent positive landings that co-move with lifetime (79a) across restarts.',
+     'fig79f_seed_convergence_long_diff.png', ylim=(-25, 60), zero_line=True)
+
+draw('pos', 'position residual (µm)',
+     'Fig 79g — geometry convergence (position residual), same layout. Warm-started arms keep '
+     'or improve the pass-1 geometry;\nthe restart spikes are the calibration transient dragging '
+     'the tracks, not a geometry reset.',
+     'fig79g_seed_convergence_position.png', ylim=(80, 700))
+
+draw('dedx', 'dE/dx MAE (vs matched truth)',
+     'Fig 79h — dE/dx convergence (per-segment MAE vs arc-length-matched truth), same layout. '
+     'Improves with every warm-started arm,\nmirroring the loss (79b) — the nuisance blocks keep '
+     'getting better while lifetime (79a) does not.',
+     'fig79h_seed_convergence_dedx.png', ylim=(0.045, 0.10))
