@@ -1256,6 +1256,17 @@ trendless): the soft manifold, re-sampled.
 at nominal at full LR). `RLXR3/7/8` + `RLXP38` test pure RELAXATION instead — all three blocks
 warm-started (calibration via SCIINIT), gentle calibration schedule — from the pass-1 endpoints
 and from the +0.65% point respectively.
+**`DSREP9-16` + `CINIT*` — ensemble doubling and the calibration-init test (SUBMITTED 15 Sep,
+16 jobs).** Wave A: 8 more cold single-pass replicas (data seeds 9–16, config identical to
+DSREP1-8) → bias SE 1.6 → ~1.1. Wave B: cold fits on seeds 3/8 with the calibration START moved —
+at truth (CINITT), lifetime 2750 (+14% vs truth, CINITH), lifetime 1650 (−31%, CINITL), all five
+shifted (CINITA) — same targets, same nuisance inits. PREDICTION (registered before results): the
+landing is INSENSITIVE to the calibration start, because the hot phase drives calibration to the
+nuisance-conditional optimum regardless; the common mode is the NUISANCE init. Note the nominal
+init is BELOW truth on all five parameters (lifetime −8.6%, long_diff −31%) yet landings are
+HIGH — the init-at-truth arm (CINITT) is the killer variant: if it still lands at +9…+16%,
+calibration initialization is exonerated definitively.
+
 **Trap logged** — first submission was inverted: `SCICLR` is the CHAIN LR, and the calibration
 `--lr` was hard-coded 1e-1 in the launcher (true of every campaign run; only the decay was ever
 tuned). Caught from the in-flight trace (+90% excursion by iter 700), killed, launcher given a
