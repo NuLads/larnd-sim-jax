@@ -1261,6 +1261,22 @@ and from the +0.65% point respectively.
 tuned). Caught from the in-flight trace (+90% excursion by iter 700), killed, launcher given a
 real `SCILR` knob, resubmitted with SCILR=3e-3 / SCILRDECAY=0.955, nuisances standard.
 
+**`RLX*` — the relaxation verdict: SCHEDULE ENGINEERING IS EXHAUSTED (fig 78).**
+**Tests** — the gentle pass (calib LR 33× down, all blocks warm) from pass-1 endpoints of reps
+3/7/8 and from rep 8's +0.65% point.
+**Concludes — the gentle schedule has its own attractor at +5…+7%**: starts at +0.65/+9.1/+16.4
+all land there (rep 7 lags, +13.5). Better than the re-anneal's ~+14%, still far from truth.
+**Concludes — the near-truth point is unstable under ANY restart**: gentle → +7.2% (loss 8 354),
+violent → +16.5% (8 324), BOTH worse in loss than their 8 293 start — fresh Adam moments + warmup
+kick the state off a better optimum and the anneal freezes it out of reach.
+**Concludes — the pull is directional: 10/10 restarts drift UP**, never down. Not landing noise —
+a systematic force in the objective during nuisance transients.
+**Next** — optimiser levers exhausted ⇒ objective side: `SSR3/7/8` (running) = cold replica fits
+with the (scale,shape) dE/dx reparametrisation (SCIDXPARAM=scale_shape, mean_w=3000) that kills
+the rank-1 lifetime↔dE/dx coupling analytically (S4 test: lifetime +18% → −2.4%). Ensemble
+collapse ⇒ the landing bias was the coupling; no collapse ⇒ data-side (drift information at
+400 cm).
+
 ![Uncertainty ladder](plots/noise_report/fig72_uncertainty_ladder.png)
 
 **Tests** — the dE/dx block marginalised out of the calibration covariance, EXACTLY: banded+rank-1

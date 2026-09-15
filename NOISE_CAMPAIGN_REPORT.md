@@ -3429,6 +3429,43 @@ objective's.
 > `SCILR` knob, and resubmitted with `SCILR=3e-3` (the LR band where the standard schedule's
 > relaxation phase actually operates), `SCILRDECAY=0.955`, nuisance schedules standard.
 
+### The relaxation verdict: schedule engineering is exhausted (`RLX*`, fig 78)
+
+![Relaxation arms](plots/noise_report/fig78_relax_arms.png)
+
+| arm | start | end lifetime | end loss | Δloss vs start point |
+|---|---|---|---|---|
+| `RLXR3` (gentle, from pass-1) | +9.1% | +5.4% | 8 712 | −604 |
+| `RLXR7` (gentle, from pass-1) | +14.6% | +13.5% | 8 877 | −737 |
+| `RLXR8` (gentle, from pass-1) | +16.4% | +5.0% | 8 466 | −701 |
+| `RLXP38` (gentle, from **+0.65%**) | +0.65% | **+7.2%** | 8 354 | **+61** |
+| `p4r8` (re-anneal, from +0.65%) | +0.65% | +16.5% | 8 324 | +31 |
+
+Three results, one conclusion:
+
+1. **The gentle schedule has its own attractor at ~+5…+7%.** Starts at +0.65, +9.1 and +16.4 all
+   land there (rep 7 lags at +13.5 — its relaxation is the slowest in every study). Better than
+   the re-anneal's ~+14% mean, still far from truth, and none settled (lifetime ptp 5–8% over the
+   last 2 000 iterations).
+2. **The near-truth point is unstable under ANY restart.** Gentle → +7.2% at loss 8 354; violent
+   → +16.5% at 8 324 — *both worse in loss than the 8 293 they started from*. A fresh optimiser
+   state (new Adam moments + warmup) kicks the state off a better optimum, and the anneal freezes
+   it before it can return.
+3. **The pull is systematically upward** — 10/10 restarts across both schedules drift up, never
+   down. This is not symmetric landing noise; it is a directional force in the objective during
+   nuisance transients.
+
+**Programme consequence.** Both schedule families (violent and gentle) are now measured; neither
+reaches truth and the direction of failure is the same. The optimiser-side levers are exhausted —
+the systematic upward pull must come from the objective's lifetime↔dE/dx coupling (the −0.83
+marginalised correlation, the exactly rank-1 dE/dx-sum term in the Hessian). Next decisive test,
+running now: **`SSR3/7/8`** — cold fits of the same three replicas with the **(scale, shape)
+dE/dx reparametrisation** (`SCIDXPARAM=scale_shape`, mean_w = 3000, its validated pairing), which
+removes the rank-1 coupling analytically (H_aa ~2e-14 in the S4 test, lifetime +18% → −2.4%
+there). If the ensemble bias collapses on the replicas, the campaign's landing bias was the
+coupling all along; if not, the remaining suspects are data-side (drift-profile information
+content at 400 cm).
+
 ### The mechanism, closed (`fig 76`)
 
 ![Mechanism](plots/noise_report/fig76_mechanism.png)
