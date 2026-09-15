@@ -3380,10 +3380,17 @@ The overnight confirmation wave (pass 2 on replicas 1/3/7; pass 4 on replica 8) 
 
 | replica | pass 1 | pass 2 | pass 3 | pass 4 |
 |---|---|---|---|---|
-| rep 1 | +6.5% | +5.9% | *(running)* | |
-| rep 3 | +9.1% | **+19.4%** | *(running)* | |
-| rep 7 | +14.6% | **+17.1%** | *(running)* | |
+| rep 1 | +6.5% | +5.9% | +9.7% | |
+| rep 3 | +9.1% | **+19.4%** | +7.3% | |
+| rep 7 | +14.6% | **+17.1%** | **+24.2%** | |
 | rep 8 | +16.4% | +11.8% | +0.65% | **+16.5%** |
+| **ensemble mean** | **+11.7%** | **+13.6%** | **+13.7%** *(reps 1/3/7)* | |
+
+*(Pass-3 endpoints landed 14 Sep night and complete the falsification: rep 1 goes back UP past its
+pass-1 value, rep 7 posts the worst number of its entire ladder at +24.2%, and the ensemble mean is
+flat-to-worse across passes — 11.7 → 13.6 → 13.7%. Every pass is an independent draw from the same
+wide, upward-biased landing distribution. All three settled: lifetime ptp < 0.3% over the last
+2 000 iterations.)*
 
 Three facts, each decisive on its own:
 

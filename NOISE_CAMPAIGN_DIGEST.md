@@ -1244,6 +1244,9 @@ ensemble collapses like rep 8, fig 73's +8.6% intrinsic bias is SOLVED by iterat
 **Tests** — the bootstrap on 3 more replicas, and a 4th pass on rep 8 from its +0.65% point.
 **Concludes — NO ensemble collapse: pass 2 WORSENS 2/3 replicas** (rep 3 +9.1 → +19.4, rep 7
 +14.6 → +17.1, rep 1 +6.5 → +5.9) — the rep-8 ladder is not a property of the procedure.
+**Concludes — pass 3 completes the falsification: ensemble mean 11.7 → 13.6 → 13.7%** (rep 1
++9.7, rep 3 +7.3, rep 7 +24.2 — its worst ladder value). Every pass = an independent draw from
+the same wide, UPWARD-biased landing distribution.
 **Concludes — the fixed point is not fixed: pass 4 lands at +16.5%** at a *worse* final loss than
 pass 3 (8 324 vs 8 293). A full re-anneal re-runs the hot-phase overshoot and re-draws the landing
 point from a ±8%-wide distribution; rep 8's 0.65% was the lucky tail — the same trap as the lucky
