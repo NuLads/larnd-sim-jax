@@ -1256,6 +1256,20 @@ trendless): the soft manifold, re-sampled.
 at nominal at full LR). `RLXR3/7/8` + `RLXP38` test pure RELAXATION instead — all three blocks
 warm-started (calibration via SCIINIT), gentle calibration schedule — from the pass-1 endpoints
 and from the +0.65% point respectively.
+**`SSR3/7/8` — the (scale,shape) dE/dx reparametrisation on replicas: NULL (15 Sep).**
+**Tests** — cold replica fits with SCIDXPARAM=scale_shape at its validated mean_w=3000, i.e. the
+rank-1 lifetime↔dE/dx coupling removed analytically. Verified applied (argv + mean_w).
+**Concludes — the landing bias SURVIVES: lifetime +9.1→+9.8 (rep3), +14.6→+24.0 (rep7),
++16.4→+11.7 (rep8)** — mean +13.4 vs +13.4 baseline, i.e. a pure reshuffle within the ±8% landing
+distribution, no systematic gain. Hot-phase overshoot unchanged (peaks +56/+56/+59% at iters
+~860–1900). Loss/position/dE/dx all within normal scatter.
+**Concludes — the S4 result (lifetime +18%→−2.4%) does NOT transfer**: that was measured at the
+lucky sample with truth-adjacent nuisances; on random samples with cold nuisances the coupling the
+reparametrisation removes is not what sets the landing point.
+**Next** — with the last objective-side quick win spent, the surviving hypotheses are (a) the
+common-mode NUISANCE init (CINIT* tests the calibration half; geometry init = gtru8's ~6-pt
+bound) and (b) genuine drift-axis information. Schedule, iteration, coupling-removal: all null.
+
 **`DSREP9-16` + `CINIT*` — ensemble doubling and the calibration-init test (SUBMITTED 15 Sep,
 16 jobs).** Wave A: 8 more cold single-pass replicas (data seeds 9–16, config identical to
 DSREP1-8) → bias SE 1.6 → ~1.1. Wave B: cold fits on seeds 3/8 with the calibration START moved —
