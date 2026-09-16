@@ -78,8 +78,9 @@ print('wrote fig86, n =', len(SEEDS))
 
 # ---------------- FIG 87: calibration-init arms ----------------
 ARMS = [('CINITL', 'start low −31%', '#0072B2'), ('DSREP', 'start nominal −8.6%', '#222222'),
-        ('CINITT', 'start AT TRUTH', '#009E73'), ('CINITH', 'start high +14%', '#E69F00'),
-        ('CINITA', 'all five shifted', '#D55E00')]
+        ('CINITT', 'start AT TRUTH', '#009E73'), ('CINITH', 'start high +14%', '#E69F00')]
+# the all-shifted arm is NOT here: its A_b init was out of range and clamped at the bound, so it
+# is not a valid 'where did calibration start' variant -- fig 88 studies it as its own experiment.
 fig, ax = plt.subplots(1, 3, figsize=(14, 4.1))
 for a, s in zip(ax[:2], (3, 8)):
     for pre, lab, col in ARMS:
@@ -91,7 +92,7 @@ for a, s in zip(ax[:2], (3, 8)):
         a.plot(0, d['lt0'], '<', color=col, ms=7, clip_on=False)
         a.plot(x[-1], d['lifetime'][-1], 'o', color=col, ms=5)
     a.axhline(0, color=GREEN, lw=1.6)
-    a.set_ylim(-70, 65)
+    a.set_ylim(-36, 62)
     a.set_xlabel('iteration (×1000)')
     a.set_ylabel('lifetime error (%)')
     a.set_title(f'replica {s}: same data, same target,\nonly the calibration START differs', fontsize=9.5)
@@ -106,7 +107,7 @@ for pre, lab, col in ARMS:
         m = x > 6.5
         ax[2].plot(x[m], d['lifetime'][m], ls, color=col, lw=1.3)
 ax[2].axhline(0, color=GREEN, lw=1.6)
-ax[2].set_ylim(-70, 30)
+ax[2].set_ylim(0, 28)
 ax[2].set_xlabel('iteration (×1000)')
 ax[2].set_ylabel('lifetime error (%)')
 ax[2].set_title('endpoints, zoomed (solid rep 3, dashed rep 8):\nthe arms never re-merge', fontsize=9.5)

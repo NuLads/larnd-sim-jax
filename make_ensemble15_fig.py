@@ -5,9 +5,10 @@ Blue = the cold replicas (one per data seed, identical config). Orange = the cal
 variants on replicas 3 and 8 (same data, same target, only the calibration START differs).
 Black diamond = replica mean +- SE. Red star = the campaign's historical sample (BT2).
 
-The point of putting them on one axis: moving the calibration START spans as much range
-(+24.6 down to -59.3 on lifetime) as changing the DATA does. Both are 'where the optimizer
-happened to land', not properties of the estimator.
+The point of putting them on one axis: moving the calibration START alone spans +6.1 to +24.6 on
+lifetime -- an 18-point range on FIXED data, comparable to the 15-point spread the data itself
+produces. Both are 'where the optimizer happened to land', not properties of the estimator.
+(The all-shifted arm is excluded: its A_b init was out of range and clamped -- see fig 88.)
 """
 import glob, pickle
 import numpy as np
@@ -41,7 +42,10 @@ def read(tag):
 
 SEEDS = [s for s in range(1, 17)]
 REP = {s: r for s in SEEDS if (r := read(f'DSREP{s}'))}
-CIN = {f'{k}{s}': r for s in (3, 8) for k in ('CINITT', 'CINITH', 'CINITL', 'CINITA')
+# NOTE: the all-shifted arm (CINITA) is deliberately EXCLUDED here -- its A_b init was out of
+# range and clamped at the bound, so it is not a valid init variant. It is studied on its own
+# terms as a controlled A_b-pinning experiment in fig 88.
+CIN = {f'{k}{s}': r for s in (3, 8) for k in ('CINITT', 'CINITH', 'CINITL')
        if (r := read(f'{k}{s}'))}
 OLD = read('BT2')
 
@@ -90,8 +94,8 @@ ax = fig.add_subplot(gs[1, 2])
 ax.axis('off')
 h, l = fig.axes[0].get_legend_handles_labels()
 ax.legend(h, l, frameon=False, fontsize=10, loc='center')
-ax.text(.5, .12, 'Same target and truth throughout.\nBlue varies the DATA; orange varies only\n'
-                 'the calibration STARTING POINT —\nand spans just as much range.',
+ax.text(.5, .12, 'Same target and truth throughout.\nBlue varies the DATA; orange varies only the\n'
+                 'calibration STARTING POINT (at-truth / high / low)\n— and spans a comparable range.',
         ha='center', fontsize=9.5, color='#444444', transform=ax.transAxes)
 
 fig.suptitle('Fig 85 — the ensemble at n = %d (fig 73 redone with double the samples), with the calibration-init arms on the same axis.'
