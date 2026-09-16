@@ -1256,6 +1256,31 @@ trendless): the soft manifold, re-sampled.
 at nominal at full LR). `RLXR3/7/8` + `RLXP38` test pure RELAXATION instead — all three blocks
 warm-started (calibration via SCIINIT), gentle calibration schedule — from the pass-1 endpoints
 and from the +0.65% point respectively.
+**`CINIT*` — the calibration-init test: MY PRE-REGISTERED PREDICTION IS FALSIFIED (fig 84).**
+**Tests** — cold fits on replicas 3/8, identical in every way except the calibration START:
+at truth / high (+14%) / low (−31%) / all-five-shifted, vs nominal (−8.6%).
+**Concludes — the start MATTERS, up to 18 points.** Rep 3 is monotone: start −31% → land +24.6;
+−8.6% → +9.1; 0% → +7.7; +14% → +6.8. The lower you start, the higher you land — overshoot grows
+with the distance travelled. Rep 8: at-truth +6.1 vs nominal +16.4.
+**Concludes — the nominal init is not even LOSS-optimal**: at-truth gives the best loss of the
+family on BOTH replicas (9216 vs 9316; 9019 vs 9167). We have been starting at a demonstrably
+worse point than truth for the whole campaign — part of the +8.8% bias is calibration-init memory,
+not only nuisance-init memory. ACTIONABLE: better calibration priors/initialisation should move
+the ensemble.
+**Concludes — the degeneracy, demonstrated as brutally as possible (`CINITA8`)**: all-shifted init
+lands at A_b +7.8% / lifetime −59.3% with loss 9026 — BETTER than the baseline's 9167 at A_b
++0.01% / lifetime +16.4%. A catastrophically wrong fit that the objective PREFERS. This is figs
+80–83's loss-blindness in a single pair of runs.
+**Caveat** — n=1 per arm against a ±8%-wide landing distribution; rep 8's ordering is not monotone
+(low −31% → +12.9 < nominal +16.4). The at-truth and low arms agree in sign on both replicas and
+the loss ordering is consistent, but the monotone reading rests on rep 3 alone. Repeat before
+quoting slopes.
+
+**`DSREP9-16` — cold ensemble now n=15: lifetime +8.83 ± 1.26% (sd 4.88).** The bias reproduces on
+fresh samples and the error bar tightens as designed (±1.6 → ±1.26). NOTE: seed 13 lands at
+**−0.57%** — the first non-positive replica, so the distribution is wide with a tail reaching
+truth, NOT a strict one-sided offset. long_diff +14.00 ± 2.53%.
+
 **`SSR3/7/8` — the (scale,shape) dE/dx reparametrisation on replicas: NULL (15 Sep).**
 **Tests** — cold replica fits with SCIDXPARAM=scale_shape at its validated mean_w=3000, i.e. the
 rank-1 lifetime↔dE/dx coupling removed analytically. Verified applied (argv + mean_w).
