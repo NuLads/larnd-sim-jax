@@ -1289,6 +1289,39 @@ fresh samples and the error bar tightens as designed (±1.6 → ±1.26). NOTE: s
 **−0.57%** — the first non-positive replica, so the distribution is wide with a tail reaching
 truth, NOT a strict one-sided offset. long_diff +14.00 ± 2.53%.
 
+**`TRU{1,2,3}D{1,3,7,8}` — ARM B, the long-deferred second-truth test (SUBMITTED 16 Sep, 12 jobs).**
+**Tests** — 3 NEW truth points (`--seed` 1/2/3, which redraws BOTH the truth parameters AND the
+target noise realisation) × the SAME 4 track samples already run at seed 0 → a fully paired 4×4
+design (4 truth points × 4 samples). Config otherwise identical to `DSREP*`.
+**Why it is the top priority** — every number in the campaign, including the +8.85 ± 1.18% lifetime
+bias at n=16, is conditional on ONE truth draw and ONE target-noise realisation: `--data_seed` only
+varies which tracks are used. The GN toy established that target electronics noise genuinely
+displaces the minimum (loss(truth) above the achievable floor, |g|(truth) = 487 ≠ 0); at
+100 batches × 400 cm that displacement should be far smaller but has never been measured.
+**Reads as** — bias reproduces at all 3 new truth points ⇒ it is a property of the PROCEDURE
+(the dynamical/transient account stands). Bias changes size or sign with the truth point ⇒ it is
+partly a property of THIS truth+noise draw, and every campaign number inherits that caveat.
+**Pre-registered expectation** — reproduces, because the mechanism (init displacement × transient
+chasing a displaced conditional optimum × truncated anneal) has no dependence on the truth values;
+but the toy's noise-displacement result is a real reason this could go the other way.
+
+**Ruled OUT as causes of the lifetime/long_diff bias (16 Sep synthesis).** (a) A misplaced loss
+minimum: the joint fit→truth line is monotone with its minimum AT truth 7/7, truth beats the fit by
+9–10% on biased replicas, fine-grid scans bound any displacement at ~1%. (b) The mean-dE/dx prior /
+charge normalisation: the fit's mean dE/dx lands −0.126% vs matched truth, predicting ~+0.1% on
+lifetime through the profiled lever arm, not +8.8% — and across 16 replicas mean dE/dx correlates
+with lifetime at **+0.50**, the OPPOSITE sign to naive charge balance (co-adaptation, not a trade).
+(c) The E field↔drift-velocity link: d ln v/d ln E = 0.49, so the −0.033% E field bias maps to
++0.016% of lifetime — 0.18% of the observed bias, and it predicts the WRONG SIGN for long_diff.
+**Established contributors**: initialisation (≤18 pts, fig 84), schedule (7–9 pts: violent ~+14%
+vs gentle +5–7% attractors), and the dE/dx student-t prior displacing its own block (+561.9 of the
++568 nats at truth) into the direction the quality ladder shows raises lifetime's conditional
+optimum (+2.2 → +7.0%). **Cross-replica error correlations (n=16)** confirm the soft-mode picture
+dynamically: A_b↔lifetime **−0.81** (vs the Hessian's −0.83), long_diff↔lifetime **+0.67** (the
+eigenvector has BOTH components positive, so they ride up together), tran_diff↔long_diff −0.84.
+long_diff is the PASSENGER: its own conditional optimum is *below* truth (LDSCAN 10–44% low), so it
+lands high only by being dragged along the mode.
+
 **`SSR3/7/8` — the (scale,shape) dE/dx reparametrisation on replicas: NULL (15 Sep).**
 **Tests** — cold replica fits with SCIDXPARAM=scale_shape at its validated mean_w=3000, i.e. the
 rank-1 lifetime↔dE/dx coupling removed analytically. Verified applied (argv + mean_w).
