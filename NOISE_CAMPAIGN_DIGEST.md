@@ -1267,10 +1267,18 @@ family on BOTH replicas (9216 vs 9316; 9019 vs 9167). We have been starting at a
 worse point than truth for the whole campaign — part of the +8.8% bias is calibration-init memory,
 not only nuisance-init memory. ACTIONABLE: better calibration priors/initialisation should move
 the ensemble.
-**Concludes — the degeneracy, demonstrated as brutally as possible (`CINITA8`)**: all-shifted init
-lands at A_b +7.8% / lifetime −59.3% with loss 9026 — BETTER than the baseline's 9167 at A_b
-+0.01% / lifetime +16.4%. A catastrophically wrong fit that the objective PREFERS. This is figs
-80–83's loss-blindness in a single pair of runs.
+**Concludes — the degeneracy, demonstrated as brutally as possible (`CINITA8`, fig 88)**: lands at
+A_b +7.8% / lifetime −59.3% with loss 9026 — BETTER than the baseline's 9167 at A_b +0.01% /
+lifetime +16.4%. A catastrophically wrong fit that the objective PREFERS; figs 80–83's
+loss-blindness in one pair of runs.
+**⚠ LAUNCH ERROR, and it improved the experiment.** I set the all-shifted A_b init to 0.92, ABOVE
+its allowed max 0.90 (`ranges.py`: min 0.75, max 0.90). The sigmoid clamps it, so A_b saturates at
+the bound by iteration ~50 and is never fitted. So this is not a spontaneously-found degenerate
+minimum — it is a CONTROLLED test: pin A_b 7.8% wrong, let everything else adapt. Lifetime pays
+the whole bill within 200 iterations (+5.1 → −48 by iter 200), mean dE/dx rescales 1.879 → 1.862
+to absorb charge, and position/loss end BETTER than baseline. The controlled reading is stronger
+than the accidental one. TRAP FOR THE RECORD: `SCIINIT` values outside `ranges.py` are silently
+clamped — always check inits against the range table.
 **Caveat** — n=1 per arm against a ±8%-wide landing distribution; rep 8's ordering is not monotone
 (low −31% → +12.9 < nominal +16.4). The at-truth and low arms agree in sign on both replicas and
 the loss ordering is consistent, but the monotone reading rests on rep 3 alone. Repeat before
