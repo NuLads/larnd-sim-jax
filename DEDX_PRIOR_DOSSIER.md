@@ -133,3 +133,48 @@ on the old — two different fits, two different priors, the same answer.
 > **Standing caution from §6s, worth repeating:** α = 0.50 is the *likelihood's* optimum, not a
 > target to chase — pushing the field there would be fitting noise. The criterion that matters is
 > whether A_b and lifetime improve, which only BT-style paired arms can measure.
+
+---
+
+## 7. ⚠ CORRECTION (17 Sep): "the data wants 66% of the true spread" — right number, wrong reason,
+## and the wrong target for calibration (fig 94)
+
+§6s justified the 66% with: *"with finite hits per segment the maximum-likelihood field is itself a
+shrunk version of truth, because the per-segment values are individually noisy. Some shrinkage is
+correct."* **The first sentence is backwards.** A noisy estimate is OVER-dispersed:
+Var(estimate) = Var(truth) + Var(noise). Measured on 602k core segments across the 16 replicas:
+
+| quantity | value |
+|---|---|
+| true per-segment spread | 0.078 |
+| implied per-segment measurement noise | **0.102** |
+| per-segment SNR | **0.77** — each segment is measured worse than it varies |
+| width of the *unshrunk* ML field | **165% of truth**, not below it |
+| our fitted field | 71% of truth |
+| our shrinkage slope λ | 0.457 (Bayes-optimal for this SNR: 0.369) |
+
+So what is shrunk is the **MAP/posterior-mean** estimate, not the ML one, and the fit is doing that
+near-optimally. That is the correct estimator for **per-segment MSE**. It is the wrong one for
+**calibration**, and `DXTRU` (fig 93) measures the cost: pinning the field at 100% buys
+**−10.4 ± 3.3 points** of lifetime bias, 3/3, while the loss gets *worse*.
+
+**Why shrinkage specifically poisons lifetime.** The shrinkage bias is *coherent*: every segment is
+pulled toward the same centre in proportion to its own deviation. A coherent, drift-correlated
+distortion of the charge field is exactly what the lifetime parameter exists to absorb — so the
+calibration block eats it. This is the Neyman–Scott / nuisance-parameter problem in its standard
+form: the estimator that is optimal for the ~4000 incidental parameters is not the one that leaves
+the structural parameter unbiased.
+
+**The second reason the α-scan cannot see 100%:** its α = 0 endpoint is a field fitted to the *same
+data* being scored, so it has already absorbed that realisation's noise and partially retaining it
+scores well **in sample**. The scan cannot separate "correct shrinkage" from "overfitting", which
+is precisely why the §6s caution was right even though the reasoning beside it was not.
+
+**Consequences for what to aim at:**
+1. **Aim at 100%, not 66%,** whenever the deliverable is calibration rather than the dE/dx field.
+2. **Do not tune the prior toward α\* = 0.50** — that target was derived from the wrong criterion.
+3. **The fix is to marginalise, not to re-weight**: integrating the block out removes the coherent
+   bias that optimising it creates. The exact banded+rank-1 dE/dx Hessian machinery already exists.
+4. **Or raise the per-segment SNR at source.** SNR ∝ √dx, so reaching SNR ≈ 2 needs ~7× longer
+   segments (~6.6 cm vs today's 0.99 cm) — which trades away real dE/dx structure, so it needs its
+   own study rather than a guess.
