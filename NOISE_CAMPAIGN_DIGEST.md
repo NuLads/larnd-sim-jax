@@ -1303,6 +1303,29 @@ fresh samples and the error bar tightens as designed (±1.6 → ±1.26). NOTE: s
 **−0.57%** — the first non-positive replica, so the distribution is wide with a tail reaching
 truth, NOT a strict one-sided offset. long_diff +14.00 ± 2.53%.
 
+**`DXTRU3/7/8` — dE/dx PINNED AT TRUTH: the biggest lever we have (17 Sep, fig 93). n=3, COMPLETE.**
+**Tests** — the per-segment dE/dx field frozen at its arc-length-matched truth for the whole fit
+(synthetic checkpoints via `SCIDEDXINIT` + `SCIDEDXFREEZE=0`; pin verified, MAE = 0.00000 from
+iteration 0 against a ~0.055 baseline). Launched expecting ~2 points from the §6f spread ladder.
+**Concludes — it delivers −10.36 ± 3.29 points, 3/3**: lifetime +9.05→+3.94, **+14.63→−1.80**
+(seed 7 lands essentially AT truth), +16.42→+6.88. long_diff +20.8→+7.2, +7.9→−5.8, +34.5→+17.1.
+Position improves in every arm (131→114, 180→143, 242→186 µm). **This is level with
+geometry-at-truth (−10.6) — the dE/dx block is a first-order lever, not the second-order one the
+ladder implied.**
+**Concludes — why the ladder under-predicted, and it is the actionable part**: the §6f ladder varied
+only the field's WIDTH, preserving each segment's rank. The fitted field is wrong two ways — shrunk
+to 71% of true width (fig 90) AND noisy per segment (MAE 0.055 against a true spread of 0.084).
+Fig 90 showed the width is now nearly right, so the PER-SEGMENT NOISE carries most of the cost.
+**Concludes — the LOSS gets WORSE in all three arms** (+99, +158, +187) while lifetime, long_diff
+and position all improve sharply. Textbook nuisance-parameter bias: the likelihood's optimum for
+~4000 per-segment parameters is not the optimum for the calibration parameter of interest. Adds the
+nuisance block to the loss-blindness of figs 80–83.
+**Next** — the two routes this makes worth funding, both previously deprioritised: (a) reduce the
+per-segment noise at source (fewer/longer segments; the spline basis is a measured ~2× noisier than
+the angle basis for per-segment dE/dx); (b) MARGINALISE the block rather than profile it — the
+exact banded+rank-1 dE/dx Hessian machinery is already built and validated for precisely this.
+`DXTRU` is the upper bound on what either can buy.
+
 **`TRU{1,2,3}D{1,3,7,8}` — ARM B, the long-deferred second-truth test (SUBMITTED 16 Sep, 12 jobs).**
 **Tests** — 3 NEW truth points (`--seed` 1/2/3, which redraws BOTH the truth parameters AND the
 target noise realisation) × the SAME 4 track samples already run at seed 0 → a fully paired 4×4
