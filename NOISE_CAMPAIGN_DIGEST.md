@@ -1312,6 +1312,32 @@ bias at n=16, is conditional on ONE truth draw and ONE target-noise realisation:
 varies which tracks are used. The GN toy established that target electronics noise genuinely
 displaces the minimum (loss(truth) above the achievable floor, |g|(truth) = 487 ≠ 0); at
 100 batches × 400 cm that displacement should be far smaller but has never been measured.
+**RESULT (17 Sep, fig 92) — THE BIAS IS REAL AND SURVIVES THE TRUTH POINT.** All 12 jobs
+COMPLETED; truth draws verified distinct (τ = 2406 / 1160 / 2392 / 4518 µs, and E field, A_b,
+diffusions all redrawn).
+| truth pt | τ (µs) | ds1 | ds3 | ds7 | ds8 | mean ± SE |
+|---|---|---|---|---|---|---|
+| 0 (historical) | 2406 | +6.5 | +9.1 | +14.6 | +16.4 | **+11.7 ± 2.3** |
+| 1 | 1160 | +3.3 | +0.1 | +6.7 | +1.7 | **+2.9 ± 1.4** |
+| 2 | 2392 | +10.6 | +16.0 | +14.7 | +4.8 | **+11.5 ± 2.5** |
+| 3 | 4518 | −2.1 | +13.9 | +5.7 | +6.4 | **+6.0 ± 3.3** |
+**Concludes — the pre-registered expectation HOLDS**: 15/16 fits above truth, grand mean **+8.0%**.
+The campaign's headline bias is a property of the PROCEDURE, not of the seed-0 truth-and-noise
+draw. Every campaign conclusion keeps its meaning.
+**Concludes — but the bias SIZE is truth-point dependent, and that is new**: two-way analysis gives
+truth-point F = 3.19 (p = 0.077) vs sample F = 1.22 (p = 0.36) — **which detector you are
+calibrating matters more than which tracks you use.** So "+8.85%" is not a universal constant and
+must not be quoted as one.
+**Concludes — the driver is the DRIFT LEVER ARM**: τ = 1160 µs loses 15.9% of its charge over
+30 cm instead of 7.7%, and its bias falls to +2.9%. More attenuation signal in the data ⇒ less room
+for the transient to wander. But τ = 4518 (lever 4.1%) is NOT worse than τ = 2406, so a naive
+1/lever law fails (r = −0.53). Suggestive alternative: the ABSOLUTE offset is ~270–281 µs at three
+of four truth points (34 µs at the short one) — a fixed displacement along the degeneracy rather
+than a fixed relative error. n = 4 truth points cannot establish this; it is the obvious next scan.
+**Practical consequence** — a real detector with τ ≈ 1 ms (LArTPC-typical, and ~half our nominal)
+would suffer roughly a third of the bias we have been fighting. Our test point is unusually
+unfavourable.
+
 **Reads as** — bias reproduces at all 3 new truth points ⇒ it is a property of the PROCEDURE
 (the dynamical/transient account stands). Bias changes size or sign with the truth point ⇒ it is
 partly a property of THIS truth+noise draw, and every campaign number inherits that caveat.
