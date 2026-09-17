@@ -42,6 +42,8 @@ def ep(tag):
 
 ARMS = [('CINITL', 'low\n−31%'), ('DSREP', 'nominal\n−8.6%'), ('CINITT', 'at truth\n0%'),
         ('CINITH', 'high\n+14%')]
+SEEDS_LADDER = [3, 8]          # the original pair (all four arms)
+SEEDS_REPL = [1, 3, 7, 8, 12, 13]   # low/nominal/at-truth on six replicas
 fig, ax = plt.subplots(1, 3, figsize=(13.4, 4.2))
 
 # (a) landing vs init, ordered by init

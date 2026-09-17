@@ -1271,6 +1271,20 @@ the ensemble.
 A_b +7.8% / lifetime −59.3% with loss 9026 — BETTER than the baseline's 9167 at A_b +0.01% /
 lifetime +16.4%. A catastrophically wrong fit that the objective PREFERS; figs 80–83's
 loss-blindness in one pair of runs.
+**⚠ REPLICATED at n=6 (fig 91, 16 Sep) — and it partly DEFLATES.** `CINITT/L` on seeds 1/7/12/13
+added to 3/8, paired against each seed's own nominal-init baseline:
+* **the monotone "start lower → land higher" law is GONE** — 2/6 seeds only. Fig 84's clean
+  ordering was a single-seed accident (the exact trap this campaign keeps re-learning).
+* **the lifetime gain is suggestive, NOT established**: at-truth init helps on 5/6 but
+  −2.38 ± 2.80 points, permutation p = 0.16. The earlier "up to 18 points" framing was n=1 noise.
+* **the LOSS gain IS real**: −55.7 ± 25.7 nats, lower on 5/6, permutation **p = 0.047**. The
+  nominal init is genuinely sub-optimal as a starting point, independent of what lifetime does.
+* **seed 13 is the informative failure**: the one replica already at truth (−0.57%) was pushed to
+  **+8.40%** by initialising at truth. Starting at truth does not pin you there — the transient
+  still runs. This is the cleanest single refutation of "better init ⇒ better landing".
+**Revised reading**: initialisation is a real but modest lever on the landing point (≈2 pts, not
+18), and it buys a reliable loss improvement. It does NOT explain the +8.85% ensemble bias.
+
 **⚠ LAUNCH ERROR, and it improved the experiment.** I set the all-shifted A_b init to 0.92, ABOVE
 its allowed max 0.90 (`ranges.py`: min 0.75, max 0.90). The sigmoid clamps it, so A_b saturates at
 the bound by iteration ~50 and is never fitted. So this is not a spontaneously-found degenerate
