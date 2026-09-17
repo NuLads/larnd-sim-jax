@@ -170,6 +170,30 @@ data* being scored, so it has already absorbed that realisation's noise and part
 scores well **in sample**. The scan cannot separate "correct shrinkage" from "overfitting", which
 is precisely why the §6s caution was right even though the reasoning beside it was not.
 
+### The deployable test, launched 17 Sep (`WIDE16D*`, `WIDE25D*`, 6 jobs)
+
+`DXTRU` pins the field at truth, so it is an upper bound, not a recipe. The **deployable** version
+is to stop the MAP shrinkage from happening in the first place, by **deliberately widening the
+prior beyond the true spread**. Since λ = s_p²/(s_p² + σ_n²), a wider prior scale raises λ and the
+fitted width follows:
+
+| prior scale | predicted λ | predicted fitted width |
+|---|---|---|
+| ×1.0 (production, = `DSREP*` control) | 0.37 | 61% of truth |
+| **×1.6** (`WIDE16`) | **0.60** | **99% — the target** |
+| ×2.5 (`WIDE25`) | 0.79 | 130% — deliberate overshoot |
+
+Only `--dedx_student_scale_l/r` change (0.0782/0.0801 → 0.1251/0.1282 and 0.1955/0.2003); shape ν,
+`loc`, the prior weight and the mean constraint are all untouched, and the ×1.0 arm already exists
+as the replica baselines on the same three seeds. **This is a legitimate recipe, not a truth
+injection**: the widening factor is calibrated on simulation, exactly as the refit shape already is.
+
+Reads as: `WIDE16` recovers a large share of `DXTRU`'s −10.4 points ⇒ the shrinkage *is* the
+mechanism and the fix is a one-knob change. `WIDE16` fails while `DXTRU` works ⇒ what matters is
+the per-segment *noise*, not the width, and only marginalisation (or longer segments) will do.
+`WIDE25` says whether the effect is monotone in λ or has an optimum — and guards against an
+unconstrained field running away, since the soft barrier is measured never to fire.
+
 **Consequences for what to aim at:**
 1. **Aim at 100%, not 66%,** whenever the deliverable is calibration rather than the dE/dx field.
 2. **Do not tune the prior toward α\* = 0.50** — that target was derived from the wrong criterion.
