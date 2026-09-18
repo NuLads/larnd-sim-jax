@@ -60,6 +60,7 @@ SCICALIBPIN=${SCICALIBPIN:-}
 # carry. Accept a colon-separated form and expand it here; a value that already uses spaces passes
 # through untouched, so this is additive.
 SCIINIT=$(echo "${SCIINIT:-}" | tr ':' ' ')
+SCITGT=$(echo "${SCITGT:-}" | tr ':' ' ')   # same colon->space translation as SCIINIT; without it --set_target_vals gets ONE token and aborts
 if [ -n "${SCITRUTHPOINT}" ]; then
   if [ ! -f "${SCITRUTHPOINT}" ]; then
     echo "SCITRUTHPOINT=${SCITRUTHPOINT} does not exist"; exit 1
