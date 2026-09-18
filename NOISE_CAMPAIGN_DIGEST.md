@@ -1303,6 +1303,37 @@ fresh samples and the error bar tightens as designed (±1.6 → ±1.26). NOTE: s
 **−0.57%** — the first non-positive replica, so the distribution is wide with a tail reaching
 truth, NOT a strict one-sided offset. long_diff +14.00 ± 2.53%.
 
+**`CURVE{800..4400}D{1,3,7,8}` — ROUTE B: the estimator CALIBRATION CURVE (SUBMITTED 18 Sep,
+24 jobs).** The change of strategy, and the intended deliverable path.
+**Why** — both routes to *removing* the bias are now measured walls: optimiser-side is exhausted
+(schedules/restarts/init/multi-pass all null), prior-side is exhausted (weight/shape/scale/
+reparam/mean-target/drift all null), and the two things that DO work (dE/dx at truth −10.4,
+geometry at truth −10.6) are unreachable from data at SNR 0.77. The bias is a structural
+Neyman–Scott consequence of profiling ~4000 incidental parameters, not a defect we failed to find.
+**So instead of making the estimator unbiased, MEASURE ITS RESPONSE AND INVERT IT** — standard HEP
+practice, and we are far closer to it: Arm B already showed the bias varies smoothly with the true
+lifetime (+2.9% at τ=1160 to +11.7% at τ=2406) and that the sample effect is small (F 1.22 vs 3.19).
+**Design** — 6 true lifetimes (800/1200/1800/2400/3200/4400 µs) × the same 4 track samples, using
+`--set_target_vals` (launcher knob `SCITGT`) so the OTHER FOUR calibration parameters are pinned at
+the seed-0 truth and **only τ moves**. That is a controlled x-axis, unlike Arm B's random truth
+draws which varied all five parameters at once. Verified in flight that the explicit target is
+applied (a silent fallback to the random draw would void the curve).
+**Delivers** — τ_fit vs τ_true with error bars ⇒ (a) an invertible correction, (b) the residual
+scatter as an honest quantified uncertainty rather than an unknown systematic, (c) settles fig 92's
+open question: is the bias ∝ 1/lever-arm, or a roughly constant ~275 µs ABSOLUTE offset (the latter
+would be a remarkably simple correction), (d) answers the reviewer's first question — what bias
+should a real detector at τ ≈ 1 ms expect?
+
+**`BOTHTRU3/7/8` — the CEILING test (SUBMITTED 18 Sep).** Both nuisance blocks pinned at truth,
+calibration fitted freely from nominal. Lands ~0 ⇒ the calibration block is intrinsically unbiased
+and ALL the bias is nuisance-driven (Route A has a real ceiling; the curve will be well-behaved).
+Lands +3–6% ⇒ part of the bias is intrinsic to the calibration fit and Route A's payoff is capped
+short of zero. Either way it sets the budget for any future marginalisation build.
+
+**`DXFRZ3/7/8` — the freeze control.** `DXTRU` improves position by −36.6 ± 11.6 µm (3/3), but it
+also FREEZES the block, so geometry stops co-adapting. `DXFRZ` freezes at each seed's OWN fitted
+field to separate "dE/dx is right" from "dE/dx is static".
+
 **`DXTRU3/7/8` — dE/dx PINNED AT TRUTH: the biggest lever we have (17 Sep, fig 93). n=3, COMPLETE.**
 **Tests** — the per-segment dE/dx field frozen at its arc-length-matched truth for the whole fit
 (synthetic checkpoints via `SCIDEDXINIT` + `SCIDEDXFREEZE=0`; pin verified, MAE = 0.00000 from
