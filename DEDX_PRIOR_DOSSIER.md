@@ -194,6 +194,38 @@ the per-segment *noise*, not the width, and only marginalisation (or longer segm
 `WIDE25` says whether the effect is monotone in λ or has an optimum — and guards against an
 unconstrained field running away, since the soft barrier is measured never to fire.
 
+### RESULT (18 Sep, fig 95): **the wider prior FAILS — and the failure is the useful part**
+
+The width knob did exactly what the model predicted; the physics went the wrong way.
+
+| arm | fitted width | per-segment MAE | lifetime |
+|---|---|---|---|
+| ×1.0 (production) | 71% | 0.0583 | +13.4 |
+| ×1.6 | **109%** (predicted 99) | **0.0706** | **+19.7** |
+| ×2.5 | **137%** (predicted 130) | **0.0880** | **+22.0** |
+| pinned at truth | 100% | **0.0000** | **+3.0** |
+
+Paired vs baseline: **+6.36 ± 8.88 points WORSE at ×1.6, 1/3 improved.**
+
+**Why: the restored width is NOISE, not signal.** At SNR 0.77 the extra dispersion the prior now
+permits is filled by per-segment measurement error — MAE rises monotonically with the width
+(0.058 → 0.071 → 0.088). Truth is the only point with width 100% *and* error 0, and lifetime
+tracks the **error**, not the width (+13.4 → +19.7 → +22.0 against +3.0 at truth).
+
+**What this closes.** A prior cannot manufacture accuracy the data does not contain. Every
+re-weighting/re-shaping variant of the dE/dx prior is now a measured null or worse: weight (α-scan,
+structurally cannot reach the optimum), shape (`BT1` regression, `BT2` already at the right width),
+scale (this study), (scale,shape) reparametrisation (`SSR`, null), mean target (`S3T*`, an A_b knob
+only), drift penalty (`schDP`, null). **The prior-tuning programme is finished.**
+
+**What survives — exactly two routes, both attacking per-segment ERROR rather than the prior:**
+1. **Raise the SNR at source**: fewer/longer segments. SNR ∝ √dx, so SNR ≈ 2 needs ~7× longer
+   segments (~6.6 cm vs 0.99 cm). Trades away real dE/dx structure — needs its own study, and the
+   spline basis is a measured ~2× noisier than the angle basis for per-segment dE/dx.
+2. **Stop estimating per-segment values at all**: marginalise the block instead of profiling it.
+   The exact banded+rank-1 dE/dx Hessian machinery is already built and validated. `DXTRU`'s
+   −10.4 ± 3.3 points is the upper bound on what this can recover.
+
 **Consequences for what to aim at:**
 1. **Aim at 100%, not 66%,** whenever the deliverable is calibration rather than the dE/dx field.
 2. **Do not tune the prior toward α\* = 0.50** — that target was derived from the wrong criterion.
