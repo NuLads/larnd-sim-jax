@@ -7,15 +7,24 @@ truth, and -- if width is what lifetime cares about -- recover DXTRU's -10.4 poi
 THE WIDTH KNOB WORKED EXACTLY AS PREDICTED: 71% -> 109% at x1.6, 137% at x2.5 (predicted 99% and
 130%). The PHYSICS WENT THE WRONG WAY: lifetime +6.4 +- 8.9 points WORSE, 1/3 improved.
 
-WHY, and this is the useful part. Widening the prior restores the width by letting in NOISE, not
-signal: the per-segment error rises 0.058 -> 0.071 -> 0.088 monotonically with the width. Truth has
-width 100% AND error 0. Lifetime tracks the ERROR, not the width:
-    mean dE/dx error   0.000    0.058    0.071    0.088
-    mean lifetime      +3.0    +13.4    +19.7    +22.0
-So the deliverable is per-segment ACCURACY, which a prior cannot manufacture -- at SNR 0.77 the
-information simply is not in the data. That closes the "re-weight/re-shape the prior" family for
-good and leaves exactly two routes: raise the SNR at source (longer segments), or stop estimating
-the per-segment values at all (marginalise).
+WHY. Widening the prior restores the width by letting in NOISE, not signal: the per-segment error
+rises 0.058 -> 0.071 -> 0.088 monotonically with the width.
+
+*** A CORRECTION TO THE FIRST VERSION OF THIS FIGURE. It claimed "lifetime tracks the ERROR, not
+the width", citing r = +0.67 over all arms. That correlation is driven by the truth-pinned arms,
+whose MAE is 0 BY DEFINITION (they ARE the truth). Among the arms that actually fit, r = +0.29
+(n = 8) -- suggestive, not established.
+
+AND THE WIDTH IS NOT WHAT LOWERS THE ERROR, which was the implied reading. Among fitted arms
+NARROWER is MORE accurate: 71% width -> MAE 0.058; 109% -> 0.071; 137% -> 0.088. Production already
+sits at the MSE optimum (lam 0.372 vs the Bayes-optimal 0.369) -- because the BT2 refit matched the
+prior to the TRUE spread, and matching the prior to the truth IS the Bayes-optimal choice. So MSE
+rises in BOTH directions from where we are, and no prior knob can lower it.
+
+WHAT IS SOLID: "aim for 100% width" is refuted (base, furthest from 100% at 71%, has the BEST
+lifetime of the fitted arms; |width-100%| correlates with lifetime at r = -0.03). The discriminating
+test -- a NARROWER prior (x0.6), which also raises MSE -- is running as NARR06D*. If lifetime
+worsens there too, the MAE reading survives; if it improves, MAE is not the driver either.
 """
 import glob, pickle
 import numpy as np
@@ -112,12 +121,13 @@ a.plot(xx, b1 * xx + b0, '--', color=INK, lw=1.4,
 a.axhline(0, color=GREEN, lw=1.6)
 a.set_xlabel('per-segment dE/dx error (MAE vs matched truth)')
 a.set_ylabel('lifetime error (%)')
-a.set_title('(c) the real driver: per-segment ACCURACY.\nWidening the prior filled the width with NOISE', fontsize=9.5)
+a.set_title('(c) ⚠ the truth points (MAE = 0 BY DEFINITION) drive this.\n'
+            'Among FITTED arms only: r = +0.29 — suggestive, not established', fontsize=9.5)
 a.legend(frameon=False, fontsize=8, loc='upper left')
 
-fig.suptitle('Fig 95 — widening the prior restores the dE/dx WIDTH and makes the calibration WORSE. The extra width is noise, not signal:\n'
-             'per-segment error rises 0.058 → 0.071 → 0.088 with the width, and lifetime follows the ERROR (+13.4 → +19.7 → +22.0) not the width.\n'
-             'A prior cannot manufacture accuracy that the data does not contain (SNR 0.77) — so re-weighting and re-shaping the prior are closed.',
+fig.suptitle('Fig 95 — widening the prior restores the dE/dx WIDTH and makes the calibration WORSE: "aim for 100% width" is refuted.\n'
+             'NOTE the width is NOT what lowers the per-segment error — among fitted arms NARROWER is more accurate (0.058 at 71% vs 0.088 at 137%),\n'
+             'because production already sits at the MSE optimum. The truth arm\'s MAE = 0 is definitional, so panel (c) overstates the MAE link (r = +0.29 without it).',
              fontsize=10.5, y=1.09)
 fig.tight_layout()
 fig.savefig(f'{OUT}/fig95_wide_prior.png')
