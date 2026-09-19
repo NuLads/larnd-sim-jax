@@ -1324,6 +1324,43 @@ open question: is the bias ∝ 1/lever-arm, or a roughly constant ~275 µs ABSOL
 would be a remarkably simple correction), (d) answers the reviewer's first question — what bias
 should a real detector at τ ≈ 1 ms expect?
 
+**`NARR*` + `WIDE*` — THE NUISANCE-FREEDOM LADDER: the best practical result of the campaign
+(18 Sep, fig 97).**
+**Tests** — the dE/dx student-t prior SCALE multiplied by ×2.5 / ×1.6 / ×1.0 (production) / ×0.6,
+everything else identical, 3 seeds each, paired.
+**Concludes — calibration accuracy improves MONOTONICALLY as the nuisance block is given LESS
+freedom.** Mean |error| over the five calibration parameters: **11.77 → 10.32 → 7.26 → 3.36%**.
+| arm | A_b | E field | tran diff | long diff | lifetime | mean\|err\| | pos |
+|---|---|---|---|---|---|---|---|
+| ×2.5 | +0.01 | −0.03 | +3.96 | +34.3 | +20.3 | 11.77% | 192 |
+| ×1.6 | −0.13 | −0.04 | +1.72 | +29.9 | +19.7 | 10.32% | 186 |
+| ×1.0 prod | −0.07 | −0.04 | +0.65 | +21.1 | +13.4 | 7.26% | 184 |
+| **×0.6** | −0.01 | −0.03 | +0.69 | **+5.8** | **+7.8** | **3.36%** | **168** |
+| *frozen @ truth* | +0.01 | −0.03 | −1.47 | +6.2 | +3.0 | *3.19%* | *148* |
+**×0.6 uses NO truth information yet essentially matches frozen-at-truth (3.36 vs 3.19%).**
+**Concludes — the gain is entirely in the SOFT PLANE** (long_diff 21→6, lifetime 13→8); A_b and
+E field are flat throughout, exactly as the degeneracy matrix predicted, so it costs nothing.
+Position improves too (184→168 µm) — not a trade.
+**METHOD NOTE** — the TOTAL loss is NOT comparable across these arms: the dE/dx prior term is part
+of it and its definition changes with the prior scale. On the LIKELIHOOD alone the narrow arm is
+slightly *worse* (9952 vs 9872) while every physics number improves: loss-blindness again.
+**THE REFRAME THIS FORCES** — we have been tuning the prior to be a good DENSITY MODEL of dE/dx
+(that is what the BT2 refit optimised). The correct criterion is different: **the prior is a
+REGULARISATION knob for the calibration and should be tuned to minimise calibration bias**, which
+is measurable on simulation. The two criteria disagree — density-optimal is ×1.0, calibration-
+optimal is ≤×0.6.
+**Next** — the optimum is bracketed but unlocated: `CONSTDEDX` (§6d, the zero-freedom limit, field
+frozen at the prior mean) was much WORSE (long_diff ×4, lifetime ×2.7), so the curve turns around
+below ×0.6. `NARR015/025/040` (9 jobs) are queued to find the minimum.
+
+**`BOTHTRU3/7/8` — the CEILING test: n=3 COMPLETE (18 Sep).** With BOTH nuisance blocks pinned at
+truth the calibration lands at **lifetime −3.74 ± 0.39%, long_diff −9.73 ± 1.63%, A_b +0.17 ± 0.04,
+E field +0.00, tran_diff +1.06 ± 0.68; mean |error| 2.94%.** So perfect nuisances do NOT give an
+unbiased fit — they OVERSHOOT into a small, remarkably stable NEGATIVE bias. Two consequences:
+(a) no amount of nuisance improvement (marginalisation included) can reach zero; the calibration
+block carries a residual few-percent bias of its own, which caps Route A's payoff; (b) a stable
+offset of this kind is exactly what a Route-B calibration curve absorbs cleanly.
+
 **`BOTHTRU3/7/8` — the CEILING test (SUBMITTED 18 Sep).** Both nuisance blocks pinned at truth,
 calibration fitted freely from nominal. Lands ~0 ⇒ the calibration block is intrinsically unbiased
 and ALL the bias is nuisance-driven (Route A has a real ceiling; the curve will be well-behaved).
