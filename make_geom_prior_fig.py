@@ -54,7 +54,8 @@ def rd(tag):
 
 
 ARMS = [('×1.0 production', 'DSREP', INK, 'o'), ('×1.6 wider', 'WIDE16D', ORANGE, 's'),
-        ('×2.5 wider', 'WIDE25D', RED, '^'), ('pinned at truth', 'DXTRU', GREEN, '*')]
+        ('×2.5 wider', 'WIDE25D', RED, '^'), ('frozen @ own fit', 'DXFRZ', BLUE, 'D'),
+        ('pinned at truth', 'DXTRU', GREEN, '*')]
 D = {lab: [(s, rd(f'{pre}{s}')) for s in (3, 7, 8) if rd(f'{pre}{s}')]
      for lab, pre, _, _ in ARMS}
 
@@ -78,26 +79,28 @@ for i, (lab, _, col, _) in enumerate(ARMS):
     m = np.mean([d[1]['pos'] for d in D[lab]])
     a.plot([i - .22, i + .22], [m, m], color=col, lw=2.5, zorder=4)
     a.annotate(f'{m:.0f}', (i + .24, m), fontsize=9, color=col, va='center')
-a.set_xticks(range(4), [l.replace(' ', '\n') for l, _, _, _ in ARMS], fontsize=8.5)
+a.set_xticks(range(len(ARMS)), [l.replace(' ', '\n') for l, _, _, _ in ARMS], fontsize=8)
 a.set_ylabel('position residual (µm)')
-a.set_title('(a) the prior WIDTH does nothing to geometry;\npinning the block at truth buys −37 µm (3/3)',
+a.set_title('(a) the prior WIDTH does nothing to geometry;\nFREEZING it does — at own fit or at truth alike',
             fontsize=9.5)
 
 # (b) paired deltas
 a = ax[1]
-labs = ['×1.6', '×2.5', 'truth']
-for i, (lab, key) in enumerate(zip(labs, ['×1.6 wider', '×2.5 wider', 'pinned at truth'])):
+labs = ['×1.6', '×2.5', 'frozen\n@own', 'truth']
+for i, (lab, key) in enumerate(zip(labs, ['×1.6 wider', '×2.5 wider', 'frozen @ own fit',
+                                          'pinned at truth'])):
     d = [r['pos'] - dict(D['×1.0 production'])[s]['pos'] for s, r in D[key]]
-    col = [ORANGE, RED, GREEN][i]
+    col = [ORANGE, RED, BLUE, GREEN][i]
     a.scatter([i] * len(d), d, s=70, color=col, zorder=3, edgecolors='white', lw=.5)
     m, se = np.mean(d), np.std(d, ddof=1) / np.sqrt(len(d))
     a.errorbar(i + .25, m, yerr=se, fmt='D', color=col, ms=7, capsize=4, zorder=4)
     a.annotate(f'{m:+.1f} ± {se:.1f}', (i + .32, m), fontsize=8.5, color=col, va='center')
 a.axhline(0, color=INK, lw=1.4)
-a.set_xticks(range(3), labs, fontsize=9)
-a.set_xlim(-.4, 2.9)
+a.set_xticks(range(4), labs, fontsize=8.5)
+a.set_xlim(-.4, 3.9)
 a.set_ylabel('position − production (µm)   ← better')
-a.set_title('(b) paired: the two width arms are NULL,\nonly the truth arm moves geometry', fontsize=9.5)
+a.set_title('(b) CONFOUND RESOLVED: freezing alone gives −31 µm of\nthe −37; geometry wants a STATIC block, not a right one',
+            fontsize=9.5)
 
 # (c) convergence traces, seed 8
 a = ax[2]
@@ -113,13 +116,14 @@ for lab, _, col, _ in ARMS:
 a.set_xlabel('iteration (×1000)')
 a.set_ylabel('position residual (µm)')
 a.set_ylim(150, 700)
-a.set_title('(c) seed 8 traces: the truth arm separates early\nand stays separated', fontsize=9.5)
+a.set_title('(c) seed 8 traces: the two FROZEN arms separate\ntogether from iter ~4000 — freezing is the cause', fontsize=9.5)
 a.legend(frameon=False, fontsize=8, loc='upper right')
 
-fig.suptitle('Fig 96 — geometry resolution across the dE/dx prior arms. A factor-2 change in the prior width moves the position residual by\n'
-             '+1.3 ± 8.3 µm (×1.6) and +2.5 ± 6.4 µm (×2.5) — null, reproducing fig 58’s weak dE/dx↔geometry coupling. But pinning the block at\n'
-             'truth buys −36.6 ± 11.6 µm, 3/3. CAVEAT: the truth arms also FREEZE the block, so DXFRZ* (frozen at each seed’s own fit) is running.',
-             fontsize=10.5, y=1.09)
+fig.suptitle('Fig 96 — geometry resolution across the dE/dx prior arms. The prior WIDTH is a null (+1.3 ± 8.3 µm at ×1.6, +2.5 ± 6.4 at ×2.5).\n'
+             'The −36.6 µm gain from pinning at truth is now RESOLVED by the DXFRZ control: freezing the block at its OWN (wrong) fitted values\n'
+             'already gives 184 → 153 µm, i.e. 31 of the 37 µm. GEOMETRY wants the nuisance STATIC; LIFETIME wants it CORRECT (freezing alone\n'
+             'buys only 2.8 of its 10.4 points). Two different mechanisms in the same block.',
+             fontsize=10.2, y=1.12)
 fig.tight_layout()
 fig.savefig(f'{OUT}/fig96_geom_vs_prior.png')
 print('wrote fig96')
