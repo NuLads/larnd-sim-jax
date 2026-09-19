@@ -1303,6 +1303,37 @@ fresh samples and the error bar tightens as designed (±1.6 → ±1.26). NOTE: s
 **−0.57%** — the first non-positive replica, so the distribution is wide with a tail reaching
 truth, NOT a strict one-sided offset. long_diff +14.00 ± 2.53%.
 
+**`CURVE*` — ROUTE B DELIVERED: the estimator calibration curve (19 Sep, fig 98). 24/24 COMPLETE.**
+**Tests** — 6 true lifetimes (800/1200/1800/2400/3200/4400 µs) × the same 4 track samples, with the
+other four calibration parameters pinned at the seed-0 truth via `--set_target_vals`, so only τ
+moves. All 24 targets verified applied (non-vacuously — see the trap below).
+**Concludes — the bias is set by the DRIFT LEVER ARM, not by a constant fraction or a constant
+offset.** It grows steadily as τ rises and the attenuation signal fades:
+
+| τ_true (µs) | 800 | 1200 | 1800 | 2400 | 3200 | 4400 |
+|---|---|---|---|---|---|---|
+| charge lost over 30 cm | 20.5% | 14.2% | 9.7% | 7.4% | 5.6% | 4.1% |
+| bias | +2.7% | +5.3% | +9.0% | +14.8% | +17.6% | +6.2%* |
+
+A weighted fit of bias against 1/lever over 800–3200 µs gives **χ²/dof = 0.2**. This SUPERSEDES
+fig 92's tentative "~275 µs constant absolute offset" reading — that was an artefact of Arm B's
+four random truth draws, which varied all five parameters at once.
+*(\*τ=4400 breaks the trend but must NOT be read as a turnover: only 4.1% of the charge is lost
+over the full drift, the four samples scatter over 500 µs, and its error bar ±2.8% is the largest
+in the set. The estimator is noise-limited there.)*
+**THE DELIVERABLE — a corrected estimator with a quoted uncertainty.** Over 800–3200 µs:
+> **τ_fit = 1.232·τ_true − 204 µs   ⟹   τ_true = (τ_fit + 204) / 1.232**
+> residual scatter **±35 µs = ±2.9%**, against a raw bias running to +17.6%.
+That residual is the irreducible uncertainty of the corrected estimator — an unknown systematic
+converted into a quoted number. The valid range covers the LArTPC-realistic regime (τ ~ 1 ms);
+do NOT extrapolate above ~3500 µs without more points.
+**TRAP LOGGED (twice over).** (1) `SCITGT` lacked the colon→space translation `SCIINIT` has, so
+`--set_target_vals` got one token and all 24 jobs died in 25 s; fixed in the launcher. (2) My
+verification then reported "ALL CHECKED TARGETS CORRECT" while checking ZERO runs — a check that
+passes on an empty set is worse than none. It now counts what it examined and reports
+`NO DATA — CHECK VACUOUS`. What actually caught the failure was the queue dropping from 34 jobs
+to 9, not the check.
+
 **`CURVE{800..4400}D{1,3,7,8}` — ROUTE B: the estimator CALIBRATION CURVE (SUBMITTED 18 Sep,
 24 jobs).** The change of strategy, and the intended deliverable path.
 **Why** — both routes to *removing* the bias are now measured walls: optimiser-side is exhausted
