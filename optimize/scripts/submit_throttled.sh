@@ -56,3 +56,19 @@ fi
 ) &
 disown
 echo "releaser running in background; cap=${MAXJOBS}; log=${LOG}"
+
+# ---------------------------------------------------------------------------
+# DISK NOTE (2026-09-20). /sdf/group filled to 100% (455T volume, a few GB free)
+# and killed two whole waves mid-run: logs truncate mid-line, no traceback,
+# every job on every node dying within seconds of each other, exit 1:0.
+# Our own footprint is ~83G of 455T, so cleaning up on our side does not help.
+#
+# WORKAROUND, no code change needed: fit_params.py writes to the RELATIVE path
+# fit_result/<test_name>/ and only calls makedirs when that path does not
+# already exist. So pre-creating it as a SYMLINK to scratch redirects all
+# checkpoint writes:
+#   S=/sdf/scratch/neutrino/pgranger/fit_result
+#   mkdir -p $S/sci_full_<TAG> && ln -sfn $S/sci_full_<TAG> fit_result/sci_full_<TAG>
+# /sdf/scratch/neutrino has its own 5T quota (was 99% free) and the container
+# already binds /sdf and /sdf/scratch, so compute nodes see it.
+# ---------------------------------------------------------------------------
