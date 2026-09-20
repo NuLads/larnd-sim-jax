@@ -21,11 +21,31 @@
 set -uo pipefail
 cd /sdf/group/neutrino/pgranger/larnd-sim-jax
 
-MAXJOBS=${MAXJOBS:-7}
+MAXJOBS=${MAXJOBS:-7}      # base cap, always respected when the partition is busy
+MAXCAP=${MAXCAP:-20}       # never exceed this even on a totally empty partition
 LOG=${THROTTLE_LOG:-logs/throttle.log}
 mkdir -p "$(dirname "$LOG")"
 
 running() { squeue -u "$USER" -h -t RUNNING -o "%i" 2>/dev/null | wc -l; }
+
+# ADAPTIVE CAP. The base cap exists because other users complained about the partition being
+# monopolised. When the partition is genuinely quiet -- free nodes AND nobody else queued -- that
+# reason does not apply, so the cap lifts to use the idle capacity.
+#   * "free" means state EXACTLY idle. Nodes can report -t idle while flagged MAINT/DRAIN and are
+#     NOT usable; on 2026-09-20, 9 of 9 apparently-idle ampere nodes were in maintenance.
+#   * any other user queued => fall straight back to the base cap.
+PART=${PART:-ampere}
+free_nodes()     { sinfo -p "$PART" -h -o "%t %D" 2>/dev/null | awk '$1=="idle"{s+=$2} END{print s+0}'; }
+others_pending() { squeue -p "$PART" -h -t PENDING -o "%u" 2>/dev/null | grep -vc "^${USER}$"; }
+effective_cap() {
+  local f o
+  f=$(free_nodes); o=$(others_pending)
+  if [ "${o:-1}" -eq 0 ] && [ "${f:-0}" -gt 0 ]; then
+    echo $(( MAXJOBS + f < MAXCAP ? MAXJOBS + f : MAXCAP ))
+  else
+    echo "$MAXJOBS"
+  fi
+}
 held()    { squeue -u "$USER" -h -t PENDING -o "%i %r" 2>/dev/null | awk '/JobHeldUser/{print $1}'; }
 
 if [ "${1:-}" != "--release-only" ]; then
@@ -44,8 +64,9 @@ fi
 (
   while true; do
     H=$(held); [ -z "$H" ] && { echo "$(date '+%F %T') all released; throttle exiting" >> "$LOG"; break; }
-    R=$(running)
-    SLOTS=$(( MAXJOBS - R ))
+    R=$(running); CAP=$(effective_cap)
+    [ "$CAP" != "$MAXJOBS" ] && echo "$(date '+%F %T') partition quiet -> cap raised to $CAP" >> "$LOG"
+    SLOTS=$(( CAP - R ))
     if [ "$SLOTS" -gt 0 ]; then
       echo "$H" | head -n "$SLOTS" | while read -r j; do
         scontrol release "$j" 2>/dev/null && echo "$(date '+%F %T') released $j (running was $R)" >> "$LOG"
