@@ -46,7 +46,15 @@ effective_cap() {
     echo "$MAXJOBS"
   fi
 }
-held()    { squeue -u "$USER" -h -t PENDING -o "%i %r" 2>/dev/null | awk '/JobHeldUser/{print $1}'; }
+# Returns held job ids on stdout. Exits non-zero if squeue itself failed, so callers can tell
+# "nothing is held" from "could not ask" -- a transient name-service outage (seen 2026-09-20:
+# "getpwnam_r: Transport endpoint is not connected") otherwise looks like an empty queue and
+# strands every held job.
+held() {
+  local out
+  out=$(squeue -u "$USER" -h -t PENDING -o "%i %r" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | awk '/JobHeldUser/{print $1}'
+}
 
 if [ "${1:-}" != "--release-only" ]; then
   LIST="${1:?usage: submit_throttled.sh <joblist|--release-only>}"
@@ -62,8 +70,16 @@ fi
 
 # the releaser: keep exactly MAXJOBS running until nothing is held
 (
+  SQFAIL=0
   while true; do
-    H=$(held); [ -z "$H" ] && { echo "$(date '+%F %T') all released; throttle exiting" >> "$LOG"; break; }
+    if ! H=$(held); then
+      SQFAIL=$((SQFAIL+1))
+      echo "$(date '+%F %T') squeue unreachable (${SQFAIL}/10) -- NOT exiting" >> "$LOG"
+      [ "$SQFAIL" -ge 10 ] && { echo "$(date '+%F %T') squeue down persistently; exiting" >> "$LOG"; break; }
+      sleep 300; continue
+    fi
+    SQFAIL=0
+    [ -z "$H" ] && { echo "$(date '+%F %T') all released; throttle exiting" >> "$LOG"; break; }
     R=$(running); CAP=$(effective_cap)
     [ "$CAP" != "$MAXJOBS" ] && echo "$(date '+%F %T') partition quiet -> cap raised to $CAP" >> "$LOG"
     SLOTS=$(( CAP - R ))
