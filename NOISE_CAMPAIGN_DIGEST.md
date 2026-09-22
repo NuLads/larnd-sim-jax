@@ -1303,6 +1303,21 @@ fresh samples and the error bar tightens as designed (±1.6 → ±1.26). NOTE: s
 **−0.57%** — the first non-positive replica, so the distribution is wide with a tail reaching
 truth, NOT a strict one-sided offset. long_diff +14.00 ± 2.53%.
 
+**`LDPIN` — the diffusion mechanism test: ⚠ WEAKENS AT n=3, NOT established (22 Sep).**
+**Tests** — long_diff pinned at truth, everything else fitted, τ=2400 where the bias is +14.8%.
+Paired control = the `CURVE2400D*` runs.
+**At n=2 it looked confirmed**: −6.71 points, 2/2, 61% of the attenuation-rate error removed. I
+reported it as such.
+**At n=3 it does not hold.** Per-seed deltas −3.86, −9.55, **+0.38** — seed 7 does not improve at
+all (+20.55 → +20.93). Mean **−4.34 ± 2.88 points (1.5σ)**, 2/3, and only **31%** of the rate error
+removed (−0.92% → −0.63% of charge over 30 cm).
+**Status: SUGGESTIVE, not established.** The diffusion→threshold→attenuation story remains the best
+mechanism on offer and the sign is right on 2 of 3 seeds, but one seed flatly contradicts it and the
+effect is not significant at n=3. This is the same n=2→n=3 reversal that has bitten the campaign
+repeatedly (ALT/ALTW, pass3r8, CINIT); the rule stands — **never report a mechanism at n=2.**
+**Next** — the `LINKON/LINKOFF` arms test the same physics from the other direction (tying
+long_diff to tran_diff rather than pinning it), against a link-consistent truth.
+
 **`CURVE*` — ROUTE B DELIVERED: the estimator calibration curve (19 Sep, fig 98). 24/24 COMPLETE.**
 **Tests** — 6 true lifetimes (800/1200/1800/2400/3200/4400 µs) × the same 4 track samples, with the
 other four calibration parameters pinned at the seed-0 truth via `--set_target_vals`, so only τ
