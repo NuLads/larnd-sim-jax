@@ -354,6 +354,30 @@ _DRIFT_AXIS = np.array([0., 0., 1.], np.float32)
 # so the drift-axis sensitivity is isolated in e2; "legacy" is the original arbitrary frame.
 _CHAIN_FRAME = os.environ.get('LARND_CHAIN_FRAME', 'drift').strip().lower()
 
+# LARND_CHAIN_FREEZE_DRIFT=1 (default OFF): hard-freeze the drift-direction geometry freedom of the
+# spline basis. In the 'drift' frame e1 lies in the pixel plane and e2 carries ALL of the drift-axis
+# component (dz = d2 * sin(angle to drift)), so zeroing the e2-coefficient gradients leaves every
+# track free to move only within the pixel plane, with its drift coordinate fixed at the nominal line.
+# Tracks (nearly) parallel to drift fall back to the legacy frame, where e2 has no drift component;
+# they are left free. Test of 2026-09-27: is the geometry x dE/dx interaction behind the lifetime
+# bias carried by drift-direction displacement (which mimics attenuation)?
+_CHAIN_FREEZE_DRIFT = os.environ.get('LARND_CHAIN_FREEZE_DRIFT', '0') == '1'
+
+# LARND_DRIFT_FROM_HITS=1 (default OFF): the truth-free version of LARND_INIT_FROM_TRUTH=drift. On a
+# batch's first visit, each drift-frame track's e2 (drift-carrying) spline modes are fitted by
+# charge-weighted least squares to the TARGET HITS' timing-derived z (same event, within 1 cm of the
+# nominal line in the pixel plane), with a constant + linear term absorbed (hit-time latency, i.e.
+# threshold-crossing delay, and endpoint offsets) and discarded. Use with LARND_CHAIN_FREEZE_DRIFT=1.
+_DRIFT_FROM_HITS = os.environ.get('LARND_DRIFT_FROM_HITS', '0') == '1'
+
+# LARND_FREEZE_STRAIGHT_CL=c (default 0 = off; needs LARND_DRIFT_FROM_HITS=1 and LARND_CHAIN_FREEZE_DRIFT=1): freeze
+# the e2 (drift) geometry at the straight line ONLY for tracks whose hit-derived e2 modes are NOT significant at
+# level c (chi2 test vs straight); all other tracks keep free e2 (hit-seeded if significant at LARND_HITS_SEED_E2_CL).
+# Idea: frozen-drift fits pin lifetime tightly while free fits are nearly indifferent along the lifetime/long_diff/
+# coherent-drift valley, so a subset of near-straight tracks with frozen drift should set the global parameters.
+# Offline (sample 8, K=3): c=0.9 freezes 33% of drift-frame tracks with straight-line error mean 148 um (p95 440).
+_FREEZE_STRAIGHT_CL = float(os.environ.get('LARND_FREEZE_STRAIGHT_CL', '0') or 0)
+
 
 def _transverse_frame(u0, frame=None):
     """Two orthonormal vectors spanning the plane perpendicular to unit vector u0.
@@ -3617,7 +3641,11 @@ class GradientDescentFitter(ParamFitter):
             # a previous fit's chain_cache — combined with LARND_CHAIN_FREEZE_ITER=1 this fits
             # calib+dEdx against FROZEN fitted geometry (pass 2). Batches must match (same config).
             _init_ckpt = None
-            _ckpt_path = os.environ.get('LARND_CHAIN_INIT_FROM')
+            # On --resume_from, restore the fitted geometry from the resumed checkpoint through this same
+            # track_id-keyed path. Before 4 Oct 2026 nothing restored _chain_cache on resume, so every
+            # resumed run silently restarted its geometry from the default init (affected: DRIFTTRU1/2/4,
+            # e1 reset at iteration 2200; GEOFRZ re-initialised to the identical frozen truth geometry).
+            _ckpt_path = os.environ.get('LARND_CHAIN_INIT_FROM') or getattr(self, 'resume_from', None)
             if _ckpt_path:
                 if not hasattr(self, '_chain_init_ckpt'):
                     with open(_ckpt_path, 'rb') as _f:
@@ -3657,6 +3685,30 @@ class GradientDescentFitter(ParamFitter):
                             B = np.sin(np.outer(al, np.pi * np.arange(1, K + 1)))
                             b1 = np.linalg.lstsq(B, d @ e1, rcond=None)[0]
                             b2 = np.linalg.lstsq(B, d @ e2, rcond=None)[0]
+                            # LARND_INIT_FROM_TRUTH=drift: seed ONLY the drift-carrying e2 modes at
+                            # truth (what hit timing determines on data) and keep e1 at the straight
+                            # line, as in production. Only for drift-frame tracks, i.e. exactly those
+                            # LARND_CHAIN_FREEZE_DRIFT freezes; parallel tracks keep the production init.
+                            if os.environ.get('LARND_INIT_FROM_TRUTH') == 'drift':
+                                in_drift_frame = (abs(float(e1[2])) < 1e-6 and
+                                                  float(np.linalg.norm(np.cross(_DRIFT_AXIS, u0))) > 1e-3)
+                                b1 = np.zeros_like(b1)
+                                if not in_drift_frame:
+                                    b2 = np.zeros_like(b2)
+                                # LARND_DRIFT_TRUTH_NOISE_UM=s (default 0): perturb the truth drift
+                                # shape by iid Gaussian noise on its K sine modes, scaled so the RMS
+                                # displacement along the track is s um (RMS of sum c_k sin(pi k a) over
+                                # a in [0,1] is |c|/sqrt(2) -> per-mode sd = s/sqrt(K/2)). Mimics drift
+                                # information measured from hit timing instead of known exactly.
+                                # Seeded per track (track_id + LARND_DRIFT_TRUTH_NOISE_SEED) so it is
+                                # reproducible and identical across resumes.
+                                _nz = float(os.environ.get('LARND_DRIFT_TRUTH_NOISE_UM', '0') or 0.)
+                                if _nz > 0 and in_drift_frame:
+                                    import zlib
+                                    _seed = zlib.crc32(f"{ctx.track_id}|{os.environ.get('LARND_DRIFT_TRUTH_NOISE_SEED', '0')}".encode())
+                                    _rng = np.random.default_rng(_seed)
+                                    b2 = b2 + _rng.normal(0.0, (_nz * 1e-4) / np.sqrt(K / 2.0), size=K)
+                                self.__dict__['_n_drift_truth_init'] = self.__dict__.get('_n_drift_truth_init', 0) + int(in_drift_frame)
                             params = jnp.asarray(np.concatenate([b1, b2]).astype(np.float32))
                 else:
                     n_c = ctx.n_chain
@@ -3677,7 +3729,12 @@ class GradientDescentFitter(ParamFitter):
                                            f"{_loaded.shape} vs {params.shape} — default init")
                 opt_state = self._chain_optimizer.init(params)
                 states.append({'angles': params, 'opt_state': opt_state})
+            if os.environ.get('LARND_INIT_FROM_TRUTH') == 'drift':
+                logger.info(f"[CHAIN] batch {batch_idx}: drift-direction (e2) geometry seeded at truth, "
+                            f"e1 at the straight line (running total {self.__dict__.get('_n_drift_truth_init', 0)} tracks)")
             self._chain_cache[batch_idx] = states
+            if not _init_ckpt:                              # geometry NOT restored from a checkpoint
+                self.__dict__.setdefault('_chain_fresh', set()).add(batch_idx)
         return self._chain_cache[batch_idx]
 
     def _build_true_dedx_matched(self, batch_idx, batch_flat, raw_pids, n_orig, target):
@@ -3804,6 +3861,142 @@ class GradientDescentFitter(ParamFitter):
         t = max(0, int(total_iter) - self._chain_decay_start)
         return float(self._chain_decay_rate ** t)
 
+    def _seed_drift_from_hits(self, batch_idx, hx, hy, hz, hev, hq, hpid, apply_seed=True):
+        """LARND_DRIFT_FROM_HITS: truth-free starting geometry from the TARGET hits.
+
+        Per drift-frame track, one point per pixel (charge-weighted mean of its hits), gated in 3-D to
+        the nominal line, then a robust weighted LS of the offsets on [1, alpha, sin modes] (constant +
+        linear absorbed and discarded: hit-time latency / endpoint offsets).
+          e2 (drift): from the timing-derived z; used only if the modes are significant against
+                      "straight" (chi2 test, level LARND_HITS_SEED_E2_CL, default 0.999; 0 = always).
+          e1 (pixel plane, only with LARND_HITS_SEED_E1=1): from the pixel positions; used only if the
+                      seeded shape RMS exceeds LARND_HITS_SEED_E1_AMP_UM (default 500 um).
+        Offline on sample 8 (K=3, 865 tracks): curved tracks (true deviation >500 um) start at 451 um
+        (e2) / 241 um (e1) instead of 707 / 732 um for the straight line; near-straight tracks stay
+        at ~80-120 um. Single hits scatter ~3 mm in z, per-pixel means ~1 mm (white), so this is a
+        STARTING POINT for the free fit, not a substitute for it.
+        """
+        from scipy.stats import chi2 as _chi2
+        to = lambda a: np.asarray(a, dtype=np.float64).ravel()
+        hx, hy, hz, hev, hq, hpid = to(hx), to(hy), to(hz), to(hev), to(hq), to(hpid)
+        n = min(len(hx), len(hy), len(hz), len(hev), len(hq), len(hpid))
+        hx, hy, hz, hev, hq, hpid = hx[:n], hy[:n], hz[:n], hev[:n], hq[:n], hpid[:n]
+        Kfit = int(os.environ.get('LARND_DRIFT_FROM_HITS_K', '0'))   # 0 = all K modes; else only the lowest Kfit
+        cl2 = float(os.environ.get('LARND_HITS_SEED_E2_CL', '0.999'))
+        do_e1 = os.environ.get('LARND_HITS_SEED_E1', '0') == '1'
+        amp1 = float(os.environ.get('LARND_HITS_SEED_E1_AMP_UM', '500')) * 1e-4
+        ok = np.isfinite(hx) & np.isfinite(hy) & np.isfinite(hz) & (hq > 0) & (hev >= 0)
+        H = np.stack([hx, hy, hz], 1)
+        ctxs = self._batch_chain_contexts.get(batch_idx, []); states = self._chain_cache[batch_idx]
+        tp = getattr(self, '_batch_true_positions', {}).get(batch_idx, {})
+        n_trk = n_e2 = n_e1 = n_skip = 0; dv = {'e1': [], 'e2': [], 'e1_0': [], 'e2_0': []}
+        straight = set()                                    # track indices called straight (LARND_FREEZE_STRAIGHT_CL)
+
+        def robust_fit(A, y, sw, kmin):
+            keep = np.ones(len(y), bool)
+            for _ in range(4):                              # drop >3 MAD-sigma outliers, refit
+                coef = np.linalg.lstsq(A[keep] * sw[keep, None], y[keep] * sw[keep], rcond=None)[0]
+                r = y - A @ coef; sig = 1.4826 * np.median(np.abs(r[keep])) + 1e-4
+                nk = np.abs(r) < 3 * sig
+                if nk.sum() < kmin or (nk == keep).all(): break
+                keep = nk
+            Aw = A[keep] * sw[keep, None]
+            return coef, sig ** 2 * np.linalg.pinv(Aw.T @ Aw)
+
+        for ti, (ctx, st) in enumerate(zip(ctxs, states)):
+            u0 = _dir_from_angles(ctx.theta0_i, ctx.phi0_i); e1, e2 = _transverse_frame(u0)
+            if not (abs(float(e1[2])) < 1e-6 and float(np.linalg.norm(np.cross(_DRIFT_AXIS, u0))) > 1e-3):
+                continue
+            ang = np.asarray(st['angles'], dtype=np.float64); K = len(ang) // 2
+            x0 = np.asarray(ctx.x0_fixed, dtype=np.float64); L = float(ctx.total_len)
+            m = ok & (np.abs(hev - float(ctx.track_id[0])) < 0.5)
+            P, w, pid = H[m], hq[m], hpid[m]
+            a = ((P - x0) @ u0) / L
+            d = P - (x0[None, :] + a[:, None] * L * u0[None, :])
+            # 3-D gate to the nominal line: tracks of one event cross in the pixel-plane projection,
+            # so a pixel-plane-only gate pulls in other tracks' hits (seen offline: cm-level errors).
+            sel = (a > 0.01) & (a < 0.99) & (np.linalg.norm(d - (d @ u0)[:, None] * u0[None, :], axis=1) < 1.0)
+            P, w, pid = P[sel], w[sel], pid[sel]
+            Kf = K if Kfit <= 0 else min(K, Kfit)
+            if len(np.unique(pid)) < 3 * Kf + 2:
+                n_skip += 1; continue
+            up, inv = np.unique(pid, return_inverse=True)
+            ws = np.bincount(inv, w)
+            P = np.stack([np.bincount(inv, w * P[:, j]) / ws for j in range(3)], 1); w = ws
+            a = ((P - x0) @ u0) / L
+            d = P - (x0[None, :] + a[:, None] * L * u0[None, :])
+            # Coverage guard: a fit to pixels spanning only part of the track extrapolates freely (seen once in
+            # ~13k tracks: a 103-cm track seeded 1.6 m off). Require the pixels to span >= half of the track.
+            if np.ptp(a) < 0.5:
+                n_skip += 1; continue
+            B = np.sin(np.outer(a, np.pi * np.arange(1, Kf + 1)))
+            sw = np.sqrt(w / w.mean()); one = np.ones((len(a), 1))
+            new = ang.copy(); n_trk += 1
+            ag_ = np.linspace(0, 1, 101); Bg_ = np.sin(np.outer(ag_, np.pi * np.arange(1, Kf + 1)))
+            sane = lambda bb: float(np.abs(Bg_ @ bb).max()) < 2.0   # cm; hits are gated at 1 cm from the nominal line
+            # e2: offset z-component = (B b2) * e2z exactly, since e1z = 0 in the drift frame
+            coef, cov = robust_fit(np.hstack([one, a[:, None], B * float(e2[2])]), d[:, 2], sw, 3 * Kf + 2)
+            b2 = coef[2:]
+            T2 = float(b2 @ np.linalg.pinv(cov[2:, 2:]) @ b2)
+            if _FREEZE_STRAIGHT_CL > 0 and _chi2.sf(T2, Kf) > 1.0 - _FREEZE_STRAIGHT_CL:
+                straight.add(ti); new[K:] = 0.0              # called straight: e2 at the straight line (frozen)
+            elif (cl2 <= 0 or T2 > _chi2.ppf(cl2, Kf)) and sane(b2):
+                new[K:] = 0.0; new[K:K + Kf] = b2; n_e2 += 1
+            if do_e1:
+                coef1, _ = robust_fit(np.hstack([one, a[:, None], B]), d @ e1, sw, 3 * Kf + 2)
+                b1 = coef1[2:]
+                ag = np.linspace(0, 1, 101)
+                if np.sqrt(np.mean((np.sin(np.outer(ag, np.pi * np.arange(1, Kf + 1))) @ b1) ** 2)) > amp1 and sane(b1):
+                    new[:K] = 0.0; new[:Kf] = b1; n_e1 += 1
+            if apply_seed:                                  # never overwrite geometry restored from a checkpoint
+                st['angles'] = jnp.asarray(new.astype(np.float32))
+                st['opt_state'] = self._chain_optimizer.init(st['angles'])
+            tru = tp.get(ctx.track_id)                      # diagnostic only: seeded vs truth-projected shape
+            if tru is not None:
+                al = np.asarray(ctx.alpha_mid, float); tr = np.asarray(tru, float); mm = min(len(al), len(tr))
+                al, tr = al[:mm], tr[:mm]
+                Bt = np.sin(np.outer(al, np.pi * np.arange(1, K + 1)))
+                dt = tr - (x0[None, :] + al[:, None] * L * u0[None, :])
+                ag = np.linspace(0, 1, 101); Bg = np.sin(np.outer(ag, np.pi * np.arange(1, K + 1)))
+                for comp, ee, sl in (('e1', e1, slice(0, K)), ('e2', e2, slice(K, 2 * K))):
+                    bt = np.linalg.lstsq(Bt, dt @ ee, rcond=None)[0]
+                    dv[comp].append(float(np.sqrt(np.mean((Bg @ (new[sl] - bt)) ** 2)) * 1e4))
+                    dv[comp + '_0'].append(float(np.sqrt(np.mean((Bg @ (ang[sl] - bt)) ** 2)) * 1e4))
+        self.__dict__.setdefault('_geom_hits_diag', []).extend(zip(dv['e1'], dv['e1_0'], dv['e2'], dv['e2_0']))
+        self.__dict__.setdefault('_straight_freeze', {})[batch_idx] = straight
+        self.__dict__.get('_drift_mask_cache', {}).pop(batch_idx, None)   # masks must see the classification
+        med = lambda v: np.median(v) if v else float('nan')
+        logger.info(f"[GEOM-HITS] batch {batch_idx}: {n_trk} drift-frame tracks (skipped {n_skip}); "
+                    f"{'seeding' if apply_seed else 'classification only (restored geometry)'}; "
+                    f"called straight (frozen) {len(straight) if _FREEZE_STRAIGHT_CL > 0 else 'off'}; e2 seeded on {n_e2}, "
+                    f"e1 seeded on {n_e1 if do_e1 else 'off'}; shape error vs truth median e2 {med(dv['e2']):.0f} um "
+                    f"(before {med(dv['e2_0']):.0f}), e1 {med(dv['e1']):.0f} um (before {med(dv['e1_0']):.0f})")
+
+    def _drift_freeze_masks(self, batch_idx, states):
+        """Per-track gradient masks for LARND_CHAIN_FREEZE_DRIFT: 1 on the e1 (pixel-plane)
+        coefficients, 0 on the e2 (drift-carrying) ones for every track in the drift frame."""
+        cache = self.__dict__.setdefault('_drift_mask_cache', {})
+        if batch_idx not in cache:
+            ctxs = self._batch_chain_contexts.get(batch_idx, [])
+            masks, n_frozen = [], 0
+            straight = self.__dict__.get('_straight_freeze', {}).get(batch_idx, set())
+            for ti, (ctx, st) in enumerate(zip(ctxs, states)):
+                n = int(np.asarray(st['angles']).shape[0]); K = n // 2
+                u0 = _dir_from_angles(ctx.theta0_i, ctx.phi0_i)
+                e1, _ = _transverse_frame(u0)
+                m = np.ones(n, np.float32)
+                in_df = abs(float(e1[2])) < 1e-6 and float(np.linalg.norm(np.cross(_DRIFT_AXIS, u0))) > 1e-3
+                if _FREEZE_STRAIGHT_CL > 0:                   # only tracks the hits call straight
+                    in_df = in_df and (ti in straight)
+                if in_df:
+                    m[K:] = 0.0; n_frozen += 1                # drift frame: e2 carries drift -> freeze
+                masks.append(jnp.asarray(m))
+            if len(ctxs) != len(states):
+                raise RuntimeError(f'drift-freeze: {len(ctxs)} contexts vs {len(states)} chain states in batch {batch_idx}')
+            cache[batch_idx] = masks
+            logger.info(f'[CHAIN] batch {batch_idx}: drift-direction geometry FROZEN on {n_frozen}/{len(masks)} tracks')
+        return cache[batch_idx]
+
     def _process_chain_grads(self, batch_idx, grads_chain_per_track, total_iter=0):
         """Apply one (decayed) Adam step for per-track chain angles of batch_idx.
 
@@ -3813,6 +4006,9 @@ class GradientDescentFitter(ParamFitter):
         """
         states = self._get_or_init_chain_state(batch_idx)
         lr_scale = self._chain_lr_scale(total_iter)
+        if _CHAIN_FREEZE_DRIFT and self._chain_basis == 'spline':
+            grads_chain_per_track = [g * m for g, m in
+                                     zip(grads_chain_per_track, self._drift_freeze_masks(batch_idx, states))]
         new_states = []
         for state, g in zip(states, grads_chain_per_track):
             bad = jnp.any(jnp.isnan(g))                       # scalar, stays on-device (no sync)
@@ -5114,6 +5310,11 @@ class GradientDescentFitter(ParamFitter):
                     _chain_frozen_now = (self._chain_freeze_iter > 0 and total_iter >= self._chain_freeze_iter)
                     if _chain_available:
                         _chain_states   = self._get_or_init_chain_state(i)
+                        if _DRIFT_FROM_HITS and i not in self.__dict__.setdefault('_drift_hits_done', set()):
+                            self._seed_drift_from_hits(i, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_event, ref_adcs, ref_pixel_id,
+                                                       apply_seed=(i in self.__dict__.get('_chain_fresh', ())))
+                            self._drift_hits_done.add(i)
+                            _chain_states = self._chain_cache[i]
                         _chain_angles_pt = [s['angles'] for s in _chain_states]
                     else:
                         _chain_angles_pt = None

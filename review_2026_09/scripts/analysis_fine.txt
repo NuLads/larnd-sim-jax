@@ -1,0 +1,20 @@
+[fine] files 4 batches 100 unique 100; grid [0.96  0.975 0.99  1.    1.01  1.025 1.04  1.055 1.07  1.085 1.1  ]
+prod loss, noise-ON                           min(local quad) = 1.0150  seed-sd 0.0048 (sem 0.0015); cubic 1.0140; batch-jackknife sd 0.0013; dNLL=0.5 width 0.0040
+prod loss, noise-OFF                          min(local quad) = 1.0098  seed-sd nan (sem nan); cubic 1.0089; batch-jackknife sd 0.0020; dNLL=0.5 width 0.0039
+prod loss, noise-OFF tgt, tiny-noise model    min(local quad) = 1.0031  seed-sd nan (sem nan); cubic 1.0004; batch-jackknife sd 0.0003; dNLL=0.5 width 0.0003
+no-charge loss, noise-ON                      min(local quad) = 1.0227  seed-sd 0.0222 (sem 0.0070); cubic 1.0215; batch-jackknife sd 0.0049; dNLL=0.5 width 0.0101
+  f'cubic {np.nanmean(cm):.4f}; batch-jackknife sd {jsd:.4f}; dNLL=0.5 width {1/np.sqrt(curv):.4f}')
+no-charge loss, noise-OFF                     min(local quad) = 1.1874  seed-sd nan (sem nan); cubic nan; batch-jackknife sd 0.0026; dNLL=0.5 width 0.0093
+
+[2D] files 4 batches 100 unique 100; Ab grid [0.994 0.997 1.    1.003 1.006]; lt grid [0.97  0.985 1.    1.015 1.03  1.045 1.06  1.075 1.09 ]
+                             ROBUST profile: lifetime 0.9877 (seed-sd 0.0129, sem 0.0041), Ab* 1.00114; tau*(Ab) = 1.1407 1.0803 1.0140 0.9525 0.8765
+prod loss, noise-ON          lifetime PROFILED over Ab: 1.0055 (seed-sd 0.0107)  | slice at Ab=truth 1.0160 | Ab at optimum 1.00048 | dNLL=.5 width profiled 0.0080 slice 0.0041 | corr -0.856
+                             ROBUST profile: lifetime 0.9870 (seed-sd nan, sem nan), Ab* 1.00091; tau*(Ab) = 1.1373 1.0749 1.0087 0.9467 0.8682
+prod loss, noise-OFF         lifetime PROFILED over Ab: 1.0051 (seed-sd nan)  | slice at Ab=truth 1.0102 | Ab at optimum 1.00023 | dNLL=.5 width profiled 0.0079 slice 0.0041 | corr -0.858
+                             ROBUST profile: lifetime 0.9480 (seed-sd 0.0699, sem 0.0221), Ab* 1.00330; tau*(Ab) = 1.1412 1.0857 1.0217 0.9607 0.8866
+no-charge loss, noise-ON     lifetime PROFILED over Ab: 0.9770 (seed-sd 0.0411)  | slice at Ab=truth 1.0224 | Ab at optimum 1.00212 | dNLL=.5 width profiled 0.0202 slice 0.0102 | corr -0.860
+                             ROBUST profile: lifetime 1.0928 (seed-sd nan, sem nan), Ab* 1.00581; tau*(Ab) = 1.2597 1.2321 1.1859 1.1402 1.0809
+no-charge loss, noise-OFF    lifetime PROFILED over Ab: 1.0363 (seed-sd nan)  | slice at Ab=truth 1.1621 | Ab at optimum 1.00807 | dNLL=.5 width profiled 0.0124 slice 0.0084 | corr -0.736
+  matched-tick charge residual <q_obs - q_model>/<q_obs> [noise-ON target, prod model]: mean +0.027%, slope -0.039% per 190us (+-0.010)
+  matched-tick charge residual <q_obs - q_model>/<q_obs> [noise-OFF target, prod model]: mean +0.136%, slope -0.293% per 190us (+-0.017)
+  matched-tick charge residual <q_obs - q_model>/<q_obs> [noise-OFF target, tiny-noise model]: mean +0.080%, slope -0.057% per 190us (+-0.017)

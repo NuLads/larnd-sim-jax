@@ -392,7 +392,7 @@ def simulate_signals_parametrized(params, electrons, pIDs, unique_pixels, rngkey
     pixel_coords = get_pixel_coordinates(params, pixel_x, pixel_y, pixel_plane)
     pixel_x = pixel_coords[:, 0]
     pixel_y = pixel_coords[:, 1]
-    pixel_z  = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, 10))
+    pixel_z  = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, params.MAX_ADC_VALUES))
     ref_hit_prob = jnp.where(ticks < wfs.shape[1] - 3, 1., 0.)  # Assuming hit probability is based on whether ticks are within the waveform length
 
     return adcs, pixel_x, pixel_y, pixel_z, ticks, ref_hit_prob, event
@@ -845,7 +845,7 @@ def simulate_stochastic(params, wfs, unique_pixels, rngseed):
     pixel_coords = get_pixel_coordinates(params, pixel_x, pixel_y, pixel_plane)
     pixel_x = pixel_coords[:, 0]
     pixel_y = pixel_coords[:, 1]
-    pixel_z  = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, 10))
+    pixel_z  = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, params.MAX_ADC_VALUES))
 
     adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event, hit_pixels, nb_valid = parse_output(params, adcs, pixel_x, pixel_y, pixel_z, ticks, hit_prob, event, unique_pixels)
 

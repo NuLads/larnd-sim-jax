@@ -1,0 +1,414 @@
+{
+ "BOTHTRU_3": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_dfz0_refit_dxinit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": 0.20046293039350793,
+  "Ab_ptp": 0.023102759500189102,
+  "Ab_n": 10001,
+  "eField": 0.001404537843763265,
+  "eField_ptp": 0.008354633412116662,
+  "eField_n": 10001,
+  "tran_diff": 2.3388973280840775,
+  "tran_diff_ptp": 0.0233821597110572,
+  "tran_diff_n": 10001,
+  "long_diff": -6.472407663840373,
+  "long_diff_ptp": 0.23070626204792952,
+  "long_diff_n": 10001,
+  "lifetime": -3.7955427290342736,
+  "lifetime_ptp": 0.1015542027515244,
+  "lifetime_n": 10001
+ },
+ "BOTHTRU_7": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_dfz0_refit_dxinit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": 0.07999254864266003,
+  "Ab_ptp": 0.0073534741301590776,
+  "Ab_n": 10001,
+  "eField": 0.0008150161665554378,
+  "eField_ptp": 0.004617335018461192,
+  "eField_n": 10001,
+  "tran_diff": 0.8266824332938683,
+  "tran_diff_ptp": 0.059752392620808704,
+  "tran_diff_n": 10001,
+  "long_diff": -11.49588907190704,
+  "long_diff_ptp": 0.14818323357494229,
+  "long_diff_n": 10001,
+  "lifetime": -3.04304730041548,
+  "lifetime_ptp": 0.2569189441038565,
+  "lifetime_n": 10001
+ },
+ "BOTHTRU_8": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_dfz0_refit_dxinit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": 0.21633424059832596,
+  "Ab_ptp": 0.007139295271999104,
+  "Ab_n": 10001,
+  "eField": 0.0009796173025433674,
+  "eField_ptp": 0.005074496901477152,
+  "eField_n": 10001,
+  "tran_diff": 0.003186141360278505,
+  "tran_diff_ptp": 0.08737018793507138,
+  "tran_diff_n": 10001,
+  "long_diff": -11.212347916026088,
+  "long_diff_ptp": 0.14450720065083045,
+  "long_diff_n": 10001,
+  "lifetime": -4.372823952421578,
+  "lifetime_ptp": 0.24855923750373102,
+  "lifetime_n": 10001
+ },
+ "GEOFRZ_3": {
+  "file": "history_iter10800_sci_full_b100_len400_mw2500.0_refit_seed0.pkl",
+  "total_iter": 10800,
+  "resumed": true,
+  "Ab": 0.31659154258538713,
+  "Ab_ptp": 0.01250804531654243,
+  "Ab_n": 10001,
+  "eField": 0.0015323603062444846,
+  "eField_ptp": 0.006868857292314794,
+  "eField_n": 10001,
+  "tran_diff": 3.6238792793878982,
+  "tran_diff_ptp": 0.05233322790256014,
+  "tran_diff_n": 10001,
+  "long_diff": -5.323372720646569,
+  "long_diff_ptp": 0.06527695911624978,
+  "long_diff_n": 10001,
+  "lifetime": -2.3775654707522964,
+  "lifetime_ptp": 0.1229201519018451,
+  "lifetime_n": 10001
+ },
+ "GEOFRZ_7": {
+  "file": "history_iter12000_sci_full_b100_len400_mw2500.0_refit_seed0.pkl",
+  "total_iter": 12000,
+  "resumed": true,
+  "Ab": 0.2657544057772965,
+  "Ab_ptp": 0.014706948260318155,
+  "Ab_n": 10001,
+  "eField": 0.0011399668330192014,
+  "eField_ptp": 0.006263117797318647,
+  "eField_n": 10001,
+  "tran_diff": 2.2089369806596038,
+  "tran_diff_ptp": 0.058137953354490554,
+  "tran_diff_n": 10001,
+  "long_diff": -5.193439058667215,
+  "long_diff_ptp": 0.1576783484044567,
+  "long_diff_n": 10001,
+  "lifetime": 2.888641411024917,
+  "lifetime_ptp": 0.12205780352683217,
+  "lifetime_n": 10001
+ },
+ "GEOFRZ_8": {
+  "file": "history_iter11800_sci_full_b100_len400_mw2500.0_refit_seed0.pkl",
+  "total_iter": 11800,
+  "resumed": true,
+  "Ab": 0.4497684848971062,
+  "Ab_ptp": 0.013571800312070297,
+  "Ab_n": 10001,
+  "eField": 0.0020258322718236244,
+  "eField_ptp": 0.005863101149679683,
+  "eField_n": 10001,
+  "tran_diff": 1.543195204419634,
+  "tran_diff_ptp": 0.10351458059825284,
+  "tran_diff_n": 10001,
+  "long_diff": -5.8890462045223195,
+  "long_diff_ptp": 0.1327126099070844,
+  "long_diff_n": 10001,
+  "lifetime": -4.906404261711883,
+  "lifetime_ptp": 0.1792264281526903,
+  "lifetime_n": 10001
+ },
+ "DXTRU_3": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_dfz0_refit_dxinit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": 0.029472603584212997,
+  "Ab_ptp": 0.012079687600222485,
+  "Ab_n": 10001,
+  "eField": -0.01790359142400666,
+  "eField_ptp": 0.02330382698673854,
+  "eField_n": 10001,
+  "tran_diff": -0.3175539906957847,
+  "tran_diff_ptp": 0.2221033076044875,
+  "tran_diff_n": 10001,
+  "long_diff": 7.2080716270988,
+  "long_diff_ptp": 0.5905820639718313,
+  "long_diff_n": 10001,
+  "lifetime": 3.9383406315728786,
+  "lifetime_ptp": 0.17973369190269792,
+  "lifetime_n": 10001
+ },
+ "DXTRU_7": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_dfz0_refit_dxinit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": 0.08302410045470943,
+  "Ab_ptp": 0.015399459901702068,
+  "Ab_n": 10001,
+  "eField": -0.036711585591731044,
+  "eField_ptp": 0.01857220149752336,
+  "eField_n": 10001,
+  "tran_diff": 0.17551628638416972,
+  "tran_diff_ptp": 0.15551222281062327,
+  "tran_diff_n": 10001,
+  "long_diff": -5.805192772806011,
+  "long_diff_ptp": 0.11901743192810602,
+  "long_diff_n": 10001,
+  "lifetime": -1.8071651076641548,
+  "lifetime_ptp": 0.13033634792695642,
+  "lifetime_n": 10001
+ },
+ "DXTRU_8": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_dfz0_refit_dxinit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": -0.07236859389471162,
+  "Ab_ptp": 0.00900979063326287,
+  "Ab_n": 10001,
+  "eField": -0.04647383187070808,
+  "eField_ptp": 0.006731708727410006,
+  "eField_n": 10001,
+  "tran_diff": -4.267458341518338,
+  "tran_diff_ptp": 0.08269919792297112,
+  "tran_diff_n": 10001,
+  "long_diff": 17.098691386412668,
+  "long_diff_ptp": 0.4945359271461008,
+  "long_diff_n": 10001,
+  "lifetime": 6.888407821581111,
+  "lifetime_ptp": 0.18377151135275852,
+  "lifetime_n": 10001
+ },
+ "DSREP_3": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_refit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": -0.08695984273585644,
+  "Ab_ptp": 0.016591722212125917,
+  "Ab_n": 10001,
+  "eField": -0.024959267919799633,
+  "eField_ptp": 0.025292481177857967,
+  "eField_n": 10001,
+  "tran_diff": 1.9390390783544653,
+  "tran_diff_ptp": 0.2117817801602737,
+  "tran_diff_n": 10001,
+  "long_diff": 20.78654273291147,
+  "long_diff_ptp": 0.38057890649863385,
+  "long_diff_n": 10001,
+  "lifetime": 9.052702117168954,
+  "lifetime_ptp": 0.20469106840307255,
+  "lifetime_n": 10001
+ },
+ "DSREP_7": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_refit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": -0.12994466143524397,
+  "Ab_ptp": 0.012343841525286451,
+  "Ab_n": 10001,
+  "eField": -0.016852873410166946,
+  "eField_ptp": 0.021212311371940528,
+  "eField_n": 10001,
+  "tran_diff": 1.6678802808425708,
+  "tran_diff_ptp": 0.06479524785717325,
+  "tran_diff_n": 10001,
+  "long_diff": 7.924236760262948,
+  "long_diff_ptp": 0.22141450223123832,
+  "long_diff_n": 10001,
+  "lifetime": 14.638536648721612,
+  "lifetime_ptp": 0.5201178134328073,
+  "lifetime_n": 10001
+ },
+ "DSREP_8": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_refit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": 0.010107986227736454,
+  "Ab_ptp": 0.013443292997174313,
+  "Ab_n": 10001,
+  "eField": -0.06587789655960741,
+  "eField_ptp": 0.0192465152749719,
+  "eField_n": 10001,
+  "tran_diff": -1.6633565945711304,
+  "tran_diff_ptp": 0.3974785753209351,
+  "tran_diff_n": 10001,
+  "long_diff": 34.46973701662688,
+  "long_diff_ptp": 0.49912705762791704,
+  "long_diff_n": 10001,
+  "lifetime": 16.415595567453444,
+  "lifetime_ptp": 0.20686215725310514,
+  "lifetime_n": 10001
+ },
+ "DXFRZ_3": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_dfz0_refit_dxinit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": -0.04279632638706232,
+  "Ab_ptp": 0.00765332453158304,
+  "Ab_n": 10001,
+  "eField": -0.02943688283777446,
+  "eField_ptp": 0.023692414587302108,
+  "eField_n": 10001,
+  "tran_diff": 3.18203870655267,
+  "tran_diff_ptp": 0.13060632266843433,
+  "tran_diff_n": 10001,
+  "long_diff": 14.36117127038603,
+  "long_diff_ptp": 0.14421781082488971,
+  "long_diff_n": 10001,
+  "lifetime": 8.35473131247715,
+  "lifetime_ptp": 0.3304721878549606,
+  "lifetime_n": 10001
+ },
+ "DXFRZ_7": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_dfz0_refit_dxinit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": -0.11129448763522731,
+  "Ab_ptp": 0.02797175887569249,
+  "Ab_n": 10001,
+  "eField": -0.03930540782550729,
+  "eField_ptp": 0.023863850293433093,
+  "eField_n": 10001,
+  "tran_diff": 1.7031167420329618,
+  "tran_diff_ptp": 0.06695388013460987,
+  "tran_diff_n": 10001,
+  "long_diff": 3.680169533539379,
+  "long_diff_ptp": 0.11379277236787898,
+  "long_diff_n": 10001,
+  "lifetime": 11.493496599959308,
+  "lifetime_ptp": 0.25552904142883565,
+  "lifetime_n": 10001
+ },
+ "DXFRZ_8": {
+  "file": "history_iter10000_sci_full_b100_len400_mw2500.0_dfz0_refit_dxinit_seed0.pkl",
+  "total_iter": 10000,
+  "resumed": false,
+  "Ab": -0.053496959155363566,
+  "Ab_ptp": 0.008902701204182883,
+  "Ab_n": 10001,
+  "eField": -0.05157197547057679,
+  "eField_ptp": 0.02299524271570277,
+  "eField_n": 10001,
+  "tran_diff": -0.8498200868474859,
+  "tran_diff_ptp": 0.2658020063973011,
+  "tran_diff_n": 10001,
+  "long_diff": 21.11807110415227,
+  "long_diff_ptp": 0.07564024342358634,
+  "long_diff_n": 10001,
+  "lifetime": 11.93737916474198,
+  "lifetime_ptp": 0.3553078210553334,
+  "lifetime_n": 10001
+ },
+ "effects": {
+  "Ab": {
+   "geometry": [
+    -0.2825954267822395,
+    0.048509878231699936
+   ],
+   "dedx": [
+    0.04806668092295352,
+    0.05508141216593784
+   ],
+   "interaction": [
+    -0.2607497805709569,
+    0.07290133132540448
+   ],
+   "dedx_given_true_geo": [
+    0.17844157120843196,
+    0.03406045003877148
+   ],
+   "dedx_given_fitted_geo": [
+    -0.08230820936252492,
+    0.08697765075036462
+   ]
+  },
+  "eField": {
+   "geometry": [
+    -0.036112729583328194,
+    0.010873810065834048
+   ],
+   "dedx": [
+    -0.0008503401508171601,
+    0.0057144156646908905
+   ],
+   "interaction": [
+    -0.002700005700451147,
+    0.0117580776629139
+   ],
+   "dedx_given_true_geo": [
+    0.0004996626994084133,
+    0.00027913820948166775
+   ],
+   "dedx_given_fitted_geo": [
+    -0.0022003430010427336,
+    0.01159126264913767
+   ]
+  },
+  "tran_diff": {
+   "geometry": [
+    -2.1684517747349012,
+    0.9071584394334964
+   ],
+   "dedx": [
+    1.7600507286974618,
+    0.183314049782825
+   ],
+   "interaction": [
+    0.7152710829089822,
+    0.3037562971182121
+   ],
+   "dedx_given_true_geo": [
+    1.4024151872429707,
+    0.07430689847469787
+   ],
+   "dedx_given_fitted_geo": [
+    2.1176862701519528,
+    0.32836033645084917
+   ]
+  },
+  "long_diff": {
+   "geometry": [
+    21.211431564352726,
+    7.226908493504449
+   ],
+   "dedx": [
+    9.575622156172207,
+    1.170800255426742
+   ],
+   "interaction": [
+    10.634719867052816,
+    1.6076505469856717
+   ],
+   "dedx_given_true_geo": [
+    4.2582622226458,
+    1.5801005828390053
+   ],
+   "dedx_given_fitted_geo": [
+    14.892982089698615,
+    1.2397978726139796
+   ]
+  },
+  "lifetime": {
+   "geometry": [
+    10.788859997024074,
+    2.8922891620952456
+   ],
+   "dedx": [
+    6.317222774714374,
+    2.461506866681053
+   ],
+   "interaction": [
+    8.090388442474035,
+    2.200894707259092
+   ],
+   "dedx_given_true_geo": [
+    2.272028553477357,
+    1.9145912173554358
+   ],
+   "dedx_given_fitted_geo": [
+    10.36241699595139,
+    3.2976266216905032
+   ]
+  }
+ }
+}

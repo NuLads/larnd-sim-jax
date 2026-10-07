@@ -98,7 +98,7 @@ def prepare_hits(params, adcs, pixels, ticks, match_z=False):
     pixel_x = pixel_coords[:, 0]
     pixel_y = pixel_coords[:, 1]
     if match_z:
-        drift = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, 10))
+        drift = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, params.MAX_ADC_VALUES))
     else:
         drift = ticks * params.t_sampling
 
@@ -365,7 +365,7 @@ def get_hits_space_coords(params, pIDs, ticks):
     pixel_coords = get_pixel_coordinates(params, pixel_x, pixel_y, pixel_plane)
     pixel_x = pixel_coords[:, 0]
     pixel_y = pixel_coords[:, 1]
-    pixel_z = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, 10))
+    pixel_z = get_hit_z(params, ticks.flatten(), jnp.repeat(pixel_plane, params.MAX_ADC_VALUES))
 
     return pixel_x, pixel_y, pixel_z, eventID
 

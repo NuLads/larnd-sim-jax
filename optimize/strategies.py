@@ -781,12 +781,20 @@ class ProbabilisticLossStrategy(LossStrategy):
         no_match_penalty = self.min_log_prob * jnp.sum(is_relevant_target_hit & ~pixel_match_valid)
 
         # (c) Integral of intensity: Expected total number of hits predicted by simulation
+        # BUGFIX: mask the -1 padding rows. `ticks_prob` is (Npix, Nvalues, Nticks) where Npix is
+        # padded up to a static `unique_size`; padded rows carry a non-zero intensity and were
+        # being summed into the PPP false-positive term, adding a phantom background rate whose
+        # size depended on how much padding a batch happened to need. MarkovLossStrategy already
+        # masks this the same way; the probabilistic path did not.
+        _pix_valid = (sim_unique_pixels >= 0)                      # (Npix,)
         if self.first_hit_only:
             # Only integrate the intensity of the FIRST hit predicted for each pixel
-            expected_total_hits = jnp.sum(jnp.exp(ticks_prob[:, 0, :]))
+            expected_total_hits = jnp.sum(
+                jnp.where(_pix_valid[:, None], jnp.exp(ticks_prob[:, 0, :]), 0.0))
         else:
             # Integrate over all predicted hits (standard PPP NLL)
-            expected_total_hits = jnp.sum(jnp.exp(ticks_prob))
+            expected_total_hits = jnp.sum(
+                jnp.where(_pix_valid[:, None, None], jnp.exp(ticks_prob), 0.0))
         
         # Combine into final Negative Log-Likelihood
         nll = -ll_hits - no_match_penalty + expected_total_hits

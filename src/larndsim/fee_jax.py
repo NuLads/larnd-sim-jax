@@ -9,6 +9,17 @@ from jax.scipy.special import erf
 from functools import partial
 import jax.scipy.special as jss
 import jax
+import os
+
+# GN curvature perf-investigation knob (env-gated; default OFF => identical behaviour).
+# The pixel-chunk scan in get_adc_values_average_noise_chunked already computes its primal
+# chunk-by-chunk, but reverse-mode AD through lax.scan still needs, for every chunk, the
+# vjp residuals w.r.t. the closed-over `params` pytree that the Hessian/gradient differentiate
+# through -- i.e. peak AD memory scales with num_chunks even though the primal never
+# materializes more than one chunk at a time. Wrapping the per-chunk body in jax.checkpoint
+# makes the outer scan save only (params, wfs_chunk) per iteration and recompute the
+# per-chunk forward+backward on demand.
+_CHUNK_SCAN_REMAT = os.environ.get('LARND_CHUNK_SCAN_REMAT', '0') == '1'
 
 def _soft_max(x, lo, sharpness=100.0):
     """Smooth approximation to jnp.maximum(x, lo).
@@ -620,10 +631,13 @@ def get_adc_values_average_noise_chunked(params, wfs, chunk_size=128):
     num_chunks = pad_len // chunk_size
     wfs_chunks = wfs_padded.reshape(num_chunks, chunk_size, Nticks)
     
+    _chunk_body = checkpoint(get_adc_values_average_noise_vmap) if _CHUNK_SCAN_REMAT \
+        else get_adc_values_average_noise_vmap
+
     def scan_fn(carry, wfs_chunk):
-        log_prob_step, charge_step = get_adc_values_average_noise_vmap(params, wfs_chunk)
+        log_prob_step, charge_step = _chunk_body(params, wfs_chunk)
         return carry, (log_prob_step, charge_step)
-        
+
     _, (log_prob_chunks, charge_chunks) = lax.scan(scan_fn, None, wfs_chunks)
     
     Nvalues = params.MAX_ADC_VALUES

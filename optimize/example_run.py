@@ -9,6 +9,48 @@ import sys, os
 import traceback
 import json
 import cProfile
+
+# Persistent (on-disk) JAX compilation cache — decided HERE, before jax is imported: JAX takes the
+# use-the-cache decision at the first compilation and import-time code compiles before main(), so
+# changing jax_enable_compilation_cache later is ignored (measured 2026-09-25).
+#
+# WHY IT IS NEEDED: the default (eager) loss path re-traces every iteration, and the grad-transformed
+# inner jits get new jaxprs each time, so the in-memory cache misses on every batch revisit. The disk
+# cache (keyed by HLO hash) is what serves those revisits: without it a production fit runs 3x slower
+# (13 vs 4.6 s/it, GEOFRZ vs BOTHTRU, 2026-09-26).
+# WHY NOT A SHARED DIR: entries embed the batch data (up to ~1.4 GB each) so they are specific to one
+# data sample; a shared cache grew to 2.0 TB and filled /sdf/group (2026-09-25).
+# => default: a PER-JOB cache on /sdf/scratch, deleted when the job exits (stale ones from killed
+#    jobs are swept after 2 days). LARND_JAX_PERSISTENT_CACHE=0 disables it; =shared uses
+#    JAX_COMPILATION_CACHE_DIR as given (refused under /sdf/group).
+_JAX_CACHE_MODE = os.environ.get('LARND_JAX_PERSISTENT_CACHE', 'job')
+_JAX_CACHE_DIR_REQUESTED = os.environ.get('JAX_COMPILATION_CACHE_DIR', '')
+_JAX_CACHE_DIR = ''
+if _JAX_CACHE_MODE == 'shared' and _JAX_CACHE_DIR_REQUESTED and not _JAX_CACHE_DIR_REQUESTED.startswith('/sdf/group'):
+    _JAX_CACHE_DIR = _JAX_CACHE_DIR_REQUESTED
+elif _JAX_CACHE_MODE not in ('0', 'off', 'shared'):
+    import shutil, time, atexit, signal
+    _root = os.path.join('/sdf/scratch/neutrino', os.environ.get('USER', 'unknown'), 'jax_job_cache')
+    _tag = '_'.join(x for x in (os.environ.get('SLURM_JOB_ID'), os.environ.get('SLURM_ARRAY_TASK_ID')) if x)
+    _JAX_CACHE_DIR = os.path.join(_root, f"{_tag or 'local'}_{os.getpid()}")
+    try:
+        os.makedirs(_JAX_CACHE_DIR, exist_ok=True)
+        for _d in os.listdir(_root):                                  # sweep leftovers of killed jobs
+            _p = os.path.join(_root, _d)
+            if _p != _JAX_CACHE_DIR and time.time() - os.path.getmtime(_p) > 2 * 86400:
+                shutil.rmtree(_p, ignore_errors=True)
+        atexit.register(shutil.rmtree, _JAX_CACHE_DIR, True)
+        # SLURM sends SIGTERM at the time limit; turn it into a normal exit so atexit still runs
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    except OSError:
+        _JAX_CACHE_DIR = ''
+_JAX_CACHE_ON = bool(_JAX_CACHE_DIR)
+if _JAX_CACHE_ON:
+    os.environ['JAX_COMPILATION_CACHE_DIR'] = _JAX_CACHE_DIR
+else:
+    os.environ.pop('JAX_COMPILATION_CACHE_DIR', None)
+    os.environ['JAX_ENABLE_COMPILATION_CACHE'] = 'false'
+
 import jax
 
 from .fit_params import GradientDescentFitter, LikelihoodProfiler, MinuitFitter, HessianCalculator, GaussNewtonCalibFitter
@@ -46,11 +88,19 @@ def main(config):
     else:
         os.environ['XLA_FLAGS'] = '--xla_gpu_deterministic_ops=true'
 
-    # Persist ALL compiled kernels to the on-disk cache. JAX's default only caches kernels
-    # that take >1 s to compile, so the many fast (~40 ms) sim kernels are never persisted and
-    # recompile on every cold start. Lowering the threshold makes the persistent cache complete,
-    # so recompilation happens only on the very first run for a given shape set.
-    jax.config.update('jax_persistent_cache_min_compile_time_secs', 0.0)
+    # Persistent (on-disk) compilation cache: a per-job directory on /sdf/scratch by default. The
+    # where/whether decision is taken at module import, before jax is imported — see the top of this
+    # file for why it is needed (3x speed) and why it must not be shared (2.0 TB on /sdf/group).
+    # Here we only tune and report it.
+    if _JAX_CACHE_ON:
+        # Persist ALL kernels (JAX's default skips those compiling in <1 s, i.e. the many fast sim
+        # kernels), so recompilation happens only on the first run for a given shape set.
+        jax.config.update('jax_persistent_cache_min_compile_time_secs', 0.0)
+        logger.info(f"Persistent JAX compilation cache ON at {_JAX_CACHE_DIR} "
+                    f"(mode={_JAX_CACHE_MODE}; requested dir '{_JAX_CACHE_DIR_REQUESTED}' not used unless mode=shared)")
+    else:
+        logger.info("Persistent JAX compilation cache DISABLED (LARND_JAX_PERSISTENT_CACHE="
+                    f"{_JAX_CACHE_MODE}); expect ~3x slower production fits")
 
     logger.info(f"Jax devices: {jax.devices()}")
 
@@ -373,6 +423,13 @@ def main(config):
                                             batch_idx=config.test_chain_lbfgs, max_iter=(iterations or 60))
         return 0, 'chain-geometry L-BFGS test done'
 
+    if getattr(config, 'dedx_hessian_batch', -1) is not None and config.dedx_hessian_batch >= 0:
+        _tgt = config.input_file_tgt if config.read_target else tracks_dataloader_target
+        param_fit.analyze_dedx_hessian(tracks_dataloader_sim, _tgt, batch_idx=config.dedx_hessian_batch,
+                                        n_cols=config.dedx_hessian_ncols, diag_chunk=config.dedx_hessian_chunk,
+                                        max_diag=config.dedx_hessian_maxdiag, out_path=config.dedx_hessian_out)
+        return 0, 'dEdx Hessian analysis done'
+
     if config.read_target:
         param_fit.fit(tracks_dataloader_sim, config.input_file_tgt, epochs=config.epochs, iterations=iterations, save_freq=config.save_freq)
     else:
@@ -625,6 +682,17 @@ if __name__ == '__main__':
                         help="If >=0, validate static-size unique (numerical identity + jittable) on this batch.")
     parser.add_argument("--test_chain_lbfgs", dest="test_chain_lbfgs", default=-1, type=int,
                         help="If >=0, validate the jitted chain-geometry L-BFGS solver on this batch index.")
+    parser.add_argument("--dedx_hessian_batch", dest="dedx_hessian_batch", default=-1, type=int,
+                        help="If >=0, measure diagonal dominance of the per-segment log-dEdx Hessian "
+                             "(HVP-based, no training) on this batch index and exit.")
+    parser.add_argument("--dedx_hessian_ncols", dest="dedx_hessian_ncols", default=12, type=int,
+                        help="Number of full Hessian columns to sample (spread across the segment index range).")
+    parser.add_argument("--dedx_hessian_chunk", dest="dedx_hessian_chunk", default=8, type=int,
+                        help="Number of HVP columns computed per vmap chunk (memory/throughput knob).")
+    parser.add_argument("--dedx_hessian_maxdiag", dest="dedx_hessian_maxdiag", default=None, type=int,
+                        help="Cap the number of diagonal entries computed (default: all segments).")
+    parser.add_argument("--dedx_hessian_out", dest="dedx_hessian_out", default=None, type=str,
+                        help="Output pickle path for the dEdx Hessian analysis (default fit_result/dedx_hessian_b<batch>.pkl).")
 
     try:
         args = parser.parse_args()
