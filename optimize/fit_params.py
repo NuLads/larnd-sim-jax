@@ -7,6 +7,7 @@ if src_dir not in sys.path:
 if larndsim_dir not in sys.path:
     sys.path.insert(0, larndsim_dir)
 import shutil
+import functools
 import copy
 import pickle
 import numpy as np
@@ -501,11 +502,41 @@ def _build_chain_meta_spline(ctxs, knot_cm):
         'step': jnp.asarray(np.asarray([float(c.step_len) for c in ctxs], np.float32)),
         'sigma': jnp.asarray(np.asarray([float(c.sigma_mcs) for c in ctxs], np.float32)),
         'seg_rows': jnp.asarray(np.concatenate(seg_rows).astype(np.int32)),
+        'seg_rows_np': np.concatenate(seg_rows).astype(np.int32),   # host copy (single-scatter warp index)
         'seg_track': jnp.asarray(np.concatenate(seg_track)),
+        'seg_track_u32': jnp.asarray(np.concatenate(seg_track).astype(np.uint32)),   # same values, unsigned (gathers)
         'seg_am': jnp.asarray(np.concatenate(seg_am).astype(np.float32)),
         'seg_as': jnp.asarray(np.concatenate(seg_as).astype(np.float32)),
         'seg_ae': jnp.asarray(np.concatenate(seg_ae).astype(np.float32)),
     }
+
+
+# LARND_SEG_PAD (compile cost, 22 Oct opt team; adopted 22 Oct: default ON, =0 restores the unpadded arrays). The chain warp
+# (_chain_warp_spline) works on per-SEGMENT arrays whose length Nseg (= rows of real tracks in the batch) is different
+# for every batch (100 distinct values over the 100 batches of a 10 cm fit), so each of its ~70 eager ops (3 node
+# interpolations + 9 column scatters, and their JVP/transpose ops in the backward pass) is compiled anew for every
+# batch on its first visit. With the flag the segment arrays are padded to the batch's (padded, common) track-row count:
+# padded entries interpolate on track 0 (in bounds) and scatter to row indices n_rows, n_rows+1, ..., which are OUT OF
+# BOUNDS (and unique) and are dropped by the default scatter mode (FILL_OR_DROP) — so the warped track array is bit-identical, and in the backward
+# pass the dropped updates get exactly zero cotangent (the scatter transpose gathers with fill 0), which adds +0.0 to
+# the node cotangents. All batches then share one Nseg shape. Exactness checked bitwise (warp output + VJP).
+_SEG_PAD = os.environ.get('LARND_SEG_PAD', '1') == '1'
+
+
+def _seg_pad_spline_meta(meta, n_rows):
+    """Copy of a spline chain meta with the segment arrays padded to n_rows entries (see _SEG_PAD)."""
+    Ns = int(meta['seg_rows'].shape[0]); pad = int(n_rows) - Ns
+    if pad <= 0:
+        return meta
+    out = dict(meta)                                          # padded on the host: no device op to compile
+    for k in ('seg_track', 'seg_am', 'seg_as', 'seg_ae'):
+        a = np.asarray(meta[k])
+        out[k] = jnp.asarray(np.concatenate([a, np.zeros((pad,), a.dtype)]))
+    # padded rows n_rows, n_rows+1, ...: out of bounds (dropped by the scatter) AND unique, so a unique-index scatter
+    # variant of the warp (opt/loss L1) stays applicable
+    a = np.asarray(meta['seg_rows'])
+    out['seg_rows'] = jnp.asarray(np.concatenate([a, int(n_rows) + np.arange(pad, dtype=a.dtype)]))
+    return out
 
 
 def _pad_spline_meta(meta, Tm, ncm, Km, Nm, zero_row):
@@ -547,22 +578,150 @@ def _pad_spline_coeffs(coeffs, Tm, Km):
     return out
 
 
+def _under_jit_trace():
+    """True if a jit/make_jaxpr trace is active (walks the current trace's parent chain). The eager production loss
+    runs under a JVP/Linearize trace whose root is the eval trace -> False there."""
+    try:                                 # JAX-internal API (0.6.x): on any surprise report "jit" -> original code
+        from jax._src import core as _core
+        from jax._src.interpreters import partial_eval as _pe
+        tr = _core.trace_ctx.trace
+        for _ in range(64):
+            if tr is None or tr is _core.eval_trace:
+                return False
+            if isinstance(tr, _pe.DynamicJaxprTrace):
+                return True
+            tr = getattr(tr, 'parent_trace', None)
+    except Exception:
+        pass
+    return True
+
+
+# opt/loss (22 Oct): LARND_FITSIDE_FAST=0 restores the original code of the chain warp, the MCS-prior constants and the
+# dE/dx column reads in loss_wrapper_combined (the fast paths are bitwise identical; default ON).
+_FITSIDE_FAST = os.environ.get('LARND_FITSIDE_FAST', '1') == '1'
+_WARP_TABLES = {}   # id(meta['seg_rows']) -> (seg_rows array (kept alive => id stays unique), lens, idx1, idx2, zero)
+
+
+def _warp_tables(meta, coeffs_pt):
+    """Batch-constant coefficient-gather tables of _chain_warp_spline (opt/loss, 22 Oct): (T, max_K) int32 indices into
+    the concatenated coefficients, built once per (batch meta, coefficient lengths); a few hundred bytes per batch.
+    Returns None (-> the original code path) when the meta arrays are traced or a jit/make_jaxpr trace is active."""
+    if not _FITSIDE_FAST or any(isinstance(meta[k], jax.core.Tracer)
+                                for k in ('ncs', 'seg_track', 'seg_rows', 'seg_am', 'seg_as', 'seg_ae')) or _under_jit_trace():
+        return None
+    lens = tuple(int(c.shape[0]) for c in coeffs_pt)
+    hit = _WARP_TABLES.get(id(meta['seg_rows']))
+    if hit is not None and hit[0] is meta['seg_rows'] and hit[1] == lens:
+        return hit if len(hit) > 2 else None
+    T, max_K, Ks_np = int(meta['T']), int(meta['max_K']), meta['Ks_np']
+    zero_at = int(sum(lens))                     # index of the appended 0.0 in the flat coefficient vector
+    idx1 = np.full((T, max_K), zero_at, np.int32); idx2 = np.full((T, max_K), zero_at, np.int32)
+    off = 0
+    for ti in range(T):
+        K = int(Ks_np[ti])
+        if lens[ti] < 2 * K:              # the original slicing would fail: let it (original code path)
+            return None
+        idx1[ti, :K] = off + np.arange(K); idx2[ti, :K] = off + K + np.arange(K)
+        off += lens[ti]
+    rows = np.asarray(meta['seg_rows'])
+    if not (np.unique(rows).size == rows.size and rows.min() >= 0):   # the unique-index scatter needs unique rows
+        _WARP_TABLES[id(meta['seg_rows'])] = (meta['seg_rows'], lens)   # -> original code for this meta
+        return None
+    with jax.ensure_compile_time_eval():
+        # the interpolation cells / fractions of the 3 alphas: constants of the batch, computed here ONCE with the very
+        # ops the per-call code ran (so identical values) and kept on the HOST (6 x Nseg x 4 B per batch; one H2D copy
+        # per call instead of ~25 eager ops)
+        seg_track = meta['seg_track']
+        nc_s = meta['ncs'][seg_track]
+        ks, fr = [], []
+        for alpha in (meta['seg_am'], meta['seg_as'], meta['seg_ae']):
+            k = jnp.clip(jnp.floor(alpha * nc_s).astype(jnp.int32), 0, nc_s - 1)
+            frac = alpha * nc_s - k
+            ks.append(np.asarray(k)); fr.append(np.asarray(frac[:, None]))
+        hit = (meta['seg_rows'], lens, jnp.asarray(idx1), jnp.asarray(idx2), jnp.zeros(1, coeffs_pt[0].dtype),
+               np.stack(ks), tuple(fr))
+    _WARP_TABLES[id(meta['seg_rows'])] = hit
+    while len(_WARP_TABLES) > 1024:              # bounded (production: one entry per batch, 100 batches)
+        _WARP_TABLES.pop(next(iter(_WARP_TABLES)))
+    return hit
+
+
+@functools.partial(jax.jit, static_argnums=(2,))
+def _warp_indices(seg_track, k3, cols, rows):
+    """Integer-only (exact) gather/scatter index arrays of the spline warp: nodes[seg_track, k] and [seg_track, k + 1]
+    for the three alphas (the values jnp advanced indexing builds; k >= 0 so its sign normalisation is a no-op) and
+    the (row, column) points of the 9 coordinate columns."""
+    outs = []
+    for k in (k3[0], k3[1], k3[2]):
+        outs.append(jnp.stack([seg_track, k], axis=1))
+        outs.append(jnp.stack([seg_track, k + 1], axis=1))
+    n = rows.shape[0]
+    pt = jnp.stack([jnp.broadcast_to(rows[:, None], (n, len(cols))),
+                    jnp.broadcast_to(jnp.asarray(cols, jnp.int32)[None, :], (n, len(cols)))], axis=-1)
+    return tuple(outs), pt
+
+
+_GATHER_NODE_DNUMS = jax.lax.GatherDimensionNumbers(offset_dims=(1,), collapsed_slice_dims=(0, 1), start_index_map=(0, 1))
+_SCATTER_PT_DNUMS = jax.lax.ScatterDimensionNumbers(update_window_dims=(), inserted_window_dims=(0, 1),
+                                                    scatter_dims_to_operand_dims=(0, 1))
+_WARP_COLS = ('x', 'y', 'z', 'xs', 'ys', 'zs', 'xe', 'ye', 'ze')
+
+
 def _chain_warp_spline(t, coeffs_pt, meta, col_map):
     """Warp via smooth transverse displacement. coeffs_pt[ti] is a flat (2K,) vector
-    [beta_e1 (K), beta_e2 (K)]. dx is FROZEN (not written) -> energy decoupled."""
+    [beta_e1 (K), beta_e2 (K)]. dx is FROZEN (not written) -> energy decoupled.
+
+    opt/loss (22 Oct): when the batch tables are cacheable (eager calls, the production loss) the same values are
+    computed with ~5x fewer eager dispatches: B1/B2 by ONE gather from the concatenated coefficients (instead of a
+    per-track slice/pad/stack loop), the 6 node gathers with cached indices (instead of rebuilding them from the
+    constant alphas every call) and ONE unique-index point scatter for the 9 coordinate columns (instead of 9
+    non-unique scatters, whose JVP rule runs ~8 full-size ops each). Pure data-movement changes: bitwise identical
+    (see opt/reports/loss.md)."""
+    tabs = _warp_tables(meta, coeffs_pt) if meta.get('basis') == 'spline' else None
+    if tabs is not None:
+        _, _, idx1, idx2, zero, k_np, fr_np = tabs
+        flat = jnp.concatenate(list(coeffs_pt) + [zero])
+        B1, B2 = jnp.take(flat, idx1), jnp.take(flat, idx2)     # (T, max_K) = the zero-padded per-track slices
+        d1 = jnp.einsum('tnk,tk->tn', meta['Bmat'], B1)          # (T, max_nc+1) displacement along e1
+        d2 = jnp.einsum('tnk,tk->tn', meta['Bmat'], B2)
+        nodes = (meta['nominal']
+                 + d1[..., None] * meta['e1'][:, None, :]
+                 + d2[..., None] * meta['e2'][:, None, :])       # (T, max_nc+1, 3)
+        gidx, pt = _warp_indices(meta['seg_track'], jnp.asarray(k_np), tuple(int(col_map[c]) for c in _WARP_COLS),
+                                 meta['seg_rows'])
+        outs = []
+        for j in range(3):
+            p0 = jax.lax.gather(nodes, gidx[2 * j], _GATHER_NODE_DNUMS, (1, 1, 3),
+                                mode=jax.lax.GatherScatterMode.PROMISE_IN_BOUNDS)
+            p1 = jax.lax.gather(nodes, gidx[2 * j + 1], _GATHER_NODE_DNUMS, (1, 1, 3),
+                                mode=jax.lax.GatherScatterMode.PROMISE_IN_BOUNDS)
+            outs.append(p0 + jnp.asarray(fr_np[j]) * (p1 - p0))
+        V = jnp.concatenate(outs, axis=1)                         # (Nseg, 9) = x,y,z | xs,ys,zs | xe,ye,ze
+        t = jax.lax.scatter(t, pt, V if V.dtype == t.dtype else V.astype(t.dtype), _SCATTER_PT_DNUMS,
+                            indices_are_sorted=False, unique_indices=True, mode=jax.lax.GatherScatterMode.FILL_OR_DROP)
+        return t, jnp.stack([d1, d2], axis=-1)
     T, max_nc, max_K = meta['T'], meta['max_nc'], meta['max_K']
     Ks_np = meta['Ks_np']
-    b1_rows, b2_rows = [], []
-    for ti in range(T):
-        c = coeffs_pt[ti]
-        K = int(Ks_np[ti])
-        b1, b2 = c[:K], c[K:2 * K]
-        pad = max_K - K
-        if pad > 0:
-            b1 = jnp.concatenate([b1, jnp.zeros(pad, c.dtype)])
-            b2 = jnp.concatenate([b2, jnp.zeros(pad, c.dtype)])
-        b1_rows.append(b1); b2_rows.append(b2)
-    B1, B2 = jnp.stack(b1_rows), jnp.stack(b2_rows)          # (T, max_K)
+    _cidx = _warp_coef_index(meta, coeffs_pt) if _WARP_ONE_SCATTER else None
+    if _cidx is not None:
+        # LARND_WARP_ONE_SCATTER: (T, max_K) blocks by ONE gather from the concatenated coefficients (+ a zero slot
+        # for the padding) instead of 2 slices + 2 zero-pads per track and 2 stacks: the same values (incl. +0.0 pads)
+        dt = coeffs_pt[0].dtype
+        c_all = jnp.concatenate(list(coeffs_pt[:T]) + [jnp.zeros(1, dt)])
+        B1 = c_all[_cidx[0]]
+        B2 = c_all[_cidx[1]]
+    else:
+        b1_rows, b2_rows = [], []
+        for ti in range(T):
+            c = coeffs_pt[ti]
+            K = int(Ks_np[ti])
+            b1, b2 = c[:K], c[K:2 * K]
+            pad = max_K - K
+            if pad > 0:
+                b1 = jnp.concatenate([b1, jnp.zeros(pad, c.dtype)])
+                b2 = jnp.concatenate([b2, jnp.zeros(pad, c.dtype)])
+            b1_rows.append(b1); b2_rows.append(b2)
+        B1, B2 = jnp.stack(b1_rows), jnp.stack(b2_rows)      # (T, max_K)
     d1 = jnp.einsum('tnk,tk->tn', meta['Bmat'], B1)          # (T, max_nc+1) displacement along e1
     d2 = jnp.einsum('tnk,tk->tn', meta['Bmat'], B2)
     nodes = (meta['nominal']
@@ -570,22 +729,92 @@ def _chain_warp_spline(t, coeffs_pt, meta, col_map):
              + d2[..., None] * meta['e2'][:, None, :])       # (T, max_nc+1, 3)
     seg_track = meta['seg_track']
     nc_s = meta['ncs'][seg_track]
+    # LARND_WARP_ONE_SCATTER: index the node gathers with uint32 copies of the (non-negative) indices, which jnp does
+    # not re-normalise (int32 indices cost a compare + add + select per index array and gather, eagerly)
+    _st_u = meta.get('seg_track_u32') if _WARP_ONE_SCATTER else None
 
     def _interp(alpha):
         k = jnp.clip(jnp.floor(alpha * nc_s).astype(jnp.int32), 0, nc_s - 1)
         frac = alpha * nc_s - k
-        p0 = nodes[seg_track, k]
-        p1 = nodes[seg_track, k + 1]
+        if _st_u is not None:
+            p0 = nodes[_st_u, k.astype(jnp.uint32)]
+            p1 = nodes[_st_u, (k + 1).astype(jnp.uint32)]
+        else:
+            p0 = nodes[seg_track, k]
+            p1 = nodes[seg_track, k + 1]
         return p0 + frac[:, None] * (p1 - p0)
 
     nm, ns, ne = _interp(meta['seg_am']), _interp(meta['seg_as']), _interp(meta['seg_ae'])
     r = meta['seg_rows']
-    for col, arr in [('x', nm[:, 0]), ('y', nm[:, 1]), ('z', nm[:, 2]),
-                     ('xs', ns[:, 0]), ('ys', ns[:, 1]), ('zs', ns[:, 2]),
-                     ('xe', ne[:, 0]), ('ye', ne[:, 1]), ('ze', ne[:, 2])]:
-        t = t.at[r, col_map[col]].set(arr)
+    _widx = _warp_scatter_index(meta, col_map) if _WARP_ONE_SCATTER else None
+    if _widx is not None:
+        # LARND_WARP_ONE_SCATTER: the 9 column writes as ONE scatter with unique (row, col) pairs (see the flag)
+        upd = jnp.concatenate([nm, ns, ne], axis=1).reshape(-1).astype(t.dtype)
+        t = jax.lax.scatter(t, _widx, upd, _WARP_SCATTER_DNUMS, indices_are_sorted=False, unique_indices=True,
+                            mode=jax.lax.GatherScatterMode.FILL_OR_DROP)
+    else:
+        for col, arr in [('x', nm[:, 0]), ('y', nm[:, 1]), ('z', nm[:, 2]),
+                         ('xs', ns[:, 0]), ('ys', ns[:, 1]), ('zs', ns[:, 2]),
+                         ('xe', ne[:, 0]), ('ye', ne[:, 1]), ('ze', ne[:, 2])]:
+            t = t.at[r, col_map[col]].set(arr)
     disp = jnp.stack([d1, d2], axis=-1)                      # (T, max_nc+1, 2) for the MCS prior
     return t, disp
+
+
+# LARND_WARP_ONE_SCATTER=1 (host-loop speed, 22 Oct; default ON, =0 restores the loop): _chain_warp_spline writes the 9
+# warped coordinate columns (x, y, z, start, end) of the chain rows with ONE lax.scatter of unique (row, col) pairs
+# instead of 9 jnp `.at[rows, col].set` calls. Each of those runs jnp's index normalisation and -- because jnp cannot
+# know the rows are unique -- the unique-free scatter JVP (an id scatter + gather + compare + masked scatter-add), all
+# eagerly and twice (forward + backward): ~3.5% of a 10 cm iteration's host time (22 Oct py-spy). The values written
+# are the same, so the warped tracks are bit-identical; the backward is pure data movement as before (gather of the
+# cotangent, zeroing of the written cells). Only used when the rows are verified unique on the host (always, for a
+# meta from _build_chain_meta_spline; padded metas of the GN/L-BFGS paths keep the loop).
+_WARP_ONE_SCATTER = os.environ.get('LARND_WARP_ONE_SCATTER', '1') == '1'
+_WARP_SCATTER_DNUMS = jax.lax.ScatterDimensionNumbers(update_window_dims=(), inserted_window_dims=(0, 1),
+                                                      scatter_dims_to_operand_dims=(0, 1))
+_WARP_COLS = ('x', 'y', 'z', 'xs', 'ys', 'zs', 'xe', 'ye', 'ze')
+
+
+def _warp_coef_index(meta, coeffs_pt):
+    """(idx_e1, idx_e2): (T, max_K) uint32 indices into concatenate(coeffs_pt[:T] + [0]) giving, for track ti with
+    K = Ks_np[ti] and offset o, [o .. o+K-1, zero slot ...] and [o+K .. o+2K-1, zero slot ...], i.e. exactly the
+    c[:K] / c[K:2K] zero-padded rows of the loop. Cached in meta per tuple of coefficient lengths; None when it cannot
+    apply (no host Ks, a coefficient vector shorter than 2K)."""
+    if not (isinstance(meta.get('T'), (int, np.integer)) and isinstance(meta.get('max_K'), (int, np.integer))
+            and isinstance(meta.get('Ks_np'), np.ndarray)):
+        return None                                   # traced / reconstructed meta (jit paths): keep the loop
+    T, max_K = int(meta['T']), int(meta['max_K'])
+    if T == 0 or len(coeffs_pt) < T:
+        return None
+    sizes = tuple(int(c.shape[0]) for c in coeffs_pt[:T])
+    key = '_warp_cidx_' + '_'.join(map(str, sizes))
+    if key not in meta:
+        Ks = np.asarray(meta['Ks_np'], dtype=np.int64)[:T]
+        if any(n < 2 * k for n, k in zip(sizes, Ks)):
+            meta[key] = None
+        else:
+            zero = int(sum(sizes)); off = np.concatenate([[0], np.cumsum(sizes)[:-1]]).astype(np.int64)
+            i1 = np.full((T, max_K), zero, np.int64); i2 = np.full((T, max_K), zero, np.int64)
+            for ti in range(T):
+                K = int(Ks[ti]); i1[ti, :K] = off[ti] + np.arange(K); i2[ti, :K] = off[ti] + K + np.arange(K)
+            meta[key] = (jnp.asarray(i1.astype(np.uint32)), jnp.asarray(i2.astype(np.uint32)))
+    return meta[key]
+
+
+def _warp_scatter_index(meta, col_map):
+    """(Nseg*9, 2) int32 (row, col) index of the single-scatter warp, in the order of concatenate([nm, ns, ne], 1),
+    built once per meta from the HOST copy of seg_rows and cached in it. None (-> 9-scatter loop) when the meta has no
+    host rows or the rows are not unique."""
+    cols = tuple(int(col_map[c]) for c in _WARP_COLS)
+    key = '_warp_idx_' + '_'.join(map(str, cols))
+    if key not in meta:
+        rows = meta.get('seg_rows_np')
+        if not isinstance(rows, np.ndarray) or np.unique(rows).size != rows.size:
+            meta[key] = None
+        else:
+            idx = np.stack([np.repeat(rows, len(cols)), np.tile(np.asarray(cols, np.int32), rows.size)], axis=1)
+            meta[key] = jnp.asarray(idx.astype(np.int32))
+    return meta[key]
 
 
 # ── GN curvature perf-investigation knobs (env-gated; default OFF => identical behaviour) ──
@@ -602,6 +831,18 @@ _GN_REMAT = os.environ.get('LARND_GN_REMAT', '0') == '1'
 # host time). The first 3 calls also run the loop and log the largest difference.
 _POSRES_VEC = os.environ.get('LARND_POSRES_VEC', '0') == '1'
 _posres_vec_checks = [0]
+# LARND_HOST_BATCH_CACHE=1 (host-loop speed, 22 Oct; default ON, =0 disables): keep the per-batch constant HOST objects
+# of the fit loop instead of rebuilding them on every visit -- the chopped sim batch array, the target hits read from
+# batch<i>_target.npz, the device copy of the parent-segment ids (and its max, now taken on the host copy, which also
+# removes a device->host sync), and the target track batch, which is only needed to generate the target. Every cached
+# object is a pure function of the batch index, so results are bit-identical (equivalence: opt/reports/host_loop.md).
+_HOST_BATCH_CACHE = os.environ.get('LARND_HOST_BATCH_CACHE', '1') == '1'
+# LARND_CHAIN_FLAT_ADAM=1 (host-loop speed, 22 Oct; default ON, =0 restores the per-track loop): the chain-geometry Adam
+# step of all tracks of a batch as one set of eager ops on the concatenated coefficients (_chain_adam_flat). Same
+# element-wise operations, so bit-identical (incl. the per-track NaN skip); ~4x less host time for that step.
+_CHAIN_FLAT_ADAM = os.environ.get('LARND_CHAIN_FLAT_ADAM', '1') == '1'
+# below this many tracks the loop is cheaper than the flat path's fixed ~12 ops (CPU bench: break-even ~5 tracks)
+_CHAIN_FLAT_MIN_T = int(os.environ.get('LARND_CHAIN_FLAT_MIN_T', '6'))
 
 
 def _pos_residual_dists_vec(pos_nodes, alpha_mid, true_pts, nc):
@@ -654,11 +895,40 @@ def _hess_by_hvp(f_with_aux, params, keys):
     return hess, aux
 
 
+_MCS_CONSTS = {}   # id(meta['ncs']) -> (ncs array kept alive, dtype, mask, step**2, 2 sigma**2)
+
+
+def _mcs_consts(meta, dtype):
+    """Batch constants of _chain_mcs_spline (mask, step^2, 2 sigma^2), computed ONCE with the very ops the function ran
+    every call (opt/loss, 22 Oct: bitwise identical); None (-> per-call code) for traced meta or under a jit trace."""
+    if not _FITSIDE_FAST or any(isinstance(meta[k], jax.core.Tracer) for k in ('ncs', 'step', 'sigma')) \
+            or _under_jit_trace():
+        return None
+    hit = _MCS_CONSTS.get(id(meta['ncs']))
+    if hit is not None and hit[0] is meta['ncs'] and hit[1] == dtype:
+        return hit[2:]
+    with jax.ensure_compile_time_eval():
+        j = jnp.arange(meta['max_nc'] - 1)
+        mask = (j[None, :] < (meta['ncs'][:, None] - 1)).astype(dtype)
+        step2 = meta['step'][:, None] ** 2
+        two_sig2 = 2.0 * (meta['sigma'][:, None] ** 2)
+    _MCS_CONSTS[id(meta['ncs'])] = (meta['ncs'], dtype, mask, step2, two_sig2)
+    while len(_MCS_CONSTS) > 1024:
+        _MCS_CONSTS.pop(next(iter(_MCS_CONSTS)))
+    return mask, step2, two_sig2
+
+
 def _chain_mcs_spline(disp, meta, mcs_weight):
     """MCS prior in displacement basis: penalize the discrete curvature (second difference)
     of the transverse displacement, = the per-node deflection angle ~ |Delta^2 d| / step_len."""
     T, max_nc, ncs = meta['T'], meta['max_nc'], meta['ncs']
     d2 = disp[:, 2:, :] - 2.0 * disp[:, 1:-1, :] + disp[:, :-2, :]   # (T, max_nc-1, 2)
+    cst = _mcs_consts(meta, disp.dtype)
+    if cst is not None:
+        mask, step2, two_sig2 = cst
+        ang2 = jnp.sum(d2 ** 2, axis=-1) / step2
+        mcs = jnp.sum(mask * ang2 / two_sig2)
+        return mcs_weight * mcs / max(1, T)
     j = jnp.arange(max_nc - 1)
     mask = (j[None, :] < (ncs[:, None] - 1)).astype(disp.dtype)
     ang2 = jnp.sum(d2 ** 2, axis=-1) / (meta['step'][:, None] ** 2)
@@ -1470,11 +1740,19 @@ class ParamFitter:
         self._batch_padded_roi = {}
         
         unpadded_pixels = {}
-        
+        # LARND_PRECOMP_LEAN (start-up cost, 22 Oct opt team; adopted 22 Oct: default ON, =0 restores the full set-up): for an Adam chain fit
+        # only the chain contexts, true positions and the simulated targets of this loop are used; the guess
+        # simulation (simulate_wfs with the weak-typed ref_params: its own compiles + one forward per batch), the target
+        # pixel lists, the fixed-pixel lists and the ROI sizes feed only the L-BFGS / GN geometry paths and
+        # profile_local_geometry (checked: their only readers). Exact for the Adam path by construction.
+        _lean = (os.environ.get('LARND_PRECOMP_LEAN', '1') == '1' and self._geom_optimizer not in ('lbfgs', 'gn', 'ggn')
+                 and not self.fit_track_positions and type(self).__name__ == 'GradientDescentFitter')
+
         # 1. Collect pixels for each batch
         for i in range(len(dataloader_sim)):
             # Load guess tracks
-            tracks_sim_bt = dataloader_sim[i].reshape(-1, len(self.sim_track_fields))
+            tracks_sim_bt = (self._host_sim_batch(dataloader_sim, i) if _HOST_BATCH_CACHE
+                             else dataloader_sim[i].reshape(-1, len(self.sim_track_fields)))
             selected_tracks_sim = jax.device_put(tracks_sim_bt)
             if self.fit_chain_positions:
                 self._batch_chain_contexts[i] = self._build_chain_contexts_for_batch(
@@ -1527,7 +1805,9 @@ class ParamFitter:
                 this_target = target
                 
             ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = self.get_simulated_target(this_target, i, evts_sim, regen=False)
-            
+            if _lean:
+                continue   # LARND_PRECOMP_LEAN: the guess-simulation products below are unused by an Adam chain fit
+
             # Simulate guess wfs
             wfs_guess, guess_pixels = simulate_wfs(self.ref_params, self.response, selected_tracks_sim, self.sim_track_fields)
             
@@ -1581,6 +1861,9 @@ class ParamFitter:
                 f"(applied to all {len(self._batch_padded_roi)} batches)"
             )
 
+        if _lean:
+            logger.info("[PRECOMP-LEAN] guess simulation, static pixel lists and ROI sizes skipped (unused by Adam chain fits)")
+            return
         # 2. Determine global maximum length and pad
         max_len = max(len(c) for c in unpadded_pixels.values())
         padded_len = int(((max_len + 127) // 128) * 128)
@@ -1833,6 +2116,7 @@ class ParamFitter:
                 #TODO: See if we have to do this for each event
                 
                 os.makedirs(os.path.dirname(fname), exist_ok=True)
+                self.__dict__.get('_tgt_file_cache', {}).pop(fname, None)   # (re)generated: drop the stale cached copy
                 with open(fname, 'wb') as f:
                     jnp.savez(f, adcs=ref_adcs, pixel_x=ref_pixel_x, pixel_y=ref_pixel_y, pixel_z=ref_pixel_z, ticks=ref_ticks, hit_prob=ref_hit_prob, event=ref_event, pixel_id=ref_pixel_id)
                     if self.keep_in_memory:
@@ -1842,6 +2126,10 @@ class ParamFitter:
                 #Loading the target
                 if self.keep_in_memory:
                     ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = self.targets[i]
+                elif _HOST_BATCH_CACHE and fname in self.__dict__.get('_tgt_file_cache', {}):
+                    # LARND_HOST_BATCH_CACHE: the arrays this file yielded on the first visit (read-only host
+                    # numpy arrays; an .npz load returns plain numpy, so the values and types are identical)
+                    ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = self._tgt_file_cache[fname]
                 else:
                     with open(fname, 'rb') as f:
                         loaded = jnp.load(f)
@@ -1853,8 +2141,43 @@ class ParamFitter:
                         ref_event = loaded['event']
                         ref_hit_prob = loaded['hit_prob']
                         ref_pixel_id = loaded['pixel_id'] if 'pixel_id' in loaded else jnp.zeros_like(ref_adcs, dtype=int) # Fallback
+                    if _HOST_BATCH_CACHE:
+                        _arrs = (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id)
+                        if all(isinstance(_a, np.ndarray) for _a in _arrs):
+                            for _a in _arrs:
+                                _a.setflags(write=False)      # a cached array must never be mutated in place
+                            self.__dict__.setdefault('_tgt_file_cache', {})[fname] = _arrs
 
         return ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id
+
+    def _target_cached(self, i):
+        """True when get_simulated_target(.., i, .., regen=False) will NOT read its `target` argument (the target hits of
+        batch i were already generated: cached in memory or on disk), so the caller may skip building the target batch."""
+        if self.read_target:
+            return False
+        fname = os.path.join(self.target_dir, f'batch{i}_target.npz')
+        return fname in self.__dict__.get('_tgt_file_cache', {}) or os.path.exists(fname)
+
+    def _host_sim_batch(self, dataloader_sim, i):
+        """The (validated) host array of sim batch i: dataloader_sim[i] reshaped to (rows, fields).
+
+        LARND_HOST_BATCH_CACHE=1 (default): built once per batch and kept as a READ-ONLY numpy array. The dataset builds
+        the batch from scratch on every call (structured->float conversion, per-segment chop loop, padding: ~36 ms of
+        host time per 10 cm iteration on the 22 Oct py-spy), and the result is a pure function of the batch index, so
+        the cached array is bit-identical to a fresh one. Costs one batch array of host memory per batch (7 MB at
+        400 cm: 58123 rows x 30 fields x float32, i.e. 0.7 GB for 100 batches). =0 restores the per-visit rebuild."""
+        if not _HOST_BATCH_CACHE:
+            a = dataloader_sim[i].reshape(-1, len(self.sim_track_fields))
+            self.validate_track_batch_event_ids(a, self.sim_track_fields, f"sim batch {i}")
+            return a
+        c = self.__dict__.setdefault('_host_sim_batch_cache', {})
+        a = c.get(i)
+        if a is None:
+            a = np.asarray(dataloader_sim[i]).reshape(-1, len(self.sim_track_fields))
+            self.validate_track_batch_event_ids(a, self.sim_track_fields, f"sim batch {i}")
+            a.setflags(write=False)
+            c[i] = a
+        return a
 
     def get_batch_global_event_ids(self, dataloader, batch_idx, selected_tracks=None):
         dataset = getattr(dataloader, 'dataset', None)
@@ -2062,8 +2385,17 @@ class ParamFitter:
         # the physics parameters being fitted, so computing with ref_params is safe.
         # The 128-multiple rounding provides headroom for small waveform changes
         # across iterations as physics parameters evolve.
-        from optimize.strategies import LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation
-        if isinstance(self.sim_strategy, (LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation)):
+        from optimize.strategies import LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation, roi_counts_unused
+        # LARND_ROI_SKIP (default ON since 22 Oct, =0 disables): in the production eager path (probabilistic LUT simulation, chunked FEE) the ROI
+        # paddings are never used by the computation (strategies.roi_counts_unused), so the first-visit ROI evaluation
+        # below (one extra simulate_wfs + host sync per batch in epoch 1) is skipped. Exact: nothing it sets reaches
+        # the loss on this path.
+        _roi_skip = (roi_counts_unused(self.sim_strategy) and unique_size is None and roi_override is None
+                     and os.environ.get('LARND_JIT_LOSS', '0') != '1'
+                     and type(self).__name__ == 'GradientDescentFitter')   # the GN fitter reads _roi_padded_cache
+        if _roi_skip:
+            pass
+        elif isinstance(self.sim_strategy, (LUTProbabilisticSimulation, LUTProbabilisticSamplingSimulation)):
             from larndsim.sim_jax import get_roi_counts, simulate_wfs, pad_to_closest_multiple
             # Use (batch_index, track_count) as cache key. This is stable across
             # epochs even with shuffling (track count is a good proxy for identity).
@@ -2166,6 +2498,14 @@ class ParamFitter:
                     else:
                         self._batch_chain_meta[i] = _build_chain_meta(_chain_ctxs)
                 _chain_meta = self._batch_chain_meta[i]
+                if (_SEG_PAD and self._chain_basis == 'spline' and _chain_meta is not None
+                        and not return_loss_closure):
+                    _segpad = self.__dict__.setdefault('_batch_chain_meta_segpad', {})
+                    _sp = _segpad.get(i)
+                    if _sp is None or _sp[0] is not _chain_meta or _sp[1] != int(tracks.shape[0]):   # rebuilt meta / rows
+                        _sp = _segpad[i] = (_chain_meta, int(tracks.shape[0]),
+                                            _seg_pad_spline_meta(_chain_meta, int(tracks.shape[0])))
+                    _chain_meta = _sp[2]
 
             def loss_wrapper_combined(norm_params_input, log_dedx_in, chain_angles_pt=None, data_over=None):
                 # data_over: optional {'tracks', 'target', 'meta'} of TRACED arrays overriding the
@@ -2202,12 +2542,19 @@ class ParamFitter:
                 _chain_thetas = None
                 _chain_phis = None
                 _chain_warp_aux = None
+                _t_pre = t
                 if chain_angles_pt is not None and _meta_use is not None:
                     if _meta_use.get('basis') == 'spline':
                         t, _chain_warp_aux = _chain_warp_spline(t, chain_angles_pt, _meta_use, _col_map)
                     else:
                         t, _chain_thetas, _chain_phis = _chain_warp_vectorized(
                             t, chain_angles_pt, _meta_use, _col_map)
+                # opt/loss (22 Oct, bitwise identical): the spline warp writes only the 9 coordinate columns, so the
+                # dEdx / dx / length_scale_factor columns are read from the PRE-warp array (same values) instead of
+                # slicing the traced warped array -- whose (identically zero) cotangents cost a full-size pad + add
+                # of the track array per slice in the backward pass. The angle basis rewrites dx: it keeps t.
+                _cols_src = t if (_chain_thetas is not None or not _FITSIDE_FAST) else _t_pre
+                _dx_col = _cols_src[:, dx_idx]
 
                 # Reconstruct per-step dEdx from per-segment log-mean.
                 # Padding rows have parent_id == -1; preserve their original track dEdx
@@ -2216,11 +2563,11 @@ class ParamFitter:
                     valid_mask  = (parent_ids >= 0)
                     safe_ids    = jnp.clip(parent_ids, 0, log_dedx_in.shape[0] - 1)
                     dedx_fitted = jnp.maximum(jnp.exp(jnp.take(log_dedx_in, safe_ids)), 1e-3)
-                    dedx_sample = jnp.where(valid_mask, dedx_fitted, t[:, dedx_idx])
+                    dedx_sample = jnp.where(valid_mask, dedx_fitted, _cols_src[:, dedx_idx])
                     t = t.at[:, dedx_idx].set(dedx_sample)
-                    t = t.at[:, dE_idx].set(dedx_sample * t[:, dx_idx])
+                    t = t.at[:, dE_idx].set(dedx_sample * _dx_col)
                 else:
-                    dedx_sample = t[:, dedx_idx]
+                    dedx_sample = _cols_src[:, dedx_idx]
                     valid_mask  = jnp.ones(t.shape[0], dtype=bool)
 
                 prediction = self.sim_strategy.predict(physical_params, t, self.sim_track_fields, rngkey, unique_size=unique_size, roi_override=roi_override)
@@ -2230,7 +2577,7 @@ class ParamFitter:
                 # Read length scale factor if present, otherwise default to 1.0
                 if 'length_scale_factor' in self.sim_track_fields:
                     scale_factor_idx = self.sim_track_fields.index('length_scale_factor')
-                    length_scale_factor = t[:, scale_factor_idx]
+                    length_scale_factor = _cols_src[:, scale_factor_idx]
                 else:
                     length_scale_factor = 1.0
 
@@ -2267,7 +2614,7 @@ class ParamFitter:
                         self.dedx_student_loc * length_scale_factor,
                         self.dedx_student_scale_l,
                         self.dedx_student_scale_r,
-                        weights=t[:, dx_idx]
+                        weights=_dx_col
                     ) * self.dedx_prior_weight
                 else:
                     dedx_prior = student_t_nll(
@@ -2275,12 +2622,12 @@ class ParamFitter:
                         self.dedx_student_nu,
                         self.dedx_student_loc * length_scale_factor,
                         self.dedx_student_scale,
-                        weights=t[:, dx_idx]
+                        weights=_dx_col
                     ) * self.dedx_prior_weight
 
                 # One-sided soft barrier penalty.
                 # Weighted by physical step length (dx) and mask out invalid segments (dx <= 0)
-                dx_weights = t[:, dx_idx]
+                dx_weights = _dx_col
                 valid_step_mask = (dx_weights > 0)
 
                 # Optional change-of-variables (Jacobian) term -- LARND_DEDX_LOG_JACOBIAN=1,
@@ -4115,6 +4462,9 @@ class GradientDescentFitter(ParamFitter):
         """
         states = self._get_or_init_chain_state(batch_idx)
         lr_scale = self._chain_lr_scale(total_iter)
+        if _CHAIN_FLAT_ADAM and self._chain_flat_ok(states, grads_chain_per_track):
+            self._chain_cache[batch_idx] = self._chain_adam_flat(batch_idx, states, grads_chain_per_track, lr_scale)
+            return
         if _CHAIN_FREEZE_DRIFT and self._chain_basis == 'spline':
             grads_chain_per_track = [g * m for g, m in
                                      zip(grads_chain_per_track, self._drift_freeze_masks(batch_idx, states))]
@@ -4128,6 +4478,63 @@ class GradientDescentFitter(ParamFitter):
             new_opt = jax.tree_util.tree_map(lambda o, n: jnp.where(bad, o, n), state['opt_state'], new_opt_state)
             new_states.append({'angles': new_angles, 'opt_state': new_opt})
         self._chain_cache[batch_idx] = new_states
+
+    @staticmethod
+    def _chain_flat_ok(states, grads):
+        """The flat path reproduces the per-track loop exactly only for optax.adam states (ScaleByAdamState with a 0-d
+        count, then EmptyState) of 1-D float32 coefficient vectors, with one gradient per state."""
+        if len(states) < _CHAIN_FLAT_MIN_T or len(grads) != len(states):
+            return False
+        for st, g in zip(states, grads):
+            o = st.get('opt_state')
+            if (not isinstance(o, tuple) or len(o) != 2 or not isinstance(o[0], optax.ScaleByAdamState)
+                    or not isinstance(o[1], optax.EmptyState) or getattr(o[0].count, 'shape', None) != ()
+                    or st['angles'].ndim != 1 or g.shape != st['angles'].shape
+                    or o[0].mu.shape != g.shape or o[0].nu.shape != g.shape or g.dtype != jnp.float32):
+                return False
+        return True
+
+    def _chain_adam_flat(self, batch_idx, states, grads, lr_scale):
+        """LARND_CHAIN_FLAT_ADAM: _process_chain_grads' per-track Adam step for ALL tracks of the batch as one set of
+        eager ops on the concatenated coefficients (~30 ops instead of ~25 per track). Element-wise it is the same
+        sequence of operations: mask, NaN clean, optax's own adam update (with the per-track step count broadcast to
+        each element -- bias correction 1-b**count is identical for a 0-d and an element-wise count, checked), lr
+        scale, and the per-track NaN select (a track with a NaN keeps its angles, moments AND count, as in the loop).
+        Returns the per-track state list in the original format (0-d counts)."""
+        T = len(states)
+        sizes = tuple(int(st['angles'].shape[0]) for st in states)
+        lay = self.__dict__.setdefault('_chain_flat_layout', {})
+        key = (batch_idx, sizes)
+        if key not in lay:
+            seg = np.repeat(np.arange(T, dtype=np.int32), sizes)
+            first = np.concatenate([[0], np.cumsum(sizes)[:-1]]).astype(np.int32)
+            mask = None
+            if _CHAIN_FREEZE_DRIFT and self._chain_basis == 'spline':
+                mask = jnp.concatenate(self._drift_freeze_masks(batch_idx, states))
+            lay[key] = (jnp.asarray(seg), jnp.asarray(first), [int(x) for x in np.cumsum(sizes)[:-1]], mask)
+        seg_d, first_d, offs, mask = lay[key]
+        g = jnp.concatenate(list(grads))
+        if mask is not None:
+            g = g * mask
+        nan = jnp.isnan(g)
+        bad_t = jax.ops.segment_max(nan.astype(jnp.int32), seg_d, num_segments=T) > 0     # per-track any(isnan)
+        bad = bad_t[seg_d]
+        g_clean = jnp.where(nan, 0.0, g)
+        angles = jnp.concatenate([st['angles'] for st in states])
+        ad = [st['opt_state'][0] for st in states]
+        counts_t = jnp.stack([a.count for a in ad])
+        old_state = (optax.ScaleByAdamState(count=counts_t[seg_d], mu=jnp.concatenate([a.mu for a in ad]),
+                                            nu=jnp.concatenate([a.nu for a in ad])), optax.EmptyState())
+        updates, new_state = self._chain_optimizer.update(g_clean, old_state)
+        cand = angles + lr_scale * updates
+        new_angles = jnp.where(bad, angles, cand)
+        new_mu = jnp.where(bad, old_state[0].mu, new_state[0].mu)
+        new_nu = jnp.where(bad, old_state[0].nu, new_state[0].nu)
+        new_counts = jnp.where(bad_t, counts_t, new_state[0].count[first_d])
+        a_l, mu_l, nu_l = jnp.split(new_angles, offs), jnp.split(new_mu, offs), jnp.split(new_nu, offs)
+        c_l = list(new_counts)
+        return [{'angles': a_l[ti], 'opt_state': (optax.ScaleByAdamState(count=c_l[ti], mu=mu_l[ti], nu=nu_l[ti]),
+                                                  optax.EmptyState())} for ti in range(T)]
 
     def _solve_chain_gn(self, batch_idx, tracks, ref, log_dedx, parent_ids, max_iter=8):
         """Gauss-Newton / Levenberg-Marquardt solve on this batch's chain coefficients,
@@ -5268,7 +5675,8 @@ class GradientDescentFitter(ParamFitter):
                 logger.info("Pre-fetching parent segment IDs for per-segment dEdx fitting")
                 _dedx_field_idx = self.sim_track_fields.index('dEdx') if 'dEdx' in self.sim_track_fields else None
                 for _bi in range(len(dataloader_sim)):
-                    _batch_raw = dataloader_sim[_bi]  # populate TracksDataset cache, shape [max_steps, n_fields]
+                    _batch_raw = (self._host_sim_batch(dataloader_sim, _bi) if _HOST_BATCH_CACHE
+                                  else dataloader_sim[_bi])  # populate TracksDataset cache, shape [max_steps, n_fields]
                     _pids = _ds.get_parent_segment_ids(_bi)
                     self._batch_parent_ids[_bi] = np.asarray(_pids, dtype=np.int32)
                     # Collect true (input) dEdx: per original segment, take the first sub-step's value
@@ -5321,9 +5729,9 @@ class GradientDescentFitter(ParamFitter):
                 for i_bt, i in enumerate(indices):
                     start_time = time()
 
-                    # sim
-                    selected_tracks_bt_sim = dataloader_sim[i].reshape(-1, len(self.sim_track_fields))
-                    self.validate_track_batch_event_ids(selected_tracks_bt_sim, self.sim_track_fields, f"sim batch {i}")
+                    # sim (host-side batch cache: the chopped+padded batch is a pure function of the batch
+                    # index, so it is built and validated once per batch instead of on every visit)
+                    selected_tracks_bt_sim = self._host_sim_batch(dataloader_sim, i)
                     selected_tracks_sim = jax.device_put(selected_tracks_bt_sim)
 
                     if self.fit_track_positions:
@@ -5336,13 +5744,24 @@ class GradientDescentFitter(ParamFitter):
                         
                         selected_tracks_sim = self._batch_aligned_tracks[i]
 
-                    evts_sim = self.get_batch_global_event_ids(dataloader_sim, i, selected_tracks_sim)
+                    if _HOST_BATCH_CACHE and not self.fit_track_positions:
+                        _ec = self.__dict__.setdefault('_evts_sim_cache', {})
+                        if i not in _ec:
+                            _ec[i] = self.get_batch_global_event_ids(dataloader_sim, i, selected_tracks_sim)
+                        evts_sim = _ec[i]
+                    else:
+                        evts_sim = self.get_batch_global_event_ids(dataloader_sim, i, selected_tracks_sim)
 
                     # target
                     if not self.read_target:
-                        selected_tracks_bt_tgt = target[i].reshape(-1, len(self.tgt_track_fields))
-                        self.validate_track_batch_event_ids(selected_tracks_bt_tgt, self.tgt_track_fields, f"target batch {i}")
-                        this_target = jax.device_put(selected_tracks_bt_tgt)
+                        if _HOST_BATCH_CACHE and self._target_cached(i):
+                            # the target track batch is only read to GENERATE the target hits; once they
+                            # exist (cached or on disk) rebuilding + validating it every visit is dead work
+                            this_target = None
+                        else:
+                            selected_tracks_bt_tgt = target[i].reshape(-1, len(self.tgt_track_fields))
+                            self.validate_track_batch_event_ids(selected_tracks_bt_tgt, self.tgt_track_fields, f"target batch {i}")
+                            this_target = jax.device_put(selected_tracks_bt_tgt)
                     else:
                         this_target = target
                     ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id = self.get_simulated_target(this_target, i, evts_sim, regen=False)
@@ -5386,8 +5805,17 @@ class GradientDescentFitter(ParamFitter):
                         self._dedx_freeze_adam_reset_done = True
 
                     if _use_dedx and i in self._batch_parent_ids:
-                        _parent_ids = jax.device_put(jnp.asarray(self._batch_parent_ids[i], dtype=jnp.int32))
-                        _n_orig = int(jnp.max(_parent_ids).item()) + 1
+                        if _HOST_BATCH_CACHE:
+                            # device copy kept per batch; the segment count is taken on the HOST copy (same int32
+                            # values, so the same max) instead of jnp.max(..).item(), a device->host sync
+                            _pc = self.__dict__.setdefault('_parent_ids_dev_cache', {})
+                            if i not in _pc:
+                                _pc[i] = (jax.device_put(jnp.asarray(self._batch_parent_ids[i], dtype=jnp.int32)),
+                                          int(np.max(np.asarray(self._batch_parent_ids[i], dtype=np.int32))) + 1)
+                            _parent_ids, _n_orig = _pc[i]
+                        else:
+                            _parent_ids = jax.device_put(jnp.asarray(self._batch_parent_ids[i], dtype=jnp.int32))
+                            _n_orig = int(jnp.max(_parent_ids).item()) + 1
                         # MINIMUM-LENGTH CUT (LARND_DEDX_MIN_DX, default 0.0 = off).
                         # Both the likelihood and the student-t prior are dx-weighted, so a
                         # segment's curvature scales with its length: a 0.036 cm segment was

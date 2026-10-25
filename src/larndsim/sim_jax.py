@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from jax import jit, random, debug, vmap
+from jax import jit, random, debug, vmap, lax
 import jax
 import numpy as np
 from numpy.lib import recfunctions as rfn
@@ -200,10 +200,96 @@ def simulate_drift(params, tracks, fields, rngkey):
 
     return electrons, pIDs
 
+# gpu_sim opt (22 Oct, bitwise; LARND_RESP_CUM_CACHE, default = LARND_SIG_REMAT): the cumulative response LUT used for the boundary corrections is a
+# pure function of the constant response template (100 x 45 x 45 x 1891 float32 = 1.5 GB), yet simulate_signals rebuilt it
+# with jnp.cumsum on EVERY call (a full prefix scan over 1.5 GB plus a 1.5 GB temporary). It is now computed once per
+# template (same jnp.cumsum, same lowering => identical values) and passed in. Under a trace (template is a Tracer) the
+# old in-jit computation is used.
+_RESPONSE_CUM_CACHE = {}
+
+
 @jit
-def simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_template, 
+def _response_cumsum(response_template):
+    return jnp.cumsum(response_template, axis=-1)
+
+
+_RESP_CUM_CACHE_ON = os.environ.get('LARND_RESP_CUM_CACHE', os.environ.get('LARND_SIG_REMAT', '0')) == '1'
+
+
+def get_response_cum(response_template):
+    # A100 measurement (22 Oct): no time gain on its own (1.128 vs 1.131 s/vg) and +1.4 GiB resident, so it is only
+    # on by default together with LARND_SIG_REMAT (whose backward would otherwise recompute the 1.5 GB cumsum).
+    if not _RESP_CUM_CACHE_ON:
+        return None
+    if isinstance(response_template, jax.core.Tracer) or not isinstance(response_template, jax.Array):
+        return None
+    hit = _RESPONSE_CUM_CACHE.get(id(response_template))
+    if hit is not None and hit[0] is response_template:
+        return hit[1]
+    cum = _response_cumsum(response_template)
+    _RESPONSE_CUM_CACHE.clear()                        # keep one template (the fit uses a single LUT)
+    _RESPONSE_CUM_CACHE[id(response_template)] = (response_template, cum)
+    return cum
+
+
+# gpu_sim opt flags (22 Oct; all default OFF => original code path):
+#  LARND_SIG_REMAT=1  : jax.checkpoint around simulate_signals: the eager vjp keeps only its (small) inputs as residuals
+#                       and recomputes indices / LUT values inside the backward kernels instead of storing ~17 GB of
+#                       (rows x 150) residuals (index arrays, gathered template values) between forward and backward.
+#  LARND_SIG_DROP_GARBAGE=1: entries whose pixel is not simulated (87-95 % of the neighbour entries, main bins outside
+#                       the detector) are dropped by the scatter (out-of-range row) instead of being accumulated into
+#                       row 0 (the -1 padding pixel). Every real pixel row of wfs gets the same additions in the same
+#                       order (bitwise), row 0 becomes 0. NOT bitwise downstream: row 0 shares the first 128-pixel FEE
+#                       chunk with real pixels, and its garbage waveform kept that chunk "active" (lax.cond of the beam
+#                       search) in steps where all real pixels are below the 1e-9 stop threshold; now those steps take
+#                       the inactive branch (floor values), so the loss moves by ~2 float32 ulp (batch 0: 2.4e-7 rel),
+#                       gradients bitwise on batch 0.
+_SIG_REMAT = os.environ.get('LARND_SIG_REMAT', '0') == '1'
+_SIG_DROP_GARBAGE = os.environ.get('LARND_SIG_DROP_GARBAGE', '0') == '1'
+
+
+#  LARND_SIG_COMPACT=1 (implies the drop of D for neighbours): only the neighbour entries whose pixel is simulated
+#                       (5-13 % in production batches) are passed to simulate_signals, in their original order, padded
+#                       to a length K = Npix_bucket x LARND_SIG_COMPACT_PER_PIX (default 512; production batches need
+#                       ~430 per pixel) with dropped entries, so K adds no compile signature; a batch needing more falls
+#                       back to a 12.5 % ladder. The count is obtained in the same device->host sync as the unique-pixel
+#                       count (no extra sync). Real-pixel rows get the same additions in the same order; row 0
+#                       (padding) changes as with LARND_SIG_DROP_GARBAGE.
+_SIG_COMPACT = os.environ.get('LARND_SIG_COMPACT', '0') == '1'
+_SIG_COMPACT_PER_PIX = int(os.environ.get('LARND_SIG_COMPACT_PER_PIX', '512'))
+
+
+@jit
+def _n_unique_and_valid_neigh(main_pixels, pIDs_neigh):
+    """(number of distinct main pixel ids, number of neighbour ids >= 0 that are main pixel ids)."""
+    s = jnp.sort(main_pixels)
+    n_u = 1 + jnp.sum(s[1:] != s[:-1])
+    i = jnp.clip(jnp.searchsorted(s, pIDs_neigh), 0, s.size - 1)
+    n_v = jnp.sum((s[i] == pIDs_neigh) & (pIDs_neigh >= 0))
+    return n_u, n_v
+
+
+def _compact_bucket(n):
+    """Smallest K >= max(n, 1) of the form m * 2^e with m in 8..15 (12.5 % steps), multiple of 128 when large."""
+    n = max(int(n), 1)
+    e = max(n.bit_length() - 4, 0)
+    m = -(-n // (1 << e))
+    K = m << e
+    return ((K + 127) // 128) * 128 if K > 1024 else K
+
+
+@partial(jit, static_argnums=(3, 4))
+def _compact_neigh(pix_renumbering_neigh, valid, currents_idx_neigh, npix_neigh, K):
+    n = valid.shape[0]
+    idx = jnp.nonzero(valid, size=K, fill_value=n)[0]                 # kept entries, original order
+    keep = idx < n
+    idc = jnp.minimum(idx, n - 1)
+    return (jnp.where(keep, pix_renumbering_neigh[idc], -1), currents_idx_neigh[idc], idc // npix_neigh)
+
+
+def _simulate_signals_impl(params, unique_pixels, pixels, t0_after_diff, response_template,
                              nelectrons, long_diff, currents_idx, nelectrons_neigh, 
-                             pix_renumbering_neigh, t0_neigh, currents_idx_neigh):
+                             pix_renumbering_neigh, t0_neigh, currents_idx_neigh, response_cum=None, elec_ids_neigh=None):
     
     Npixels = unique_pixels.shape[0]
     Nticks = int(params.time_interval[1] / params.t_sampling) + 1
@@ -213,6 +299,8 @@ def simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_temp
     # --- 1. PREPARE MAIN PIXEL DATA (DIFFERENTIABLE TIME SHIFT) ---
     pix_renum = jnp.searchsorted(unique_pixels, pixels.ravel(), method='sort')
     mask = (unique_pixels[pix_renum] == pixels.ravel())
+    if _SIG_DROP_GARBAGE:
+        mask = mask & (pixels.ravel() >= 0)     # bins outside the detector: dropped instead of summed into row 0
     pix_renum = jnp.where(mask, pix_renum, -1) #Maybe a bit ugly but out of range indices should be properly ignored by jax in the sum
 
     # Extract continuous tick and fractional remainder for the gradient
@@ -257,7 +345,8 @@ def simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_temp
 
     # --- 2. PREPARE NEIGHBOR DATA (DIFFERENTIABLE TIME SHIFT) ---
     npix_neigh = (2 * params.number_pix_neighbors + 1)**2
-    elec_ids_neigh = jnp.repeat(jnp.arange(nelectrons_neigh.shape[0]), npix_neigh)
+    if elec_ids_neigh is None:      # (LARND_SIG_COMPACT passes the electron id of each kept neighbour entry)
+        elec_ids_neigh = jnp.repeat(jnp.arange(nelectrons_neigh.shape[0]), npix_neigh)
     
     neigh_charge = jnp.take(nelectrons_neigh, elec_ids_neigh)
     neigh_t0 = jnp.take(t0_neigh, elec_ids_neigh)
@@ -287,7 +376,8 @@ def simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_temp
     neigh_vals_1 = (neigh_vals_2d * frac_neigh[:, None]).ravel()
 
     # --- 3. BOUNDARY CORRECTIONS (CUMSUMS) ---
-    response_cum = jnp.cumsum(response_template, axis=-1)
+    if response_cum is None:
+        response_cum = jnp.cumsum(response_template, axis=-1)
 
     # jax.debug.print("currents_idx={currents_idx}", currents_idx=currents_idx.reshape(params.nb_tran_diff_bins, params.nb_tran_diff_bins, 2))
     # jax.debug.print("pixels={pixels}", pixels=pixels.reshape(params.nb_tran_diff_bins, params.nb_tran_diff_bins))
@@ -366,6 +456,9 @@ def simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_temp
     smeared = smear_remainders(R)
     
     return wfs + smeared
+
+
+simulate_signals = jit(jax.checkpoint(_simulate_signals_impl) if _SIG_REMAT else _simulate_signals_impl)
 
 
 @partial(jit, static_argnames=['fields'])
@@ -805,14 +898,32 @@ def simulate_wfs(params, response_template, tracks, fields, unique_size=None):
             - unique_pixels: 1D JAX array of unique pixel identifiers that were active during 
               the simulation, with shape (Npixels,).
     """
+    args, kwargs = _signal_inputs(params, response_template, tracks, fields, unique_size)
+    wfs = simulate_signals(*args, **kwargs)
+    return wfs[:, 1:], args[1]
 
+
+def _signal_inputs(params, response_template, tracks, fields, unique_size=None):
+    """The arguments simulate_wfs passes to simulate_signals (split out so they can be profiled separately)."""
     main_pixels, pixels, nelectrons, t0_after_diff, long_diff, currents_idx, pIDs_neigh, currents_idx_neigh, nelectrons_neigh, t0_neigh = simulate_drift_new(params, tracks, fields)
 
     ################################################
     ################################################
 
     #Sorting the pixels and getting the unique ones
-    if unique_size is None and _UNIQUE_BUCKET:
+    _K = None
+    if unique_size is None and _UNIQUE_BUCKET and _SIG_COMPACT:
+        _n, _nv = _n_unique_and_valid_neigh(main_pixels.ravel(), pIDs_neigh.ravel())
+        _n, _nv = int(_n), int(_nv)                                   # one sync for both counts
+        _npix = ((_n + 1 + 127) // 128) * 128
+        # K tied to the pixel bucket (no new compile signature; production batches have ~430 valid neighbour
+        # entries per pixel); a batch that needs more falls back to the 12.5 % ladder.
+        _K = _npix * _SIG_COMPACT_PER_PIX
+        if _nv > _K:
+            _K = _compact_bucket(_nv)
+            logger.debug(f"[SIG_COMPACT] {_nv} valid neighbour entries > {_npix} x {_SIG_COMPACT_PER_PIX}; K = {_K}")
+        unique_pixels = _unique_static(main_pixels.ravel(), _npix)
+    elif unique_size is None and _UNIQUE_BUCKET:
         _n = int(_n_unique(main_pixels.ravel()))
         unique_pixels = _unique_static(main_pixels.ravel(), ((_n + 1 + 127) // 128) * 128)  # = len(unique + [-1]) padded to 128
     elif unique_size is None:
@@ -827,7 +938,15 @@ def simulate_wfs(params, response_template, tracks, fields, unique_size=None):
 
     mask = (pix_renumbering_neigh < unique_pixels.size) & (unique_pixels[pix_renumbering_neigh] == pIDs_neigh.ravel())
     # jnp.where (not boolean-index .at[~mask].set) so the function is jittable; numerically identical.
-    pix_renumbering_neigh = jnp.where(mask, pix_renumbering_neigh, 0) #ASSUMES THAT THERE IS ALWAYS A -1 PIXID
+    _eid = None
+    if _K is not None:
+        npn = (2 * params.number_pix_neighbors + 1) ** 2
+        pix_renumbering_neigh, currents_idx_neigh, _eid = _compact_neigh(
+            pix_renumbering_neigh, mask & (pIDs_neigh.ravel() >= 0), currents_idx_neigh, npn, _K)
+    elif _SIG_DROP_GARBAGE:   # not-simulated / outside neighbours: dropped by the scatter instead of summed into row 0
+        pix_renumbering_neigh = jnp.where(mask & (pIDs_neigh.ravel() >= 0), pix_renumbering_neigh, -1)
+    else:
+        pix_renumbering_neigh = jnp.where(mask, pix_renumbering_neigh, 0) #ASSUMES THAT THERE IS ALWAYS A -1 PIXID
     # mask_indices = jnp.nonzero(mask)[0]
     # padded_size = pad_size(mask_indices.shape[0], "pix_renumbering", 0.2)
     # mask_indices = jnp.pad(mask_indices, (0, padded_mask - mask_indices.shape[0]), mode='constant', constant_values=-1)
@@ -835,10 +954,9 @@ def simulate_wfs(params, response_template, tracks, fields, unique_size=None):
     ###############################################
     ###############################################
 
-    wfs = simulate_signals(params, unique_pixels, pixels, t0_after_diff, response_template, nelectrons, long_diff, currents_idx, nelectrons_neigh, pix_renumbering_neigh, t0_neigh, currents_idx_neigh)
-
-
-    return wfs[:, 1:], unique_pixels
+    return ((params, unique_pixels, pixels, t0_after_diff, response_template, nelectrons, long_diff, currents_idx,
+             nelectrons_neigh, pix_renumbering_neigh, t0_neigh, currents_idx_neigh),
+            dict(response_cum=get_response_cum(response_template), elec_ids_neigh=_eid))
 
 def simulate_stochastic(params, wfs, unique_pixels, rngseed):
     """

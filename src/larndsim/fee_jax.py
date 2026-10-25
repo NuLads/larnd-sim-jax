@@ -8,6 +8,7 @@ from jax import jit, vmap, lax, random, checkpoint
 from jax.scipy.special import erf
 from functools import partial
 import jax.scipy.special as jss
+from jax.scipy.special import log_ndtr
 import jax
 import os
 
@@ -342,6 +343,176 @@ def get_adc_values(params, pixels_signals, noise_rng_key):
 #     # return (charges_new, new_prob), (charge_avg_across, tick_avg, no_hit_prob_across, prob_distrib_across)
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# LARND_FEE_FAST (gpu_sim opt, 22 Oct; adopted 22 Oct: default ON, =0 restores the original code path). Same values, less work in the beam search:
+#  (1) q_max_future = cummax(q_sum - c[:, None]) is computed as cummax(q_sum)[None, :] - c[:, None] (one prefix max per
+#      pixel instead of one per beam path: x -> x - c is monotone in IEEE arithmetic, so the two are bitwise equal);
+#  (2) log_ndtr is evaluated ONCE on the full (V, T) argument array and sliced, instead of once per overlapping slice
+#      (log_diff_ndtr(A[1:], A[:-1]) evaluated log_ndtr twice on the same 1998 of 1999 values; the shifted window too);
+#  (3) log_ndtr itself (_log_ndtr_fast) evaluates _ndtr (erf + erfc) once on the selected argument instead of twice.
+# All are custom_jvp functions whose tangent rules replay exactly the ops JAX's autodiff applies to the original
+# expressions (same slices/gathers of the same tangent, same derivative exp(norm_logpdf(x) - log_ndtr(x)), same products in
+# the same order), so the transposed (reverse-mode) computation is the same sequence of floating-point operations.
+# ---------------------------------------------------------------------------------------------------------------------
+_FEE_FAST = os.environ.get('LARND_FEE_FAST', '1') == '1'
+from jax.custom_derivatives import SymbolicZero as _SymZero
+from jax._src.scipy.special import _norm_logpdf as _jss_norm_logpdf
+
+
+def _is_zero(t):
+    return isinstance(t, _SymZero)
+
+
+from jax._src.scipy.special import _ndtr as _jss_ndtr, _log_ndtr_lower as _jss_log_ndtr_lower
+from jax._src.scipy.special import _log_ndtr_asymptotic_series as _jss_log_ndtr_series
+import numpy as np
+_FEE_FAST_LOGMERGE = os.environ.get('LARND_FEE_FAST_LOGMERGE', '1') == '1'    # part of LARND_FEE_FAST (=0: old 2-log form)
+from jax._src.scipy.special import _LOGNDTR_FLOAT32_LOWER, _LOGNDTR_FLOAT32_UPPER, _LOGNDTR_FLOAT64_LOWER, _LOGNDTR_FLOAT64_UPPER
+
+
+def _log_ndtr_value(x):
+    """Values of jax.scipy.special.log_ndtr(x) (series_order 3) with ONE _ndtr evaluation instead of two: the original
+    evaluates _ndtr(-x) for the x > upper branch and _ndtr(max(x, lower)) for the middle branch and selects; here the
+    argument is selected first. Likewise the middle-branch log(ndtr) and the lower-branch log(asymptotic series) are
+    one log of the selected argument. Same elementwise functions on the same values => same result."""
+    x_arr = jnp.asarray(x)
+    dtype = lax.dtype(x_arr)
+    lower, upper = ((_LOGNDTR_FLOAT64_LOWER, _LOGNDTR_FLOAT64_UPPER) if dtype == jnp.float64
+                    else (_LOGNDTR_FLOAT32_LOWER, _LOGNDTR_FLOAT32_UPPER))
+    hi = lax.gt(x_arr, upper)
+    n = _jss_ndtr(jnp.where(hi, -x_arr, lax.max(x_arr, lower)))
+    if not _FEE_FAST_LOGMERGE:
+        return jnp.where(hi, -n, jnp.where(lax.gt(x_arr, lower), lax.log(n), _jss_log_ndtr_lower(lax.min(x_arr, lower), 3)))
+    # middle branch log(n) and lower branch log(series) share ONE log of the selected argument (same values)
+    xl = lax.min(x_arr, lower)
+    dt = lax.dtype(xl).type
+    x_2 = lax.square(xl)
+    log_scale = -dt(0.5) * x_2 - lax.log(-xl) - dt(0.5 * np.log(2. * np.pi))     # == _log_ndtr_lower's
+    mid = lax.gt(x_arr, lower)
+    L = lax.log(jnp.where(mid, n, _jss_log_ndtr_series(xl, 3)))
+    return jnp.where(hi, -n, jnp.where(mid, L, log_scale + L))
+
+
+@jax.custom_jvp
+def _log_ndtr_fast(x):
+    """== jax.scipy.special.log_ndtr (values and JVP rule t * exp(norm_logpdf(x) - log_ndtr(x)))."""
+    return _log_ndtr_value(x)
+
+
+@_log_ndtr_fast.defjvp
+def _log_ndtr_fast_jvp(primals, tangents):
+    (x,), (t,) = primals, tangents
+    ans = _log_ndtr_fast(x)
+    return ans, lax.mul(t, lax.exp(lax.sub(_jss_norm_logpdf(x), ans)))
+
+
+@partial(jax.custom_jvp, nondiff_argnums=(3,))
+def _cummax_loc(q_sum_loc, q_sum, c, reverse):
+    """== lax.cummax(q_sum_loc, axis=1, reverse=reverse) with q_sum_loc = q_sum - c[:, None] (bitwise)."""
+    return lax.cummax(q_sum, axis=0, reverse=reverse)[None, :] - c[:, None]
+
+
+def _cummax_loc_jvp(reverse, primals, tangents):
+    q_sum_loc, q_sum, c = primals
+    t = tangents[0]
+    if _is_zero(t):
+        return _cummax_loc(q_sum_loc, q_sum, c, reverse), jnp.zeros_like(q_sum_loc)
+    # the tangent of the original expression, computed by JAX's own cummax JVP on the original argument
+    out, t_out = jax.jvp(partial(lax.cummax, axis=1, reverse=reverse), (q_sum_loc,), (t,))
+    return out, t_out
+
+
+_cummax_loc.defjvp(_cummax_loc_jvp, symbolic_zeros=True)
+
+
+def _scaled_tangent(t_sl, t_thr, X_sl, thr, z, t_z):
+    """Tangent of (X_sl - thr) * z exactly as JAX's sub/mul JVPs build it (symbolic zeros skipped)."""
+    t = None
+    if t_sl is not None:
+        t = t_sl if _is_zero(t_thr) else t_sl - t_thr
+    elif not _is_zero(t_thr):
+        t = -t_thr * jnp.ones_like(X_sl)
+    out = None if t is None else t * z
+    if not _is_zero(t_z):
+        o2 = (X_sl - thr) * t_z
+        out = o2 if out is None else out + o2
+    return jnp.zeros_like(X_sl) if out is None else out
+
+
+def _pair_slices(X, idx):
+    """(X[..., idx] or X[..., 1:], X[..., :-1])"""
+    first = X[..., 1:] if idx is None else X[..., idx]
+    return first, X[..., :-1]
+
+
+def _lndtr_pair_impl(X, thr, z, idx):
+    A = (X - thr) * z
+    LA = _log_ndtr_fast(A)
+    a, b = _pair_slices(A, idx)
+    la, lb = _pair_slices(LA, idx)
+    return a, b, la, lb
+
+
+@jax.custom_jvp
+def _lndtr_pair_guess(X, thr, z):
+    """== (a, b, log_ndtr(a), log_ndtr(b)) with a = (X[..., 1:] - thr) * z, b = (X[..., :-1] - thr) * z."""
+    return _lndtr_pair_impl(X, thr, z, None)
+
+
+@jax.custom_jvp
+def _lndtr_pair_event(X, thr, z, idx):
+    """== (a, b, log_ndtr(a), log_ndtr(b)) with a = (X[..., idx] - thr) * z, b = (X[..., :-1] - thr) * z."""
+    return _lndtr_pair_impl(X, thr, z, idx)
+
+
+def _lndtr_pair_jvp_common(X, thr, z, idx, tX, tthr, tz):
+    A = (X - thr) * z
+    LA = _log_ndtr_fast(A)
+    D = lax.exp(lax.sub(_jss_norm_logpdf(A), LA))          # log_ndtr's own JVP factor, elementwise
+    a, b = _pair_slices(A, idx)
+    la, lb = _pair_slices(LA, idx)
+    Da, Db = _pair_slices(D, idx)
+    Xa, Xb = _pair_slices(X, idx)
+    # same order as the original: tangent slice/gather for a first, then for b
+    tXa = None if _is_zero(tX) else _pair_slices(tX, idx)[0]
+    tXb = None if _is_zero(tX) else tX[..., :-1]
+    ta = _scaled_tangent(tXa, tthr, Xa, thr, z, tz)
+    tb = _scaled_tangent(tXb, tthr, Xb, thr, z, tz)
+    tla = lax.mul(ta, Da)
+    tlb = lax.mul(tb, Db)
+    return (a, b, la, lb), (ta, tb, tla, tlb)
+
+
+@_lndtr_pair_guess.defjvp
+def _lndtr_pair_guess_jvp(primals, tangents):
+    X, thr, z = primals
+    tX, tthr, tz = tangents
+    return _lndtr_pair_jvp_common(X, thr, z, None, tX, tthr, tz)
+
+
+@_lndtr_pair_event.defjvp
+def _lndtr_pair_event_jvp(primals, tangents):
+    X, thr, z, idx = primals
+    tX, tthr, tz, _ = tangents
+    return _lndtr_pair_jvp_common(X, thr, z, idx, tX, tthr, tz)
+
+
+_lndtr_pair_guess.defjvp(_lndtr_pair_guess_jvp, symbolic_zeros=True)
+_lndtr_pair_event.defjvp(_lndtr_pair_event_jvp, symbolic_zeros=True)
+
+
+def _log_diff_ndtr_pre(a, b, la, lb, min_log_prob=-18.42):
+    """log_diff_ndtr(a, b) given la = log_ndtr(a), lb = log_ndtr(b) (same ops as log_diff_ndtr after those two)."""
+    safe_diff = jnp.where(a > b, lb - la, -1.0)
+    neg_expm1 = -jnp.expm1(safe_diff)
+    eps = 1e-30
+    neg_expm1_safe = _soft_max(neg_expm1, eps, sharpness=1e10)
+    log_term = jnp.log(neg_expm1_safe)
+    log_term_safe = _soft_max(log_term, min_log_prob, sharpness=10.0)
+    log_prob = la + log_term_safe
+    return jnp.where(a > b, log_prob, min_log_prob)
+
+
 def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_uncorr,
                        threshold, interval, Nvalues, min_log_prob,
                        excess_offset=0.0, smooth_sigma_scale=1.0):
@@ -352,20 +523,26 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     shifted_ticks = jnp.clip(shifted_ticks, 0, Nticks - 1)
     q_sum_loc = q_sum - prev_charges[..., None]
 
-    # 1. Log-probability of a hit starting
-    q_max_future = lax.cummax(q_sum_loc, axis=1)
-    log_guess = log_diff_ndtr(
-        (q_max_future[..., 1:] - threshold) * z_scale,
-        (q_max_future[..., :-1] - threshold) * z_scale,
-        min_log_prob=min_log_prob
-    )
+    if _FEE_FAST:
+        q_max_future = _cummax_loc(q_sum_loc, q_sum, prev_charges, False)
+        log_guess = _log_diff_ndtr_pre(*_lndtr_pair_guess(q_max_future, threshold, z_scale), min_log_prob=min_log_prob)
+        log_prob_event = _log_diff_ndtr_pre(*_lndtr_pair_event(q_sum_loc, threshold, z_scale, shifted_ticks),
+                                            min_log_prob=min_log_prob)
+    else:
+        # 1. Log-probability of a hit starting
+        q_max_future = lax.cummax(q_sum_loc, axis=1)
+        log_guess = log_diff_ndtr(
+            (q_max_future[..., 1:] - threshold) * z_scale,
+            (q_max_future[..., :-1] - threshold) * z_scale,
+            min_log_prob=min_log_prob
+        )
 
-    # 2. Log-probability of a hit being collected in the shifted window
-    log_prob_event = log_diff_ndtr(
-        (q_sum_loc[..., shifted_ticks] - threshold) * z_scale,
-        (q_sum_loc[..., :-1] - threshold) * z_scale,
-        min_log_prob=min_log_prob
-    )
+        # 2. Log-probability of a hit being collected in the shifted window
+        log_prob_event = log_diff_ndtr(
+            (q_sum_loc[..., shifted_ticks] - threshold) * z_scale,
+            (q_sum_loc[..., :-1] - threshold) * z_scale,
+            min_log_prob=min_log_prob
+        )
     log_prob_event = jnp.minimum(log_prob_event, log_guess)
     log_prob_event = _soft_max(log_prob_event, min_log_prob, sharpness=1.0)
 
@@ -377,7 +554,7 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     # Replace both log_adc_correction and _soft_where with a single correction
     # that integrates over the uncorrelated noise U, since reset noise N cancels out.
     safe_sigma_uncorr = jnp.maximum(sigma_uncorr * smooth_sigma_scale, 1.0)
-    log_accept = jss.log_ndtr((esperance_value - threshold + excess_offset) / safe_sigma_uncorr)
+    log_accept = (_log_ndtr_fast if _FEE_FAST else jss.log_ndtr)((esperance_value - threshold + excess_offset) / safe_sigma_uncorr)
     log_prob_event = log_prob_event + log_accept
 
     # 3. Aggregate Results
@@ -387,9 +564,10 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
 
     # 4. Path Selection
     next_q_sum = q_sum_loc[:, jnp.clip(shifted_ticks + 1, 0, Nticks - 1)]
-    max_future_signal = lax.cummax(q_sum_loc, axis=1, reverse=True)
+    max_future_signal = _cummax_loc(q_sum_loc, q_sum, prev_charges, True) if _FEE_FAST \
+        else lax.cummax(q_sum_loc, axis=1, reverse=True)
     future_hit_earliest_end = jnp.clip(shifted_ticks + interval + 1, 0, Nticks - 1)
-    log_future_hit_prob = jss.log_ndtr(
+    log_future_hit_prob = (_log_ndtr_fast if _FEE_FAST else jss.log_ndtr)(
         (max_future_signal[:, future_hit_earliest_end] - next_q_sum - threshold) * z_scale
     )
     log_selection_prob = log_guess + log_future_hit_prob + previous_log_prob[:, None]

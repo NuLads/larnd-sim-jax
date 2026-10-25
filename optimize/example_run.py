@@ -85,6 +85,33 @@ else:
 
 import jax
 
+# Shared MLIR context — LARND_MLIR_SHARED_CTX (compile time + host memory, 22 Oct opt team; adopted 22 Oct: default ON
+# when LARND_JAX_LRU > 2048, =0 restores one context per lowering; results identical either way). JAX 0.6.2 creates a NEW MLIR context for every lowering (mlir.make_ir_context, called by ModuleContext),
+# and its in-memory lowering cache (pxla._cached_lowering_to_hlo, a weakref_lru_cache) retains every lowered module and
+# hence its context: ~0.82 MB of host RSS per entry (an empty context with the JAX dialects loaded), i.e. most of the
+# ~28 GB plateau at LARND_JAX_LRU=32768. Creating a context costs ~5-10 ms, and the many live contexts make every
+# later XLA compile and lowering slower (CPU: compile 3.4x slower with 8 k live contexts) — why epoch 1 at 32768 grows
+# from ~20 to ~85 s per batch (vs a flat ~13 s at 2048). With the flag, each thread lowers every module into ONE
+# context. The lowered IR is the same (types/attributes/locations are uniqued per context, not per module), so the
+# compiled programs and all results are identical — checked (opt/reports/compile_mem.md): 302/302 (CPU) and 471/471
+# (GPU) production modules textually identical to a fresh-context lowering; harness loss/gradients and a CPU fit
+# bitwise. GPU, 40 batches: epoch 1 17.7 -> 9.9 min, lowering 228 -> 11 s, RSS 15.2 -> 7.0 GB, steady s/it unchanged.
+# Uniqued attributes of EVICTED modules are not freed, so use it with a cache that holds the working set
+# (LARND_JAX_LRU=32768), not with a thrashing one.
+if os.environ.get('LARND_MLIR_SHARED_CTX', '1' if _JAX_LRU > 2048 else '0') == '1':
+    import threading as _threading
+    from jax._src.interpreters import mlir as _jax_mlir
+    _make_ir_context_orig = _jax_mlir.make_ir_context
+    _mlir_tls = _threading.local()
+
+    def _make_ir_context_shared():
+        ctx = getattr(_mlir_tls, 'ctx', None)
+        if ctx is None:
+            ctx = _mlir_tls.ctx = _make_ir_context_orig()
+        return ctx
+    _jax_mlir.make_ir_context = _make_ir_context_shared
+    print('[LARND_MLIR_SHARED_CTX] one MLIR context per thread for all lowerings', file=sys.stderr, flush=True)
+
 from .fit_params import GradientDescentFitter, LikelihoodProfiler, MinuitFitter, HessianCalculator, GaussNewtonCalibFitter
 from .dataio import TgtTracksDataset, TracksDataset, DataLoader
 

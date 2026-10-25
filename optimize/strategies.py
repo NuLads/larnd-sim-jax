@@ -6,9 +6,24 @@ from larndsim.detsim_jax import id2pixel, get_pixel_coordinates, get_hit_z
 from larndsim.fee_jax import get_average_hit_values, digitize
 import logging
 import os
+import functools
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
+
+# LARND_ROI_SKIP (compile/epoch-1 cost, 22 Oct opt team; adopted 22 Oct: default ON, =0 computes the paddings again). In the production path
+# (LUTProbabilisticSimulation.predict -> simulate_probabilistic -> _simulate_probabilistic_jit) the FEE is the chunked
+# scan get_adc_values_average_noise_chunked over ALL pixels; the ROI paddings (padded_small_nb / padded_large_nb) are
+# passed to _simulate_probabilistic_jit but never used by it. Computing them costs a get_roi_counts + int() host sync in
+# predict (most iterations: Npix changes from batch to batch) and, in fit_params.compute_loss, one extra simulate_wfs
+# per batch on its first visit. With the flag both are skipped and 0 is passed for the unused arguments (Python ints,
+# the same weak-int32 signature). Exact by construction: the skipped values have no path into any output.
+_ROI_SKIP = os.environ.get('LARND_ROI_SKIP', '1') == '1'
+
+
+def roi_counts_unused(strategy):
+    """True when LARND_ROI_SKIP=1 and the strategy's computation does not read the ROI paddings."""
+    return _ROI_SKIP and type(strategy) is LUTProbabilisticSimulation
 
 
 @jax.jit
@@ -40,6 +55,73 @@ def compute_occurrence_indices(ids):
     return occurrence_indices
 
 # pad_to_closest_multiple is imported from larndsim.sim_jax
+
+# ── opt/loss (22 Oct): ProbabilisticLossStrategy fast path (bitwise identical; LARND_LOSS_FAST=0 = original code) ──
+_LOSS_FAST = os.environ.get('LARND_LOSS_FAST', '1') == '1'
+# LARND_LOSS_LSE_JIT=1 (default OFF): the window logsumexp of the fast path as ONE jitted call (12 eager ops forward +
+# ~8 backward -> 1 + 1). It contains no multiply-add pattern (max, sub, exp, sum, log, add) so XLA fusion cannot
+# contract it into FMAs; measured bitwise on CPU and on the A100 (batch 0; opt/reports/loss.md L6). Gain ~4 ms/iteration.
+_LOSS_LSE_JIT = os.environ.get('LARND_LOSS_LSE_JIT', '0') == '1'
+_lse_jit = jax.jit(jax.nn.logsumexp, static_argnames=('axis',))
+# LARND_PPP_JIT=1 (default OFF): the whole production PPP loss (_compute_fast) as one jitted program. Bitwise vs the
+# eager code on CPU (value, aux, gradients; opt/reports/loss.md L7); on the A100 round-off level (loss bitwise, aux
+# expected_total_hits 8e-8 relative, d/d hit_prob differs only in denormals) -> off by default. Gain ~17 ms/iteration.
+_PPP_JIT = os.environ.get('LARND_PPP_JIT', '0') == '1'
+_PPP_GATHER_DNUMS = jax.lax.GatherDimensionNumbers(offset_dims=(), collapsed_slice_dims=(0, 1, 2),
+                                                   start_index_map=(0, 1, 2))
+
+
+def _under_jit_trace():
+    """True if a jit/make_jaxpr trace is active (the eager production loss runs under a JVP/Linearize trace whose
+    parent chain ends at the eval trace -> False)."""
+    try:                                 # JAX-internal API (0.6.x): on any surprise report "jit" -> original code
+        from jax._src import core as _core
+        from jax._src.interpreters import partial_eval as _pe
+        tr = _core.trace_ctx.trace
+        for _ in range(64):
+            if tr is None or tr is _core.eval_trace:
+                return False
+            if isinstance(tr, _pe.DynamicJaxprTrace):
+                return True
+            tr = getattr(tr, 'parent_trace', None)
+    except Exception:
+        pass
+    return True
+
+
+@jax.jit
+def _ppp_match_core(sim_unique_pixels, target_pixel_ids):
+    pixel_indices = jnp.searchsorted(sim_unique_pixels, target_pixel_ids)
+    pixel_indices_safe = jnp.clip(pixel_indices, 0, sim_unique_pixels.shape[0] - 1)
+    pixel_match_valid = (sim_unique_pixels[pixel_indices_safe] == target_pixel_ids) & (target_pixel_ids >= 0)
+    is_relevant_target_hit = (target_pixel_ids >= 0)
+    pixel_match_valid = pixel_match_valid & is_relevant_target_hit
+    return pixel_indices_safe, pixel_match_valid, is_relevant_target_hit
+
+
+def _ppp_match_indices(sim_unique_pixels, target_pixel_ids, target_ticks_raw, time_window, nvalues, nticks):
+    """Integer/bool part of the PPP loss (exact): the same values ProbabilisticLossStrategy.compute derives eagerly --
+    pixel_indices_safe, pixel_match_valid, the clipped tick windows -- and the gather index array that
+    ticks_prob[pixel_indices_safe[:, None, None], arange(Nvalues)[None, :, None], window_ticks[:, None, :]] builds
+    (all components >= 0, so jnp's negative-index normalisation is the identity)."""
+    return _ppp_match_indices_jit(sim_unique_pixels, target_pixel_ids, target_ticks_raw, time_window, nvalues, nticks)
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def _ppp_match_indices_jit(sim_unique_pixels, target_pixel_ids, target_ticks_raw, time_window, nvalues, nticks):
+    pixel_indices_safe, pixel_match_valid, is_relevant_target_hit = _ppp_match_core(sim_unique_pixels, target_pixel_ids)
+    target_ticks = target_ticks_raw.astype(int)
+    delta = jnp.arange(-time_window, time_window + 1)
+    window_ticks = jnp.clip(target_ticks[:, None] + delta[None, :], 0, nticks - 1)
+    nh, nw = target_pixel_ids.shape[0], 2 * time_window + 1
+    shp = (nh, nvalues, nw)
+    gidx = jnp.stack([jnp.broadcast_to(pixel_indices_safe[:, None, None], shp),
+                      jnp.broadcast_to(jnp.arange(nvalues)[None, :, None], shp),
+                      jnp.broadcast_to(window_ticks[:, None, :], shp)], axis=-1).astype(jnp.int32)
+    n_unmatched = jnp.sum(is_relevant_target_hit & ~pixel_match_valid)
+    n_matched = jnp.sum(is_relevant_target_hit & pixel_match_valid)
+    pix_valid3 = (sim_unique_pixels >= 0)[:, None, None]
+    return gidx, pixel_match_valid, n_unmatched, n_matched, pix_valid3
 
 class SimulationStrategy:
     def predict(self, params, tracks, fields, rngkey):
@@ -92,6 +174,15 @@ class LUTProbabilisticSimulation(SimulationStrategy):
             return {'adcs_distrib': adcs_distrib, 'hit_prob': ticks_prob, 'pixel_x': pixel_x,
                     'pixel_y': pixel_y, 'pixel_plane': pixel_plane, 'event': event,
                     'unique_pixels': unique_pixels, 'hit_pixels': unique_pixels, 'wfs': wfs}
+
+        if roi_counts_unused(self):
+            # LARND_ROI_SKIP: the paddings are unused by _simulate_probabilistic_jit (see roi_counts_unused)
+            adcs_distrib, pixel_x, pixel_y, ticks_prob, event = simulate_probabilistic(
+                params, wfs, unique_pixels, padded_small_nb=0, padded_large_nb=0)
+            _, _, pixel_plane, _ = id2pixel(params, unique_pixels)
+            return {'adcs_distrib': adcs_distrib, 'hit_prob': ticks_prob, 'pixel_x': pixel_x, 'pixel_y': pixel_y,
+                    'pixel_plane': pixel_plane, 'event': event, 'unique_pixels': unique_pixels,
+                    'hit_pixels': unique_pixels, 'wfs': wfs}
 
         padded_small_nb = getattr(self, 'padded_small_nb', None)
         padded_large_nb = getattr(self, 'padded_large_nb', None)
@@ -608,6 +699,91 @@ class ProbabilisticLossStrategy(LossStrategy):
                 "sm_npix_pred": jnp.sum(pix_valid)}
         return penalty, diag
 
+    def _fast_constants(self):
+        """(log_time_weights[None, None, :], 0.5 * log(2 pi sigma^2)), evaluated eagerly once with the original ops."""
+        cst = self.__dict__.get('_fast_consts')
+        if cst is None:
+            with jax.ensure_compile_time_eval():
+                cst = (self.log_time_weights[None, None, :], 0.5 * jnp.log(2 * jnp.pi * (self.sigma_charge/1000)**2))
+            self._fast_consts = cst
+        return cst
+
+    def _compute_fast_jit(self, params, prediction, target):
+        """LARND_PPP_JIT=1 (default OFF): _compute_fast as ONE jitted program (98 eager executions -> 5). The two
+        cached constants enter as runtime ARGUMENTS (not folded by XLA on the host). Bitwise on CPU vs eager, round-off
+        on the GPU (opt/reports/loss.md, L7)."""
+        fn = self.__dict__.get('_jit_fast')
+        if fn is None:
+            def _f(params_, pred_, tgt_, ltw_, hln_):
+                return self._compute_fast(params_, pred_, tgt_, consts=(ltw_, hln_))
+            fn = self._jit_fast = jax.jit(_f)
+        pid_key = 'pixel_id' if 'pixel_id' in target else 'hit_pixels'
+        pred = {k: prediction[k] for k in ('hit_prob', 'adcs_distrib', 'unique_pixels')}
+        tgt = {pid_key: target[pid_key], 'ticks': target['ticks'], 'adcs': target['adcs']}
+        nll, aux = fn(params, pred, tgt, *self._fast_constants())
+        aux = dict(aux); aux['log_likelihood_charge'] = 0.0; aux['spatial_moment'] = 0.0   # Python floats as before
+        return nll, aux
+
+    def _compute_fast(self, params, prediction, target, consts=None):
+        """The production branch of compute() (time_window > 0, no dead time, all hits) with the same floating-point
+        op sequence, but (opt/loss, 22 Oct) the integer/bool prefix -- target->pixel matching, validity masks, the
+        tick windows and the (Nhits, Nvalues, 2W+1, 3) gather index array -- built by ONE jitted integer-only
+        function (_ppp_match_indices: exact) instead of ~60 eager dispatches, the two window gathers issued directly
+        with that index array, the unused occurrence indices not computed, and two batch-independent constants
+        cached. Bitwise identical to compute()'s branch (opt/reports/loss.md); LARND_LOSS_FAST=0 restores it."""
+        target_pixel_ids = target.get('pixel_id', target.get('hit_pixels'))
+        sim_unique_pixels = prediction['unique_pixels']
+        ticks_prob = prediction['hit_prob']          # (Npix, Nvalues, Nticks) [log-probabilities]
+        adcs_distrib = prediction['adcs_distrib']    # (Npix, Nvalues, Nticks)
+        gidx, pixel_match_valid, n_unmatched, n_matched, pix_valid3 = _ppp_match_indices(
+            sim_unique_pixels, target_pixel_ids, target['ticks'], self.time_window, int(ticks_prob.shape[1]),
+            int(ticks_prob.shape[-1]))
+        target_charge = adc2charge(target['adcs'], params)
+        window_log_probs = jax.lax.gather(ticks_prob, gidx, _PPP_GATHER_DNUMS, (1, 1, 1),
+                                          mode=jax.lax.GatherScatterMode.PROMISE_IN_BOUNDS)
+        window_expected_charges = adc2charge(
+            jax.lax.gather(adcs_distrib, gidx, _PPP_GATHER_DNUMS, (1, 1, 1),
+                           mode=jax.lax.GatherScatterMode.PROMISE_IN_BOUNDS), params)
+        charge_diffs = target_charge[:, None, None] - window_expected_charges
+        if consts is not None:         # LARND_PPP_JIT: eagerly computed constants passed in as arguments
+            ltw, half_log_norm = consts
+        elif _under_jit_trace():       # keep the original expression (XLA folds it at compile time under jit)
+            ltw = self.log_time_weights[None, None, :]
+            half_log_norm = 0.5 * jnp.log(2 * jnp.pi * (self.sigma_charge/1000)**2)
+        else:
+            ltw, half_log_norm = self._fast_constants()
+        window_log_charge_intensity = (
+            -0.5 * (charge_diffs / (self.sigma_charge/1000)) ** 2
+            - half_log_norm
+        )
+        joint_window_log_probs = (
+            window_log_probs
+            + ltw
+            + window_log_charge_intensity
+        )
+        joint_hit_log_probs = (_lse_jit if _LOSS_LSE_JIT else jax.nn.logsumexp)(joint_window_log_probs, axis=(1, 2))
+        joint_hit_log_probs = jnp.maximum(joint_hit_log_probs, self.min_log_prob)
+        joint_hit_log_probs = jnp.where(pixel_match_valid, joint_hit_log_probs, 0.0)
+        ll_hits = jnp.sum(joint_hit_log_probs)
+        no_match_penalty = self.min_log_prob * n_unmatched
+        expected_total_hits = jnp.sum(jnp.where(pix_valid3, jnp.exp(ticks_prob), 0.0))
+        nll = -ll_hits - no_match_penalty + expected_total_hits
+        spatial_moment = 0.0
+        sm_diag = {}
+        if self.spatial_moment_weight > 0.0:
+            spatial_moment, sm_diag = self._spatial_moment_penalty(params, prediction, target, target_pixel_ids)
+            nll = nll + self.spatial_moment_weight * spatial_moment
+        aux = {
+            "log_likelihood_charge": 0.0,
+            "log_likelihood_tick": -ll_hits,      # = -jnp.sum(joint_hit_log_probs): the same reduction
+            "no_match_penalty": -no_match_penalty,
+            "expected_total_hits": expected_total_hits,
+            "matched_hits": n_matched,
+            "spatial_moment": spatial_moment,
+            **sm_diag,
+        }
+        return nll, aux
+
     def compute(self, params, prediction, target):
         """
         Compute Poisson Point Process Negative Log-Likelihood (PPP NLL).
@@ -626,10 +802,15 @@ class ProbabilisticLossStrategy(LossStrategy):
             - ticks: (Nhits,) - observed tick for each hit
             - adcs: (Nhits,) - observed ADC for each hit
         """
+        if _LOSS_FAST and self.time_window > 0 and not (self.apply_deadtime or self.first_hit_only):
+            if _PPP_JIT and self.spatial_moment_weight == 0.0 and not _under_jit_trace():
+                return self._compute_fast_jit(params, prediction, target)
+            return self._compute_fast(params, prediction, target)
+
         # Step 1: Match target hits to predicted pixel distributions
         target_pixel_ids = target.get('pixel_id', target.get('hit_pixels'))
         sim_unique_pixels = prediction['unique_pixels']
-        
+
         # Find indices of target pixels in simulation output (unique_pixels is sorted)
         pixel_indices = jnp.searchsorted(sim_unique_pixels, target_pixel_ids)
         
