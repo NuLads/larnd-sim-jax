@@ -27,6 +27,12 @@ size_history_dict = {}
 # Counting the pixels first and calling the static-size unique with the dynamic path's own padded size gives the same
 # array (after the sort: the -1 fill first, then the n sorted ids) with ops whose shapes only change at 128 boundaries.
 _UNIQUE_BUCKET = os.environ.get('LARND_UNIQUE_BUCKET', '0') == '1'
+# LARND_SEARCH_UNROLLED (prof2, 23 Oct; default ON, =0 restores; BITWISE): the two pixel-renumbering searchsorted calls
+# of the simulation (4.7 M neighbour ids in _signal_inputs, the main pixels in _simulate_signals_impl) use
+# method='scan_unrolled' (a fixed-depth binary search) instead of method='sort' (sort of the concatenated arrays).
+# Integer results are identical by definition (leftmost insertion index); A100: 12.0 -> 0.55 ms per call, compile
+# 2.1-2.7 -> 0.16 s per unique-pixel bucket (opt/reports/prof2_r2.md).
+_SEARCH_METHOD = 'scan_unrolled' if os.environ.get('LARND_SEARCH_UNROLLED', '1') == '1' else 'sort'
 
 
 @jit
@@ -298,7 +304,7 @@ def _simulate_signals_impl(params, unique_pixels, pixels, t0_after_diff, respons
     sig_len = params.signal_length
 
     # --- 1. PREPARE MAIN PIXEL DATA (DIFFERENTIABLE TIME SHIFT) ---
-    pix_renum = jnp.searchsorted(unique_pixels, pixels.ravel(), method='sort')
+    pix_renum = jnp.searchsorted(unique_pixels, pixels.ravel(), method=_SEARCH_METHOD)
     mask = (unique_pixels[pix_renum] == pixels.ravel())
     if _SIG_DROP_GARBAGE:
         mask = mask & (pixels.ravel() >= 0)     # bins outside the detector: dropped instead of summed into row 0
@@ -935,7 +941,7 @@ def _signal_inputs(params, response_template, tracks, fields, unique_size=None):
         # static output size -> jittable (contents exact, padded to unique_size with -1)
         unique_pixels = jnp.unique(main_pixels.ravel(), size=int(unique_size), fill_value=-1)
     unique_pixels = jnp.sort(unique_pixels)
-    pix_renumbering_neigh= jnp.searchsorted(unique_pixels, pIDs_neigh.ravel(), method='sort')
+    pix_renumbering_neigh= jnp.searchsorted(unique_pixels, pIDs_neigh.ravel(), method=_SEARCH_METHOD)
 
     mask = (pix_renumbering_neigh < unique_pixels.size) & (unique_pixels[pix_renumbering_neigh] == pIDs_neigh.ravel())
     # jnp.where (not boolean-index .at[~mask].set) so the function is jittable; numerically identical.

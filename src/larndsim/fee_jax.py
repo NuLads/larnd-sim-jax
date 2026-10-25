@@ -355,6 +355,29 @@ def get_adc_values(params, pixels_signals, noise_rng_key):
 # the same order), so the transposed (reverse-mode) computation is the same sequence of floating-point operations.
 # ---------------------------------------------------------------------------------------------------------------------
 _FEE_FAST = os.environ.get('LARND_FEE_FAST', '1') == '1'
+# LARND_FEE_PEEL0 (fee2, 23 Oct; adopted 24 Oct: default ON, =0 restores; KN10R2 consistent): beam-search step 0 outside the scan, its per-path work done once (all
+# paths start at charge 0). Forward values identical; backward = same terms summed in another order (round-off).
+_FEE_PEEL0 = os.environ.get('LARND_FEE_PEEL0', '1') == '1'
+# LARND_FEE_PIXEL_STOP (fee2, 23 Oct; adopted 24 Oct: default 3, =0 restores; NOT round-off: a (tiny) behaviour change;
+# full-length fit KN10R2 consistent with the same-data replicas, review_2026_09/REVIEW.md): inside an ACTIVE chunk,
+# the beam-search step is no longer computed for "dead" pixels, i.e. pixels whose total path probability is below
+# stop_threshold * exp(-LARND_FEE_STOP_MARGIN) (their probability can grow by at most (1 + 2.2e-5) per step through the
+# 1e-8 floors, so with the margin they can never cross stop_threshold again and the chunk activity -- the lax.cond --
+# is exactly the original one). Their outputs: LARND_FEE_STOP_DEAD=low (default, closest to the original):
+# log-prob -1e4 (the original computes values <= log(stop_threshold) + 1e-8, i.e. < 1e-9 total per step) and the
+# charge output = esperance (path- and state-independent, i.e. exactly the original's); =floor: the inactive-chunk
+# outputs (min_log_prob, 0) instead. =1: emulation (everything computed, then selected; no speed gain).
+_FEE_PIXEL_STOP = os.environ.get('LARND_FEE_PIXEL_STOP', '3')
+_FEE_PIXEL_STOP = _FEE_PIXEL_STOP if _FEE_PIXEL_STOP != '0' else ''
+# =2: the real implementation: per chunk-step a lax.switch on the number n of live pixels: n = 0 -> inactive outputs,
+# n <= K (ladder LARND_FEE_STOP_LADDER, default "16,64") -> the live rows are gathered into K rows, stepped, scattered
+# back; otherwise all rows stepped + selected. Same semantics as =1 (round-off apart); cost ~ K / 128 per cell.
+_FEE_STOP_LADDER = tuple(sorted(int(k) for k in os.environ.get('LARND_FEE_STOP_LADDER', '16,64').split(',') if k.strip()))
+_FEE_STOP_MARGIN = float(os.environ.get('LARND_FEE_STOP_MARGIN', '0.01'))
+_FEE_STOP_DEAD = os.environ.get('LARND_FEE_STOP_DEAD', 'low')
+assert _FEE_STOP_DEAD in ('low', 'floor'), _FEE_STOP_DEAD
+_FEE_DEAD_LOGP = -1e4
+_FEE_STOP_BLOCK = int(os.environ.get('LARND_FEE_STOP_BLOCK', '0') or 0)   # =3: rows per compute block (0 = chunk_size)
 from jax.custom_derivatives import SymbolicZero as _SymZero
 from jax._src.scipy.special import _norm_logpdf as _jss_norm_logpdf
 
@@ -515,9 +538,14 @@ def _log_diff_ndtr_pre(a, b, la, lb, min_log_prob=-18.42):
 
 def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_uncorr,
                        threshold, interval, Nvalues, min_log_prob,
-                       excess_offset=0.0, smooth_sigma_scale=1.0):
+                       excess_offset=0.0, smooth_sigma_scale=1.0, n_paths=None):
+    """n_paths (LARND_FEE_PEEL0, fee2 23 Oct): prev_charges holds ONE charge shared by all n_paths beam paths (step 0:
+    every path starts at charge 0). The per-path arrays are then computed once, (1, T), and broadcast to (n_paths, T)
+    where they meet previous_log_prob: the same values as the n_paths identical rows of the original (forward
+    bitwise); the backward sums the path cotangents before the shared computation instead of after it (round-off)."""
     Nticks = q_sum.shape[0]
     z_scale = 1.0 / sigma
+    bc = (lambda x: x) if n_paths is None else (lambda x: jnp.broadcast_to(x, (n_paths,) + x.shape[1:]))
 
     shifted_ticks = jnp.arange(Nticks - 1) + interval + 1
     shifted_ticks = jnp.clip(shifted_ticks, 0, Nticks - 1)
@@ -558,9 +586,9 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     log_prob_event = log_prob_event + log_accept
 
     # 3. Aggregate Results
-    log_prob_distrib = log_prob_event + previous_log_prob[:, None]
+    log_prob_distrib = bc(log_prob_event) + previous_log_prob[:, None]
     log_total_hit_dist_tick = jax.nn.logsumexp(log_prob_distrib, axis=0)
-    log_total_dist_tick = jax.nn.logsumexp(log_guess + previous_log_prob[:, None], axis=0)
+    log_total_dist_tick = jax.nn.logsumexp(bc(log_guess) + previous_log_prob[:, None], axis=0)
 
     # 4. Path Selection
     next_q_sum = q_sum_loc[:, jnp.clip(shifted_ticks + 1, 0, Nticks - 1)]
@@ -570,7 +598,7 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     log_future_hit_prob = (_log_ndtr_fast if _FEE_FAST else jss.log_ndtr)(
         (max_future_signal[:, future_hit_earliest_end] - next_q_sum - threshold) * z_scale
     )
-    log_selection_prob = log_guess + log_future_hit_prob + previous_log_prob[:, None]
+    log_selection_prob = bc(log_guess + log_future_hit_prob) + previous_log_prob[:, None]
     log_total_sel_prob_tick = jax.nn.logsumexp(log_selection_prob, axis=0)
 
     # 5. Construct State for Next Iteration (stop_gradient on discrete indices)
@@ -622,6 +650,15 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
                 Nvalues, min_log_prob,
                 params.excess_offset, params.smooth_sigma_scale
             )
+            if _FEE_PIXEL_STOP:
+                # per-pixel stop, emulation (=1: everything computed, then selected; see LARND_FEE_PIXEL_STOP)
+                alive = jax.nn.logsumexp(probs, axis=1) > jnp.log(stop_threshold) - _FEE_STOP_MARGIN
+                new_charges = jnp.where(alive[:, None], new_charges, charges)
+                new_probs = jnp.where(alive[:, None], new_probs, probs)
+                low = _FEE_STOP_DEAD == 'low'
+                prob_dist = jnp.where(alive[:, None], prob_dist, jnp.float32(_FEE_DEAD_LOGP if low else min_log_prob))
+                if not low:
+                    charge_dist = jnp.where(alive[:, None], charge_dist, jnp.float32(0.0))
             # LogSumExp gives the log of the total probability
             total_prob_per_pixel = jax.nn.logsumexp(new_probs, axis=1)
             new_active = jnp.any(total_prob_per_pixel > jnp.log(stop_threshold))
@@ -643,6 +680,65 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
         )
         return final_carry, final_outputs
 
+    # per-pixel expected charge of a crossing (== esperance_value of _find_one_hit_step: path/state independent)
+    esp_all = None
+    if _FEE_PIXEL_STOP == '2' and _FEE_STOP_DEAD == 'low':
+        _sh = jnp.clip(jnp.arange(Nticks - 1) + interval + 1, 0, Nticks - 1)
+        esp_all = q_sum_all[:, _sh] + params.DISCRIMINATION_THRESHOLD - 0.5 * (q_sum_all[:, 1:] + q_sum_all[:, :-1])
+
+    def _rows_step(q_rows, charges, probs):
+        return vmapped_step_fun(q_rows, charges, probs,
+                                params.RESET_NOISE_CHARGE, params.UNCORRELATED_NOISE_CHARGE,
+                                params.DISCRIMINATION_THRESHOLD, interval, Nvalues, min_log_prob,
+                                params.excess_offset, params.smooth_sigma_scale)
+
+    def pixel_scan_fun(carry, _):
+        """LARND_FEE_PIXEL_STOP=2: per-pixel stop with the live rows compacted.
+        carry = (charges, probs, live[Npix] (rows to compute: total > stop * exp(-margin)), chunk_active)."""
+        log_stop = jnp.log(stop_threshold)
+        low = _FEE_STOP_DEAD == 'low'
+        dead_lp = jnp.float32(_FEE_DEAD_LOGP if low else min_log_prob)
+
+        def _new_flags(npr):
+            tot = jax.nn.logsumexp(npr, axis=1)
+            return tot > log_stop - _FEE_STOP_MARGIN, jnp.any(tot > log_stop)
+
+        def _inactive(operand):
+            return operand, (jnp.full((Npix, Nticks - 1), min_log_prob, dtype=jnp.float32),
+                             jnp.zeros((Npix, Nticks - 1), dtype=jnp.float32))
+
+        @checkpoint
+        def _full(operand):
+            c, p, al, _ = operand
+            (nc, npr), (pd, cd) = _rows_step(q_sum_all, c, p)
+            nc = jnp.where(al[:, None], nc, c)
+            npr = jnp.where(al[:, None], npr, p)
+            pd = jnp.where(al[:, None], pd, dead_lp)
+            if not low:
+                cd = jnp.where(al[:, None], cd, jnp.float32(0.0))
+            return (nc, npr) + _new_flags(npr), (pd, cd)
+
+        def _compact(K):
+            @checkpoint
+            def br(operand):
+                c, p, al, _ = operand
+                idx = jnp.nonzero(al, size=K, fill_value=Npix)[0]          # live rows first, then out-of-range
+                q_r = jnp.take(q_sum_all, idx, axis=0, mode='clip')
+                c_r = jnp.take(c, idx, axis=0, mode='clip')
+                p_r = jnp.take(p, idx, axis=0, mode='clip')
+                (nc, npr), (pd, cd) = _rows_step(q_r, c_r, p_r)
+                nc = c.at[idx].set(nc, mode='drop')
+                npr = p.at[idx].set(npr, mode='drop')
+                pd = jnp.full((Npix, Nticks - 1), dead_lp, dtype=jnp.float32).at[idx].set(pd, mode='drop')
+                cd = (esp_all if low else jnp.zeros((Npix, Nticks - 1), dtype=jnp.float32)).at[idx].set(cd, mode='drop')
+                return (nc, npr) + _new_flags(npr), (pd, cd)
+            return br
+
+        ks = [k for k in _FEE_STOP_LADDER if k < Npix]
+        n = jnp.sum(carry[2].astype(jnp.int32))
+        index = jnp.where(carry[3], 1 + (jnp.sum((n > jnp.array(ks, dtype=jnp.int32)).astype(jnp.int32)) if ks else 0), 0)
+        return lax.switch(index, [_inactive] + [_compact(k) for k in ks] + [_full], carry)
+
     # --- Setup and Execute the Global Scan ---
     initial_charges = jnp.zeros((Npix, Nvalues), dtype=jnp.float32)
     initial_log_probs = jnp.full((Npix, Nvalues), min_log_prob, dtype=jnp.float32).at[:, 0].set(0.0)
@@ -650,7 +746,39 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
     
     init_loop = (initial_charges, initial_log_probs, initial_active)
 
-    _, (log_prob_distrib, charge_distrib) = lax.scan(global_scan_fun, init_loop, jnp.arange(0, params.MAX_ADC_VALUES))
+    if _FEE_PEEL0 and params.MAX_ADC_VALUES > 1:
+        # Step 0 peeled out of the scan (LARND_FEE_PEEL0): it is always active (initial_active = True), and its 100 beam
+        # paths all start at charge 0, so the per-path work is done once per pixel (n_paths, see _find_one_hit_step).
+        vstep0 = vmap(partial(_find_one_hit_step, n_paths=Nvalues),
+                      in_axes=(0, 0, 0, None, None, None, None, None, None, None, None))
+
+        @checkpoint
+        def _step0(q_sum, log_probs0):
+            (new_charges, new_probs), (prob_dist, charge_dist) = vstep0(
+                q_sum, jnp.zeros((Npix, 1), dtype=jnp.float32), log_probs0,
+                params.RESET_NOISE_CHARGE, params.UNCORRELATED_NOISE_CHARGE,
+                params.DISCRIMINATION_THRESHOLD, interval,
+                Nvalues, min_log_prob,
+                params.excess_offset, params.smooth_sigma_scale
+            )
+            total_prob_per_pixel = jax.nn.logsumexp(new_probs, axis=1)
+            new_active = jnp.any(total_prob_per_pixel > jnp.log(stop_threshold))
+            return (new_charges, new_probs, new_active), (prob_dist, charge_dist)
+
+        carry1, (prob0, charge0) = _step0(q_sum_all, initial_log_probs)
+        if _FEE_PIXEL_STOP == '2':
+            _tot = jax.nn.logsumexp(carry1[1], axis=1)
+            carry1 = (carry1[0], carry1[1], _tot > jnp.log(stop_threshold) - _FEE_STOP_MARGIN, carry1[2])
+        _, (lp_rest, ch_rest) = lax.scan(pixel_scan_fun if _FEE_PIXEL_STOP == '2' else global_scan_fun, carry1,
+                                         jnp.arange(1, params.MAX_ADC_VALUES))
+        log_prob_distrib = jnp.concatenate([prob0[None], lp_rest], axis=0)
+        charge_distrib = jnp.concatenate([charge0[None], ch_rest], axis=0)
+    elif _FEE_PIXEL_STOP == '2':
+        _, (log_prob_distrib, charge_distrib) = lax.scan(
+            pixel_scan_fun, (initial_charges, initial_log_probs, jnp.ones((Npix,), dtype=bool), initial_active),
+            jnp.arange(0, params.MAX_ADC_VALUES))
+    else:
+        _, (log_prob_distrib, charge_distrib) = lax.scan(global_scan_fun, init_loop, jnp.arange(0, params.MAX_ADC_VALUES))
     # log_prob_distrib = jnp.full((Npix, params.MAX_ADC_VALUES, Nticks - 1), -jnp.inf, dtype=jnp.float32)
     # charge_distrib = jnp.zeros((Npix, params.MAX_ADC_VALUES, Nticks - 1), dtype=jnp.float32)
     # carry = init_loop
@@ -796,6 +924,92 @@ def get_average_hit_values(log_ticks_prob, adcs_distrib, min_log_prob=-18.42):
 
     return expected_ticks_per_hit, expected_adcs_per_hit, lambda_per_hit
 
+def _fee_global_pixel_stop(params, wfs, chunk_size, stop_threshold=1e-9, min_log_prob=-18.42):
+    """LARND_FEE_PIXEL_STOP=3: the per-pixel-stop semantics of =1/=2 with the loops swapped: an outer scan over the hit
+    steps and, inside, a scan over blocks of chunk_size rows of the LIVE pixels of the whole batch (gathered with
+    jnp.nonzero; one lax.cond per block, false for the blocks past ceil(n_live / chunk_size)). The original per-chunk
+    activity (the cond of get_adc_values_average_noise_vmap) is tracked exactly, per chunk. One copy of the step body
+    is compiled (like the original), and the work is ~ the number of live pixels instead of 128 x active chunks."""
+    P, Nticks = wfs.shape
+    C = P // chunk_size
+    B = _FEE_STOP_BLOCK or chunk_size                   # rows per compute block (the activity stays per chunk)
+    NB = -(-P // B)
+    Nvalues = params.fee_paths_scaling
+    interval = round((3 * params.CLOCK_CYCLE + params.ADC_HOLD_DELAY * params.CLOCK_CYCLE) / params.t_sampling)
+    log_stop = jnp.log(stop_threshold)
+    low = _FEE_STOP_DEAD == 'low'
+    pargs = (params.RESET_NOISE_CHARGE, params.UNCORRELATED_NOISE_CHARGE, params.DISCRIMINATION_THRESHOLD, interval,
+             Nvalues, min_log_prob, params.excess_offset, params.smooth_sigma_scale)
+    vstep = vmap(_find_one_hit_step, in_axes=(0, 0, 0, None, None, None, None, None, None, None, None))
+    q_sum_all = (wfs * params.t_sampling).cumsum(axis=-1)
+    sh = jnp.clip(jnp.arange(Nticks - 1) + interval + 1, 0, Nticks - 1)
+    esp_all = q_sum_all[:, sh] + params.DISCRIMINATION_THRESHOLD - 0.5 * (q_sum_all[:, 1:] + q_sum_all[:, :-1])
+    chunk_of_row = jnp.arange(P) // chunk_size
+    f32 = jnp.float32
+
+    def _flags(chunk_act, p_new):
+        tot = jax.nn.logsumexp(p_new, axis=1)
+        return chunk_act & jnp.any((tot > log_stop).reshape(C, chunk_size), axis=1), tot > log_stop - _FEE_STOP_MARGIN
+
+    def step_fun(carry, _):
+        c_all, p_all, chunk_act, live = carry
+        act_rows = chunk_act[chunk_of_row]
+        gate = live & act_rows
+        n = jnp.sum(gate.astype(jnp.int32))
+        nb = (n + B - 1) // B
+        order = jnp.nonzero(gate, size=NB * B, fill_value=P)[0]
+
+        def block_fun(_, xs):
+            b, rows = xs
+
+            @checkpoint
+            def _act(rows_):
+                q_r = jnp.take(q_sum_all, rows_, axis=0, mode='clip')
+                c_r = jnp.take(c_all, rows_, axis=0, mode='clip')
+                p_r = jnp.take(p_all, rows_, axis=0, mode='clip')
+                (nc, npr), (pd, cd) = vstep(q_r, c_r, p_r, *pargs)
+                return nc, npr, pd, cd
+
+            def _skip(rows_):
+                return (jnp.zeros((B, Nvalues), f32), jnp.zeros((B, Nvalues), f32),
+                        jnp.zeros((B, Nticks - 1), f32), jnp.zeros((B, Nticks - 1), f32))
+            return None, lax.cond(b < nb, _act, _skip, rows)
+
+        _, (nc_s, np_s, pd_s, cd_s) = lax.scan(block_fun, None, (jnp.arange(NB), order.reshape(NB, B)))
+        c_new = c_all.at[order].set(nc_s.reshape(NB * B, Nvalues), mode='drop')
+        p_new = p_all.at[order].set(np_s.reshape(NB * B, Nvalues), mode='drop')
+        lp0 = jnp.where(act_rows[:, None], f32(_FEE_DEAD_LOGP if low else min_log_prob), f32(min_log_prob))
+        lp_out = jnp.broadcast_to(lp0, (P, Nticks - 1)).at[order].set(pd_s.reshape(NB * B, Nticks - 1), mode='drop')
+        cd0 = jnp.where(act_rows[:, None], esp_all, f32(0.0)) if low else jnp.zeros((P, Nticks - 1), f32)
+        cd_out = cd0.at[order].set(cd_s.reshape(NB * B, Nticks - 1), mode='drop')
+        return (c_new, p_new) + _flags(chunk_act, p_new), (lp_out, cd_out)
+
+    init_c = jnp.zeros((P, Nvalues), f32)
+    init_p = jnp.full((P, Nvalues), min_log_prob, dtype=f32).at[:, 0].set(0.0)
+    init_act = jnp.ones((C,), dtype=bool)
+    if _FEE_PEEL0 and params.MAX_ADC_VALUES > 1:
+        # step 0 (always active, all rows): per chunk, the 1-path peeled step (see LARND_FEE_PEEL0)
+        vstep0 = vmap(partial(_find_one_hit_step, n_paths=Nvalues), in_axes=(0, 0, 0) + (None,) * 8)
+
+        def chunk0(_, xs):
+            @checkpoint
+            def _s0(q, lp):
+                (nc, npr), (pd, cd) = vstep0(q, jnp.zeros((chunk_size, 1), f32), lp, *pargs)
+                return nc, npr, pd, cd
+            return None, _s0(*xs)
+        _, (nc0, np0, pd0, cd0) = lax.scan(chunk0, None, (q_sum_all.reshape(C, chunk_size, Nticks),
+                                                          init_p.reshape(C, chunk_size, Nvalues)))
+        np0 = np0.reshape(P, Nvalues)
+        carry1 = (nc0.reshape(P, Nvalues), np0) + _flags(init_act, np0)
+        _, (lp_rest, cd_rest) = lax.scan(step_fun, carry1, jnp.arange(1, params.MAX_ADC_VALUES))
+        lp_all = jnp.concatenate([pd0.reshape(1, P, Nticks - 1), lp_rest], axis=0)
+        cd_all = jnp.concatenate([cd0.reshape(1, P, Nticks - 1), cd_rest], axis=0)
+    else:
+        _, (lp_all, cd_all) = lax.scan(step_fun, (init_c, init_p, init_act, jnp.ones((P,), dtype=bool)),
+                                       jnp.arange(0, params.MAX_ADC_VALUES))
+    return jnp.moveaxis(lp_all, 0, 1), jnp.moveaxis(cd_all, 0, 1)
+
+
 def get_adc_values_average_noise_chunked(params, wfs, chunk_size=128):
     """
     Chunked version of get_adc_values_average_noise_vmap using jax.lax.scan.
@@ -807,6 +1021,9 @@ def get_adc_values_average_noise_chunked(params, wfs, chunk_size=128):
     wfs_padded = jnp.pad(wfs, ((0, pad_len - Npix), (0, 0)), mode='constant', constant_values=0.0)
     
     num_chunks = pad_len // chunk_size
+    if _FEE_PIXEL_STOP == '3':
+        log_prob_dist, charge_dist = _fee_global_pixel_stop(params, wfs_padded, chunk_size)
+        return log_prob_dist[:Npix], charge_dist[:Npix]
     wfs_chunks = wfs_padded.reshape(num_chunks, chunk_size, Nticks)
     
     _chunk_body = checkpoint(get_adc_values_average_noise_vmap) if _CHUNK_SCAN_REMAT \

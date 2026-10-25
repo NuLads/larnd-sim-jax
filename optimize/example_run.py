@@ -10,6 +10,13 @@ import traceback
 import json
 import cProfile
 
+# LARND_FEE_CMDBUF=1 (fee2, 23 Oct; adopted 24 Oct: default ON, =0 restores): see main(); set here too because XLA reads XLA_FLAGS once, at the
+# first backend use, and import-time code already compiles before main() runs.
+_FEE_CMDBUF_FLAGS = ' --xla_gpu_enable_command_buffer=+CONDITIONAL --xla_gpu_graph_min_graph_size=2'
+if os.environ.get('LARND_FEE_CMDBUF', '1') == '1':
+    os.environ['XLA_FLAGS'] = (os.environ.get('XLA_FLAGS', '') + _FEE_CMDBUF_FLAGS).strip()
+    print(f"[LARND_FEE_CMDBUF] XLA_FLAGS={os.environ['XLA_FLAGS']}", file=sys.stderr, flush=True)
+
 # Persistent (on-disk) JAX compilation cache — decided HERE, before jax is imported: JAX takes the
 # use-the-cache decision at the first compilation and import-time code compiles before main(), so
 # changing jax_enable_compilation_cache later is ignored (measured 2026-09-25).
@@ -146,6 +153,14 @@ def main(config):
         os.environ['XLA_FLAGS'] = '--xla_gpu_deterministic_ops=false'
     else:
         os.environ['XLA_FLAGS'] = '--xla_gpu_deterministic_ops=true'
+    # LARND_FEE_CMDBUF=1 (fee2, 23 Oct; adopted 24 Oct: default ON, =0 restores): let XLA put each lax.cond of the FEE beam search into a CUDA-graph
+    # conditional node (command buffer), so the conditionals no longer copy their predicate to the host and block the
+    # host thread until the GPU drains (160 blocking syncs per value_and_grad on batch 0): the host can then queue the
+    # following work while the FEE runs. Same kernels, same order on the stream (launch mechanism only).
+    # min_graph_size 2 because the [predicate convert, conditional] pair in the scan body is the whole capturable sequence
+    # (the in-place dynamic-update-slice fusions of the scan are not commands in this XLA).
+    if os.environ.get('LARND_FEE_CMDBUF', '1') == '1':
+        os.environ['XLA_FLAGS'] += _FEE_CMDBUF_FLAGS
 
     # Persistent (on-disk) compilation cache: a per-job directory on /sdf/scratch by default. The
     # where/whether decision is taken at module import, before jax is imported — see the top of this
