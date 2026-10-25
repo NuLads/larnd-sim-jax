@@ -213,7 +213,7 @@ def _response_cumsum(response_template):
     return jnp.cumsum(response_template, axis=-1)
 
 
-_RESP_CUM_CACHE_ON = os.environ.get('LARND_RESP_CUM_CACHE', os.environ.get('LARND_SIG_REMAT', '0')) == '1'
+_RESP_CUM_CACHE_ON = os.environ.get('LARND_RESP_CUM_CACHE', os.environ.get('LARND_SIG_REMAT', '1')) == '1'
 
 
 def get_response_cum(response_template):
@@ -232,7 +232,8 @@ def get_response_cum(response_template):
     return cum
 
 
-# gpu_sim opt flags (22 Oct; all default OFF => original code path):
+# gpu_sim opt flags (22 Oct; adopted 24 Oct: default ON, =0 restores the original code path; full-length fit KN10R1
+# with all three + LARND_PPP_JIT consistent with the same-data replicas, review_2026_09/REVIEW.md):
 #  LARND_SIG_REMAT=1  : jax.checkpoint around simulate_signals: the eager vjp keeps only its (small) inputs as residuals
 #                       and recomputes indices / LUT values inside the backward kernels instead of storing ~17 GB of
 #                       (rows x 150) residuals (index arrays, gathered template values) between forward and backward.
@@ -244,8 +245,8 @@ def get_response_cum(response_template):
 #                       search) in steps where all real pixels are below the 1e-9 stop threshold; now those steps take
 #                       the inactive branch (floor values), so the loss moves by ~2 float32 ulp (batch 0: 2.4e-7 rel),
 #                       gradients bitwise on batch 0.
-_SIG_REMAT = os.environ.get('LARND_SIG_REMAT', '0') == '1'
-_SIG_DROP_GARBAGE = os.environ.get('LARND_SIG_DROP_GARBAGE', '0') == '1'
+_SIG_REMAT = os.environ.get('LARND_SIG_REMAT', '1') == '1'
+_SIG_DROP_GARBAGE = os.environ.get('LARND_SIG_DROP_GARBAGE', '1') == '1'
 
 
 #  LARND_SIG_COMPACT=1 (implies the drop of D for neighbours): only the neighbour entries whose pixel is simulated
@@ -255,7 +256,7 @@ _SIG_DROP_GARBAGE = os.environ.get('LARND_SIG_DROP_GARBAGE', '0') == '1'
 #                       back to a 12.5 % ladder. The count is obtained in the same device->host sync as the unique-pixel
 #                       count (no extra sync). Real-pixel rows get the same additions in the same order; row 0
 #                       (padding) changes as with LARND_SIG_DROP_GARBAGE.
-_SIG_COMPACT = os.environ.get('LARND_SIG_COMPACT', '0') == '1'
+_SIG_COMPACT = os.environ.get('LARND_SIG_COMPACT', '1') == '1'
 _SIG_COMPACT_PER_PIX = int(os.environ.get('LARND_SIG_COMPACT_PER_PIX', '512'))
 
 

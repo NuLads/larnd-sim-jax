@@ -63,10 +63,11 @@ _LOSS_FAST = os.environ.get('LARND_LOSS_FAST', '1') == '1'
 # contract it into FMAs; measured bitwise on CPU and on the A100 (batch 0; opt/reports/loss.md L6). Gain ~4 ms/iteration.
 _LOSS_LSE_JIT = os.environ.get('LARND_LOSS_LSE_JIT', '0') == '1'
 _lse_jit = jax.jit(jax.nn.logsumexp, static_argnames=('axis',))
-# LARND_PPP_JIT=1 (default OFF): the whole production PPP loss (_compute_fast) as one jitted program. Bitwise vs the
-# eager code on CPU (value, aux, gradients; opt/reports/loss.md L7); on the A100 round-off level (loss bitwise, aux
-# expected_total_hits 8e-8 relative, d/d hit_prob differs only in denormals) -> off by default. Gain ~17 ms/iteration.
-_PPP_JIT = os.environ.get('LARND_PPP_JIT', '0') == '1'
+# LARND_PPP_JIT=1 (adopted 24 Oct: default ON, =0 restores the eager loss): the whole production PPP loss (_compute_fast)
+# as one jitted program. Bitwise vs the eager code on CPU (value, aux, gradients; opt/reports/loss.md L7); on the A100
+# round-off level (loss bitwise, aux expected_total_hits 8e-8 relative, d/d hit_prob differs only in denormals).
+# Gain ~17 ms/iteration. Validated at full length with the gpu_sim flags (KN10R1, review_2026_09/REVIEW.md).
+_PPP_JIT = os.environ.get('LARND_PPP_JIT', '1') == '1'
 _PPP_GATHER_DNUMS = jax.lax.GatherDimensionNumbers(offset_dims=(), collapsed_slice_dims=(0, 1, 2),
                                                    start_index_map=(0, 1, 2))
 
@@ -709,7 +710,7 @@ class ProbabilisticLossStrategy(LossStrategy):
         return cst
 
     def _compute_fast_jit(self, params, prediction, target):
-        """LARND_PPP_JIT=1 (default OFF): _compute_fast as ONE jitted program (98 eager executions -> 5). The two
+        """LARND_PPP_JIT=1 (default ON since 24 Oct): _compute_fast as ONE jitted program (98 eager executions -> 5). The two
         cached constants enter as runtime ARGUMENTS (not folded by XLA on the host). Bitwise on CPU vs eager, round-off
         on the GPU (opt/reports/loss.md, L7)."""
         fn = self.__dict__.get('_jit_fast')
