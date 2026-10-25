@@ -5,6 +5,7 @@ from larndsim.losses_jax import adc2charge, weighted_wasserstein_1d
 from larndsim.detsim_jax import id2pixel, get_pixel_coordinates, get_hit_z
 from larndsim.fee_jax import get_average_hit_values, digitize
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
@@ -96,8 +97,29 @@ class LUTProbabilisticSimulation(SimulationStrategy):
         padded_large_nb = getattr(self, 'padded_large_nb', None)
         cached_Npix = getattr(self, '_cached_Npix', None)
 
-        if padded_small_nb is None or padded_large_nb is None or cached_Npix != wfs.shape[0]:
+        # LARND_ROI_LAZY=1 (default off): the int() below blocks the host until simulate_wfs has run on the
+        # GPU (~14% of a 10 cm iteration, 22 Oct py-spy), yet after epoch 1 it almost never raises the running
+        # max. When the largest exact counts seen for this (batch, Npix) leave >= 10% headroom
+        # under the padding, keep the padding (what the exact path picks unless the counts jumped) and check the
+        # counts on device at the next call instead; a count above the padding used is logged as an overflow
+        # (argwhere drops ROIs in that call) and raises the padding.
+        lazy = os.environ.get('LARND_ROI_LAZY', '0') == '1'
+        if lazy:
+            self._roi_check_pending()
+            padded_small_nb, padded_large_nb = self.padded_small_nb, self.padded_large_nb
+        lvl_key = (getattr(self, '_roi_batch', None), int(wfs.shape[0]))   # set by compute_loss: lazy only on revisits
+        lvl = getattr(self, '_roi_level_max', {}).get(lvl_key) if lvl_key[0] is not None else None
+        if (lazy and padded_small_nb is not None and padded_large_nb is not None and lvl is not None
+                and lvl[0] <= 0.9 * padded_small_nb and lvl[1] <= 0.9 * padded_large_nb):
+            cnt = tuple(get_roi_counts(params, wfs))
+            if any(isinstance(c, jax.core.Tracer) for c in cnt):      # never keep a tracer past this trace
+                cnt = tuple(int(c) for c in cnt)
+            self._roi_pending = (lvl_key, padded_small_nb, padded_large_nb) + cnt
+            self._cached_Npix = wfs.shape[0]
+        elif padded_small_nb is None or padded_large_nb is None or cached_Npix != wfs.shape[0]:
             nb_small, nb_large = get_roi_counts(params, wfs)
+            if lazy:
+                self._roi_note(lvl_key, int(nb_small), int(nb_large))
             new_small = int(((int(nb_small) + 127) // 128) * 128)
             new_large = int(((int(nb_large) + 127) // 128) * 128)
             # Never decrease below the running max so all batches converge to the
@@ -129,6 +151,29 @@ class LUTProbabilisticSimulation(SimulationStrategy):
             'hit_pixels': unique_pixels,
             'wfs': wfs
         }
+
+    def _roi_note(self, key, nb_small, nb_large):
+        """LARND_ROI_LAZY bookkeeping: largest exact ROI counts seen per (batch, Npix)."""
+        lv = self.__dict__.setdefault('_roi_level_max', {}); old = lv.get(key, (0, 0))
+        lv[key] = (max(old[0], nb_small), max(old[1], nb_large))
+
+    def _roi_check_pending(self):
+        """Resolve the previous lazy call's device counts (finished by now: its gradients were consumed)."""
+        pend = self.__dict__.pop('_roi_pending', None)
+        if pend is None:
+            return
+        key, used_small, used_large, nb_small, nb_large = pend
+        nb_small, nb_large = int(nb_small), int(nb_large)
+        self._roi_note(key, nb_small, nb_large)
+        self._roi_lazy_calls = getattr(self, '_roi_lazy_calls', 0) + 1
+        if nb_small > used_small or nb_large > used_large:
+            self._roi_overflows = getattr(self, '_roi_overflows', 0) + 1
+            logger.warning(f"[ROI-LAZY] overflow at (batch, Npix) {key}: counts ({nb_small}, {nb_large}) > padding used "
+                           f"({used_small}, {used_large}); {self._roi_overflows} overflows in {self._roi_lazy_calls} lazy calls")
+            self.padded_small_nb = max(self.padded_small_nb, ((nb_small + 127) // 128) * 128)
+            self.padded_large_nb = max(self.padded_large_nb, ((nb_large + 127) // 128) * 128)
+        elif self._roi_lazy_calls % 1000 == 0:
+            logger.warning(f"[ROI-LAZY] {self._roi_lazy_calls} lazy calls, {getattr(self, '_roi_overflows', 0)} overflows")
 
 
 class LUTProbabilisticSamplingSimulation(SimulationStrategy):

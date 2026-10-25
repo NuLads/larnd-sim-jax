@@ -45,6 +45,38 @@ elif _JAX_CACHE_MODE not in ('0', 'off', 'shared'):
     except OSError:
         _JAX_CACHE_DIR = ''
 _JAX_CACHE_ON = bool(_JAX_CACHE_DIR)
+
+# In-memory JAX cache capacity — LARND_JAX_LRU=N (default unset => JAX's own 2048, identical behaviour).
+# The eager loss path re-traces every iteration; JAX's weakref_lru_cache caches (default maxsize 2048 each, fixed when
+# jax._src.util is imported) are smaller than the working set of a 100-batch fit (~25-30 k entries per cache), so they
+# thrash and every evicted entry is re-lowered. 32768 fits it: 0.50x step time (5.22 -> 2.60 s, 2026-10-20 bench
+# BENCHR3A, review_2026_09/REVIEW.md); 8192 is WORSE than the default (thrashes, and misses cost more with more entries
+# retained). Costs host RSS (~32 GB at 600 iterations). Applied by an import hook that rewrites the maxsize default in
+# jax._src.util's source as it is imported (site-packages untouched), so it must run before jax is imported.
+_JAX_LRU = int(os.environ.get('LARND_JAX_LRU', '0') or 0)
+if _JAX_LRU:
+    import importlib.abc, importlib.machinery
+    if 'jax' in sys.modules:
+        raise RuntimeError('LARND_JAX_LRU: jax was imported before optimize.example_run; the cache size cannot be set')
+    _LRU_OLD = 'def weakref_lru_cache(call: Callable, maxsize=2048,'
+
+    class _LRULoader(importlib.abc.Loader):
+        def __init__(self, origin): self.origin = origin
+        def create_module(self, spec): return None
+        def exec_module(self, module):
+            src = open(self.origin).read()
+            if src.count(_LRU_OLD) != 1:
+                raise RuntimeError('LARND_JAX_LRU: jax._src.util changed, the patch does not apply')
+            exec(compile(src.replace(_LRU_OLD, f'def weakref_lru_cache(call: Callable, maxsize={_JAX_LRU},'), self.origin, 'exec'), module.__dict__)
+            print(f'[LARND_JAX_LRU] jax weakref_lru_cache default maxsize 2048 -> {_JAX_LRU}', file=sys.stderr, flush=True)
+
+    class _LRUFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, name, path, target=None):
+            if name != 'jax._src.util': return None
+            spec = importlib.machinery.PathFinder.find_spec(name, path)
+            if spec is not None: spec.loader = _LRULoader(spec.origin)
+            return spec
+    sys.meta_path.insert(0, _LRUFinder())
 if _JAX_CACHE_ON:
     os.environ['JAX_COMPILATION_CACHE_DIR'] = _JAX_CACHE_DIR
 else:

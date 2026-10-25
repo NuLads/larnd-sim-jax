@@ -378,6 +378,25 @@ _DRIFT_FROM_HITS = os.environ.get('LARND_DRIFT_FROM_HITS', '0') == '1'
 # Offline (sample 8, K=3): c=0.9 freezes 33% of drift-frame tracks with straight-line error mean 148 um (p95 440).
 _FREEZE_STRAIGHT_CL = float(os.environ.get('LARND_FREEZE_STRAIGHT_CL', '0') or 0)
 
+# LARND_ENDPOINT_SMEAR_MM=s (default 0 = off): realism test for the track endpoints. Every fit anchors each track's
+# two ends at entry_pt / exit_pt (the spline modes vanish there), and those come from the TRUE trajectory. This adds
+# an independent Gaussian error of s mm per coordinate to each end, as a reconstruction would make. Seeded per track
+# (track id + LARND_ENDPOINT_SMEAR_SEED), so it is reproducible and identical across resumes and runs.
+_ENDPOINT_SMEAR_MM = float(os.environ.get('LARND_ENDPOINT_SMEAR_MM', '0') or 0)
+
+# LARND_FIT_ENDPOINTS=1 (default off; ENDFIT): FIT the two track endpoints instead of anchoring them where they are
+# given (the true points, or smeared ones with LARND_ENDPOINT_SMEAR_MM, which then act as the initial estimate).
+# Each transverse half of a track's spline coefficients gets two more columns, (1 - alpha) and alpha, after its sine
+# modes: their coefficients are the transverse displacements (cm) of the start and end points along e1 / e2 (the
+# along-track position of the ends is not fitted). The MCS prior is blind to them (zero second difference), so they
+# get their own Gaussian prior of width LARND_ENDPOINT_PRIOR_MM (default 1 mm) per coefficient, a proper prior summed
+# over tracks. Drift anchor: LARND_CHAIN_FREEZE_DRIFT holds the whole e2 half of straight-pinned tracks, so their
+# drift endpoints stay at the estimate. Coefficient layout per track: [e1 sine (K), e1 start, e1 end, e2 sine (K),
+# e2 start, e2 end]; _spline_K returns the per-direction count K + 2 and _spline_nsine the sine count K.
+_FIT_ENDPOINTS = os.environ.get('LARND_FIT_ENDPOINTS', '0') == '1'
+_N_EP = 2 if _FIT_ENDPOINTS else 0
+_ENDPOINT_PRIOR_CM = 0.1 * float(os.environ.get('LARND_ENDPOINT_PRIOR_MM', '1.0') or 1.0)
+
 
 def _transverse_frame(u0, frame=None):
     """Two orthonormal vectors spanning the plane perpendicular to unit vector u0.
@@ -424,7 +443,23 @@ _SPLINE_KMIN = int(os.environ.get('LARND_SPLINE_KMIN', '3'))
 
 
 def _spline_K(total_len, knot_cm):
-    return int(np.clip(round(total_len / knot_cm), _SPLINE_KMIN, 12))
+    """Coefficients per transverse direction: the sine modes, plus the two endpoint columns with LARND_FIT_ENDPOINTS."""
+    return int(np.clip(round(total_len / knot_cm), _SPLINE_KMIN, 12)) + _N_EP
+
+
+def _spline_nsine(K):
+    """Number of sine modes in a per-direction block of K coefficients."""
+    return int(K) - _N_EP
+
+
+def _spline_basis(alpha, K):
+    """Design matrix (len(alpha), K) of one transverse direction: sin(m pi alpha), m = 1.._spline_nsine(K), then
+    (1 - alpha) and alpha with LARND_FIT_ENDPOINTS."""
+    alpha = np.asarray(alpha, dtype=np.float64)
+    B = np.sin(np.outer(alpha, np.pi * np.arange(1, _spline_nsine(K) + 1)))
+    if _N_EP:
+        B = np.hstack([B, (1.0 - alpha)[:, None], alpha[:, None]])
+    return B
 
 
 def _build_chain_meta_spline(ctxs, knot_cm):
@@ -448,7 +483,7 @@ def _build_chain_meta_spline(ctxs, knot_cm):
         ks = np.arange(nc + 1)
         alpha = ks / nc
         nominal_p[ti, :nc + 1] = c.x0_fixed[None, :] + (ks[:, None] * c.step_len) * u0[None, :]
-        B_p[ti, :nc + 1, :K] = np.sin(np.outer(alpha, np.pi * np.arange(1, K + 1))).astype(np.float32)
+        B_p[ti, :nc + 1, :K] = _spline_basis(alpha, K).astype(np.float32)
         idxs = np.asarray(c.idxs)
         seg_rows.append(idxs); seg_track.append(np.full(idxs.shape[0], ti, np.int32))
         seg_am.append(np.asarray(c.alpha_mid)); seg_as.append(np.asarray(c.alpha_start)); seg_ae.append(np.asarray(c.alpha_end))
@@ -562,6 +597,19 @@ def _chain_warp_spline(t, coeffs_pt, meta, col_map):
 #                      passes. Numerically identical to the unwrapped call.
 _GN_PROFILE = os.environ.get('LARND_GN_PROFILE', '0') == '1'
 _GN_REMAT = os.environ.get('LARND_GN_REMAT', '0') == '1'
+# LARND_POSRES_VEC=1 (speed, 20 Oct; default OFF): the truth position residual (_compute_pos_residual_batch, a diagnostic
+# computed every visit) as one numpy expression per track instead of a Python loop over its points (~21% of a 10 cm fit's
+# host time). The first 3 calls also run the loop and log the largest difference.
+_POSRES_VEC = os.environ.get('LARND_POSRES_VEC', '0') == '1'
+_posres_vec_checks = [0]
+
+
+def _pos_residual_dists_vec(pos_nodes, alpha_mid, true_pts, nc):
+    a = np.asarray(alpha_mid) * nc
+    k = np.clip(np.floor(a).astype(np.int64), 0, nc - 1)
+    frac = (a - k.astype(a.dtype)).astype(np.float64)          # as float(alpha * nc - k) with k a Python int
+    fitted = pos_nodes[k] + frac[:, None] * (pos_nodes[k + 1] - pos_nodes[k])
+    return np.linalg.norm(fitted - np.asarray(true_pts)[:len(k)], axis=1).tolist()
 
 
 def _gn_mem_peak():
@@ -640,6 +688,18 @@ def _chain_drift_penalty(disp, meta, weight):
     j = jnp.arange(max_nc + 1)
     mask = (j[None, :] <= ncs[:, None]).astype(disp.dtype)
     return weight * jnp.sum(mask * dz ** 2) / max(1, T)
+
+
+def _chain_endpoint_prior(coeffs_pt, meta):
+    """LARND_FIT_ENDPOINTS: Gaussian prior, width _ENDPOINT_PRIOR_CM, on the four endpoint coefficients of every
+    track (start / end displacement along e1 and e2); summed over tracks (a proper prior, not a per-track average)."""
+    if not _N_EP:
+        return jnp.float32(0.)
+    tot = jnp.float32(0.)
+    for ti in range(int(meta['T'])):
+        K = int(meta['Ks_np'][ti]); ns = K - _N_EP; c = coeffs_pt[ti]
+        tot = tot + jnp.sum(c[ns:K] ** 2) + jnp.sum(c[K + ns:2 * K] ** 2)
+    return tot / (2.0 * _ENDPOINT_PRIOR_CM ** 2)
 
 
 class _ChainTrackCtx:
@@ -1561,6 +1621,11 @@ class ParamFitter:
 
             entry_pt = starts[0].astype(np.float32)
             exit_pt  = ends[-1].astype(np.float32)
+            if _ENDPOINT_SMEAR_MM > 0:                      # LARND_ENDPOINT_SMEAR_MM: reconstruction-like endpoint error
+                import zlib
+                _rng = np.random.default_rng(zlib.crc32(f"{(ev, tr)}|{os.environ.get('LARND_ENDPOINT_SMEAR_SEED', '0')}".encode()))
+                entry_pt = (entry_pt + _rng.normal(0.0, 0.1 * _ENDPOINT_SMEAR_MM, 3)).astype(np.float32)
+                exit_pt = (exit_pt + _rng.normal(0.0, 0.1 * _ENDPOINT_SMEAR_MM, 3)).astype(np.float32)
             d = exit_pt - entry_pt
             total_len = float(np.linalg.norm(d))
             if total_len < 1e-4:
@@ -1594,7 +1659,8 @@ class ParamFitter:
                 alpha_start=_alpha_proj(starts),
                 alpha_end=_alpha_proj(ends),
             ))
-        logger.info(f"Batch {batch_idx}: built chain contexts for {len(ctxs)} tracks")
+        logger.info(f"Batch {batch_idx}: built chain contexts for {len(ctxs)} tracks"
+                    + (f" (endpoints smeared by {_ENDPOINT_SMEAR_MM} mm per coordinate)" if _ENDPOINT_SMEAR_MM > 0 else ""))
         return ctxs
 
     def profile_local_geometry(self, batch_idx, tracks, target, global_params):
@@ -1848,6 +1914,15 @@ class ParamFitter:
             )
 
         self.opt_state = opt_state
+        # LARND_CALIB_ADAM_RESET=1 (default off): re-initialise the Adam moments (mu, nu, bias-correction count) of the
+        # calibration block on resume, keeping the learning-rate schedule count. Needed to change the gradient scale
+        # on resume, e.g. switching --max_clip_norm_val 100 -> 1e12: the restored nu holds CLIPPED squared gradients
+        # (~100x smaller than raw), so the first raw updates would be several times the learning rate.
+        if os.environ.get('LARND_CALIB_ADAM_RESET', '0') == '1':
+            _is_adam = lambda x: isinstance(x, optax.ScaleByAdamState)
+            _fresh = self.optimizer.init(extract_relevant_params(self.norm_params, self.relevant_params_list))
+            self.opt_state = jax.tree_util.tree_map(lambda r, f: f if _is_adam(r) else r, opt_state, _fresh, is_leaf=_is_adam)
+            logger.info("LARND_CALIB_ADAM_RESET: calibration Adam moments re-initialised (schedule count kept)")
         self.resumed = True
 
         dedx_cache = loaded.get('dedx_cache')
@@ -1961,6 +2036,7 @@ class ParamFitter:
             ``grads_dedx`` is ``None`` unless ``log_dedx`` was supplied.
             ``grads_chain_per_track`` is ``None`` unless ``chain_angles_per_track`` was supplied.
         """
+        self.sim_strategy._roi_batch = i   # LARND_ROI_LAZY keys its per-batch ROI-count records on it (strategies.py)
         if self.probabilistic_sim and not self.probabilistic_sampling_sim:
             rngkey = None
         else:
@@ -2268,15 +2344,16 @@ class ParamFitter:
                         _mcs_loss = _chain_mcs_spline(_chain_warp_aux, _meta_use, self._mcs_prior_weight)
                         _drift_loss = _chain_drift_penalty(
                             _chain_warp_aux, _meta_use, self._chain_drift_weight)
-                        _mcs_loss = _mcs_loss + _drift_loss
+                        _ep_loss = _chain_endpoint_prior(chain_angles_pt, _meta_use)
+                        _mcs_loss = _mcs_loss + _drift_loss + _ep_loss
                     else:
-                        _drift_loss = jnp.float32(0.)
+                        _drift_loss = jnp.float32(0.); _ep_loss = jnp.float32(0.)
                         _mcs_loss = _chain_mcs_vectorized(
                             _chain_thetas, _chain_phis, _meta_use, self._mcs_prior_weight)
                     total_loss = total_loss + _mcs_loss
                 else:
                     _mcs_loss = jnp.float32(0.)
-                    _drift_loss = jnp.float32(0.)
+                    _drift_loss = jnp.float32(0.); _ep_loss = jnp.float32(0.)
 
                 aux_out = dict(hit_aux) if hit_aux is not None else {}
                 aux_out['dedx_prior'] = dedx_prior
@@ -2288,6 +2365,7 @@ class ParamFitter:
                 # Logged separately from mcs_prior (which now includes it) so the
                 # drift-projected geometry component is directly diagnosable.
                 aux_out['chain_drift_penalty'] = _drift_loss
+                aux_out['endpoint_prior'] = _ep_loss
                 # Saturation guard for the static-unique jit path: number of genuinely active pixels.
                 # If this reaches unique_size, jnp.unique(size=...) may be silently truncating.
                 aux_out['n_active_pixels'] = jnp.sum(prediction['unique_pixels'] >= 0)
@@ -2827,7 +2905,7 @@ class GradientDescentFitter(ParamFitter):
                 al, tr = al[:m], tr[:m]
                 nom = np.asarray(ctx.x0_fixed)[None, :] + al[:, None] * L * u0[None, :]
                 d = tr - nom
-                B = np.sin(np.outer(al, np.pi * np.arange(1, K + 1)))
+                B = _spline_basis(al, K)
                 b1 = np.linalg.lstsq(B, d @ e1, rcond=None)[0]
                 b2 = np.linalg.lstsq(B, d @ e2, rcond=None)[0]
                 params = np.concatenate([b1, b2]).astype(np.float32)
@@ -3682,7 +3760,7 @@ class GradientDescentFitter(ParamFitter):
                             tr = np.asarray(true_pts, float); m = min(len(al), len(tr)); al, tr = al[:m], tr[:m]
                             nom = np.asarray(ctx.x0_fixed)[None, :] + al[:, None] * L * u0[None, :]
                             d = tr - nom
-                            B = np.sin(np.outer(al, np.pi * np.arange(1, K + 1)))
+                            B = _spline_basis(al, K)
                             b1 = np.linalg.lstsq(B, d @ e1, rcond=None)[0]
                             b2 = np.linalg.lstsq(B, d @ e2, rcond=None)[0]
                             # LARND_INIT_FROM_TRUTH=drift: seed ONLY the drift-carrying e2 modes at
@@ -3870,7 +3948,9 @@ class GradientDescentFitter(ParamFitter):
           e2 (drift): from the timing-derived z; used only if the modes are significant against
                       "straight" (chi2 test, level LARND_HITS_SEED_E2_CL, default 0.999; 0 = always).
           e1 (pixel plane, only with LARND_HITS_SEED_E1=1): from the pixel positions; used only if the
-                      seeded shape RMS exceeds LARND_HITS_SEED_E1_AMP_UM (default 500 um).
+                      seeded shape RMS exceeds LARND_HITS_SEED_E1_AMP_UM (default 500 um) and, with
+                      LARND_HITS_SEED_E1_ALIAS_UM > 0, only if the pixel-grid ALIAS of the nominal line (the seed
+                      a straight track would get from pixel-centre quantisation alone) is below that RMS.
         Offline on sample 8 (K=3, 865 tracks): curved tracks (true deviation >500 um) start at 451 um
         (e2) / 241 um (e1) instead of 707 / 732 um for the straight line; near-straight tracks stay
         at ~80-120 um. Single hits scatter ~3 mm in z, per-pixel means ~1 mm (white), so this is a
@@ -3885,6 +3965,7 @@ class GradientDescentFitter(ParamFitter):
         cl2 = float(os.environ.get('LARND_HITS_SEED_E2_CL', '0.999'))
         do_e1 = os.environ.get('LARND_HITS_SEED_E1', '0') == '1'
         amp1 = float(os.environ.get('LARND_HITS_SEED_E1_AMP_UM', '500')) * 1e-4
+        alias1 = float(os.environ.get('LARND_HITS_SEED_E1_ALIAS_UM', '0')) * 1e-4   # 0 = off
         ok = np.isfinite(hx) & np.isfinite(hy) & np.isfinite(hz) & (hq > 0) & (hev >= 0)
         H = np.stack([hx, hy, hz], 1)
         ctxs = self._batch_chain_contexts.get(batch_idx, []); states = self._chain_cache[batch_idx]
@@ -3903,11 +3984,36 @@ class GradientDescentFitter(ParamFitter):
             Aw = A[keep] * sw[keep, None]
             return coef, sig ** 2 * np.linalg.pinv(Aw.T @ Aw)
 
+        def lattice(v):                                     # (pitch, origin) of the pixel-centre grid along one axis
+            u = np.unique(np.round(v, 5)); g = np.diff(u); g = g[g > 1e-3]
+            if len(g) == 0: return None
+            p = float(np.median(g[g < 1.5 * g.min()])); ph = np.exp(2j * np.pi * v / p)
+            return p, float(np.angle(ph.mean()) / (2 * np.pi) * p)
+        grid = (lattice(hx[ok]), lattice(hy[ok])) if do_e1 and alias1 > 0 and ok.any() else (None, None)
+
+        def e1_alias_rms(x0, u0, L, e1, Kf):
+            """Seed shape RMS a perfectly straight track on the nominal line gets from pixel-centre quantisation
+            alone (22 Oct, REVIEW.md: the harmful e1 seeds are shallow-angle tracks whose pixel-centre offsets form a
+            long-period sawtooth that the low sine modes read as a mm-scale bend)."""
+            (px, ox), (py, oy) = grid
+            s = np.arange(0.01, 0.99, 0.05 / max(L, 1e-3))   # 0.5 mm steps; each pixel weighted by its path length
+            X = x0[None, :] + s[:, None] * L * u0[None, :]
+            ix = np.round((X[:, 0] - ox) / px); iy = np.round((X[:, 1] - oy) / py)
+            _, inv = np.unique(ix * 100003 + iy, return_inverse=True); wn = np.bincount(inv).astype(float)
+            if len(wn) < 3 * Kf + 2: return 0.0
+            C = np.stack([np.bincount(inv, ox + ix * px), np.bincount(inv, oy + iy * py), np.bincount(inv, X[:, 2])], 1) / wn[:, None]
+            an = ((C - x0) @ u0) / L; dn = C - (x0[None, :] + an[:, None] * L * u0[None, :])
+            Bn = np.sin(np.outer(an, np.pi * np.arange(1, Kf + 1)))
+            ba = robust_fit(np.hstack([np.ones((len(an), 1)), an[:, None], Bn]), dn @ e1, np.sqrt(wn / wn.mean()), 3 * Kf + 2)[0][2:]
+            ag = np.linspace(0, 1, 101)
+            return float(np.sqrt(np.mean((np.sin(np.outer(ag, np.pi * np.arange(1, Kf + 1))) @ ba) ** 2)))
+        n_alias = 0
+
         for ti, (ctx, st) in enumerate(zip(ctxs, states)):
             u0 = _dir_from_angles(ctx.theta0_i, ctx.phi0_i); e1, e2 = _transverse_frame(u0)
             if not (abs(float(e1[2])) < 1e-6 and float(np.linalg.norm(np.cross(_DRIFT_AXIS, u0))) > 1e-3):
                 continue
-            ang = np.asarray(st['angles'], dtype=np.float64); K = len(ang) // 2
+            ang = np.asarray(st['angles'], dtype=np.float64); K = len(ang) // 2; Ks = _spline_nsine(K)   # half length / sine modes
             x0 = np.asarray(ctx.x0_fixed, dtype=np.float64); L = float(ctx.total_len)
             m = ok & (np.abs(hev - float(ctx.track_id[0])) < 0.5)
             P, w, pid = H[m], hq[m], hpid[m]
@@ -3917,7 +4023,7 @@ class GradientDescentFitter(ParamFitter):
             # so a pixel-plane-only gate pulls in other tracks' hits (seen offline: cm-level errors).
             sel = (a > 0.01) & (a < 0.99) & (np.linalg.norm(d - (d @ u0)[:, None] * u0[None, :], axis=1) < 1.0)
             P, w, pid = P[sel], w[sel], pid[sel]
-            Kf = K if Kfit <= 0 else min(K, Kfit)
+            Kf = Ks if Kfit <= 0 else min(Ks, Kfit)
             if len(np.unique(pid)) < 3 * Kf + 2:
                 n_skip += 1; continue
             up, inv = np.unique(pid, return_inverse=True)
@@ -3947,7 +4053,10 @@ class GradientDescentFitter(ParamFitter):
                 b1 = coef1[2:]
                 ag = np.linspace(0, 1, 101)
                 if np.sqrt(np.mean((np.sin(np.outer(ag, np.pi * np.arange(1, Kf + 1))) @ b1) ** 2)) > amp1 and sane(b1):
-                    new[:K] = 0.0; new[:Kf] = b1; n_e1 += 1
+                    if alias1 > 0 and None not in grid and e1_alias_rms(x0, u0, L, e1, Kf) >= alias1:
+                        n_alias += 1                        # the seed would mostly be pixel-grid aliasing
+                    else:
+                        new[:K] = 0.0; new[:Kf] = b1; n_e1 += 1
             if apply_seed:                                  # never overwrite geometry restored from a checkpoint
                 st['angles'] = jnp.asarray(new.astype(np.float32))
                 st['opt_state'] = self._chain_optimizer.init(st['angles'])
@@ -3955,10 +4064,10 @@ class GradientDescentFitter(ParamFitter):
             if tru is not None:
                 al = np.asarray(ctx.alpha_mid, float); tr = np.asarray(tru, float); mm = min(len(al), len(tr))
                 al, tr = al[:mm], tr[:mm]
-                Bt = np.sin(np.outer(al, np.pi * np.arange(1, K + 1)))
+                Bt = np.sin(np.outer(al, np.pi * np.arange(1, Ks + 1)))
                 dt = tr - (x0[None, :] + al[:, None] * L * u0[None, :])
-                ag = np.linspace(0, 1, 101); Bg = np.sin(np.outer(ag, np.pi * np.arange(1, K + 1)))
-                for comp, ee, sl in (('e1', e1, slice(0, K)), ('e2', e2, slice(K, 2 * K))):
+                ag = np.linspace(0, 1, 101); Bg = np.sin(np.outer(ag, np.pi * np.arange(1, Ks + 1)))
+                for comp, ee, sl in (('e1', e1, slice(0, Ks)), ('e2', e2, slice(K, K + Ks))):
                     bt = np.linalg.lstsq(Bt, dt @ ee, rcond=None)[0]
                     dv[comp].append(float(np.sqrt(np.mean((Bg @ (new[sl] - bt)) ** 2)) * 1e4))
                     dv[comp + '_0'].append(float(np.sqrt(np.mean((Bg @ (ang[sl] - bt)) ** 2)) * 1e4))
@@ -3969,7 +4078,7 @@ class GradientDescentFitter(ParamFitter):
         logger.info(f"[GEOM-HITS] batch {batch_idx}: {n_trk} drift-frame tracks (skipped {n_skip}); "
                     f"{'seeding' if apply_seed else 'classification only (restored geometry)'}; "
                     f"called straight (frozen) {len(straight) if _FREEZE_STRAIGHT_CL > 0 else 'off'}; e2 seeded on {n_e2}, "
-                    f"e1 seeded on {n_e1 if do_e1 else 'off'}; shape error vs truth median e2 {med(dv['e2']):.0f} um "
+                    f"e1 seeded on {n_e1 if do_e1 else 'off'}{f' (alias-vetoed {n_alias})' if alias1 > 0 else ''}; shape error vs truth median e2 {med(dv['e2']):.0f} um "
                     f"(before {med(dv['e2_0']):.0f}), e1 {med(dv['e1']):.0f} um (before {med(dv['e1_0']):.0f})")
 
     def _drift_freeze_masks(self, batch_idx, states):
@@ -4395,7 +4504,7 @@ class GradientDescentFitter(ParamFitter):
                 u0 = _dir_from_angles(ctx.theta0_i, ctx.phi0_i)
                 e1, e2 = _transverse_frame(u0)
                 ks = np.arange(nc + 1)
-                B = np.sin(np.outer(ks / nc, np.pi * np.arange(1, K + 1)))
+                B = _spline_basis(ks / nc, K)
                 d1 = B @ params[:K]; d2 = B @ params[K:2 * K]
                 nominal = ctx.x0_fixed[None, :] + (ks[:, None] * ctx.step_len) * u0[None, :]
                 pos_nodes = nominal + d1[:, None] * e1[None, :] + d2[:, None] * e2[None, :]
@@ -4404,12 +4513,23 @@ class GradientDescentFitter(ParamFitter):
                 pos_nodes, _ = _absolute_chain_forward(
                     jnp.array(ctx.x0_fixed), thetas, phis, ctx.step_len)
                 pos_nodes = np.asarray(pos_nodes)
+            if _POSRES_VEC and _posres_vec_checks[0] >= 3:
+                dists.extend(_pos_residual_dists_vec(pos_nodes, ctx.alpha_mid, true_pts, nc))
+                continue
+            n0 = len(dists)
             for j, alpha in enumerate(ctx.alpha_mid):
                 k = int(np.clip(int(np.floor(alpha * nc)), 0, nc - 1))
                 frac = float(alpha * nc - k)
                 fitted = pos_nodes[k] + frac * (pos_nodes[k + 1] - pos_nodes[k])
                 true   = true_pts[j]  # pre-interpolated at alpha_mid[j]
                 dists.append(float(np.linalg.norm(fitted - true)))
+            if _POSRES_VEC:
+                _dv = np.array(_pos_residual_dists_vec(pos_nodes, ctx.alpha_mid, true_pts, nc)); _dl = np.array(dists[n0:])
+                if _dv.shape != _dl.shape or np.max(np.abs(_dv - _dl), initial=0.) > 1e-9 * max(1., np.max(np.abs(_dl), initial=0.)):
+                    raise RuntimeError(f'LARND_POSRES_VEC: vectorised residual disagrees on batch {batch_idx}')
+        if _POSRES_VEC and _posres_vec_checks[0] < 3:
+            _posres_vec_checks[0] += 1
+            logger.info(f'[POSRES-VEC] batch {batch_idx}: vectorised = loop on all {len(dists)} points (check {_posres_vec_checks[0]}/3)')
         return float(np.mean(dists)) if dists else None
 
     def validate_static_unique(self, dataloader_sim, batch_idx=0, unique_size=768):
