@@ -59,3 +59,23 @@ At the reference field (`r = 1`) the forward simulation is **bit-identical** to 
   what makes the eField Jacobian *and* Hessian correct.
 - Derivative evaluations w.r.t. eField pay the template-resample cost (~×5 in the current form);
   other parameters are unaffected (r ≡ 1 in their tangents only through eField).
+
+## Port onto `dedx_soft_barrier` (Nov 2026)
+
+Branch `taylor/drift-coord-on-dedx` = `dedx_soft_barrier` @ `19d2bb3` + the three drift-coordinate commits.
+Interaction with the newer code:
+
+- **FEE physics.** `_find_one_hit_step_frac` carries the `fcfdeb5` FEE fixes (`min_log_prob` floors,
+  `jnp.where` in `log_diff_ndtr`, the unified Gaussian acceptance `log_ndtr((E - thr + excess_offset) /
+  (sigma_uncorr * smooth_sigma_scale))`), term for term the `LARND_FEE_FAST=0` expressions of
+  `_find_one_hit_step`. At `r = 1` the two steps give **bitwise identical** FEE outputs on identical
+  waveforms (`LARND_FEE_FAST=0` and `=1`).
+- **Response cumsum cache.** `LARND_RESP_CUM_CACHE` passes the cumsum of the *unstretched* template into
+  `simulate_signals`; drift-coordinate mode discards it and recomputes from the stretched template.
+- **FEE fast paths.** `LARND_FEE_PEEL0`, `LARND_FEE_PIXEL_STOP=2` and `=3` (`_fee_global_pixel_stop`, the
+  default production path through `get_adc_values_average_noise_chunked`) hard-code integer windows;
+  in drift-coordinate mode they are bypassed in favour of the generic scan (which keeps the
+  `PIXEL_STOP` per-pixel-stop emulation, same semantics).
+- At `r = 1` the waveforms differ from the default mode at float32 round-off (~3e-6 relative, from the
+  conservative cumsum-and-difference resample); expected tick / ADC / hit probability agree to
+  ~6e-5 tick / 2e-5 ADC / 1e-7.
