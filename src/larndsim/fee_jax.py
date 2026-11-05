@@ -550,21 +550,61 @@ def _keys_interp(arr, pos):
     return jnp.sum(arr[..., taps] * w, axis=-1)
 
 
+_BS3_K = 14                                                   # prefilter half-length: |sqrt(3)-2|^15 ~ 3e-9
+_BS3_H = (3.0 ** 0.5) * (3.0 ** 0.5 - 2.0) ** jnp.abs(jnp.arange(-_BS3_K, _BS3_K + 1)).astype(jnp.float32)
+
+
+def _bspline3_coeffs(arr):
+    """Cubic B-spline coefficients of arr (..., N) for C2 interpolation: c = arr * h with h[k] = sqrt(3)(sqrt(3)-2)^|k|
+    (the exact inverse of the [1, 4, 1]/6 sampling filter, truncated at |k| <= 14), edge-replicated boundaries.
+    Returns c on the extended index range -2 .. N+1 (shape (..., N+4))."""
+    N = arr.shape[-1]; P = _BS3_K + 2
+    pad = jnp.pad(arr, [(0, 0)] * (arr.ndim - 1) + [(P, P)], mode='edge')
+    c = jnp.zeros(arr.shape[:-1] + (N + 4,), arr.dtype)
+    for j, k in enumerate(range(-_BS3_K, _BS3_K + 1)):
+        c = c + _BS3_H[j].astype(arr.dtype) * pad[..., P + k - 2: P + k - 2 + N + 4]
+    return c
+
+
+def _bspline3_eval(c_ext, pos):
+    """Evaluate the cubic B-spline with coefficients c_ext (from _bspline3_coeffs) at fractional positions pos (M,).
+    C2 in pos everywhere (Keys is only C1, with second-derivative jumps at every integer); reproduces the samples at
+    integer positions to the prefilter truncation (~1e-7 relative in float32)."""
+    Ne = c_ext.shape[-1]
+    fl = jnp.floor(pos)
+    f = pos - fl
+    taps = jnp.clip(fl.astype(int)[:, None] + jnp.array([1, 2, 3, 4])[None, :], 0, Ne - 1)   # samples i-1 .. i+2
+    w = jnp.stack([(1.0 - f) ** 3 / 6.0,
+                   (3.0 * f ** 3 - 6.0 * f ** 2 + 4.0) / 6.0,
+                   (-3.0 * f ** 3 + 3.0 * f ** 2 + 3.0 * f + 1.0) / 6.0,
+                   f ** 3 / 6.0], axis=-1)
+    return jnp.sum(c_ext[..., taps] * w, axis=-1)
+
+
 def _drift_mode_fee_precompute(params, q_sum_all, interval):
     """Drift-coordinate mode: the electronics clocks are fixed in REAL time, so on the u-grid the ADC/dead-time
     window spans interval * r u-ticks (fractional), r = v(E)/v_ref. All fractional-position interpolations are
     hoisted out of the beam-search scan (see _find_one_hit_step_frac). At r = 1 every position is an integer and
-    the interpolations are exact gathers, i.e. the integer-window step's q_sum[shifted_ticks] etc."""
+    the interpolations reproduce the integer-window step's q_sum[shifted_ticks] etc. (exactly for Keys, to ~1e-7 for
+    the default C2 B-spline)."""
     from larndsim.consts_jax import get_vdrift as _gv
     Nticks = q_sum_all.shape[-1]
     r = _gv(params) / params.u_grid_vdrift
     interval_u = interval * r
     wpos = jnp.clip(jnp.arange(Nticks - 1).astype(jnp.float32) + interval_u + 1.0, 0.0, Nticks - 1.0)
     fhe = jnp.clip(wpos + interval_u + 1.0, 0.0, Nticks - 1.0)
-    qs_w_all = _keys_interp(q_sum_all, wpos)
-    qs_w1_all = _keys_interp(q_sum_all, jnp.clip(wpos + 1.0, 0.0, Nticks - 1.0))
+    wpos1 = jnp.clip(wpos + 1.0, 0.0, Nticks - 1.0)
     qmax_all = lax.cummax(q_sum_all, axis=1)
-    mf_fhe_all = _keys_interp(lax.cummax(q_sum_all, axis=1, reverse=True), fhe)
+    q_rmax = lax.cummax(q_sum_all, axis=1, reverse=True)
+    if params.drift_mode_c2:
+        # C2 window edges: every window-end knot sits at r = m/interval -- including r = 1, the usual expansion point --
+        # so with Keys (C1) the AD Hessian in eField is one-sided there.
+        cq = _bspline3_coeffs(q_sum_all)
+        qs_w_all, qs_w1_all = _bspline3_eval(cq, wpos), _bspline3_eval(cq, wpos1)
+        mf_fhe_all = _bspline3_eval(_bspline3_coeffs(q_rmax), fhe)
+    else:
+        qs_w_all, qs_w1_all = _keys_interp(q_sum_all, wpos), _keys_interp(q_sum_all, wpos1)
+        mf_fhe_all = _keys_interp(q_rmax, fhe)
     return qs_w_all, qs_w1_all, qmax_all, mf_fhe_all
 
 

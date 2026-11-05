@@ -405,11 +405,26 @@ class Params_template:
     tran_diff_bin_edges: jax.Array = struct.field(pytree_node=False, default=None) # Bin edges for transverse diffusion
     # --- drift-coordinate (u = z grid) mode: samples the waveforms on a grid fixed in drift
     # distance instead of time, so eField no longer sweeps the pulse against the sampling grid.
-    # Fixes the eField Hessian pathology of the differentiable surrogate (validated: |H/C_true|
-    # 7300x -> ~1 for charge, 33x -> ~1 for tick, with the nominal forward bit-identical).
+    # With the Nov-2026 defaults below the eField forward is smooth (<= 1e-3 % rms wiggle) and its AD Jacobian/Hessian
+    # are those of the forward (2nd-order Taylor error <= 0.33 % at +-10 % eField); see docs/drift_coordinate_mode.md.
     # Opt-in and default-off: enable via enable_drift_coordinate_mode(params).
     drift_coordinate_mode: bool = struct.field(pytree_node=False, default=False)
     u_grid_vdrift: float = struct.field(pytree_node=False, default=0.0)  # fixed u-grid unit [cm/us]
+    # Nov 2026 (taylor/efield-u0): the u-grid template is Ramo-exact as is (charge induced per unit drift distance is
+    # velocity-independent), so it is NOT stretched; ticks convert about the event time (tick_t = tick_u / r); the
+    # fractional FEE windows use a C2 interpolant (Keys is C1 with every knot at r = 1). legacy=True in
+    # enable_drift_coordinate_mode restores the f6d9231/14d7ecf behaviour (stretch, template-end anchor, Keys).
+    drift_mode_stretch: bool = struct.field(pytree_node=False, default=False)
+    drift_mode_c2: bool = struct.field(pytree_node=False, default=True)
+    drift_mode_event_time: bool = struct.field(pytree_node=False, default=True)
+    # t-grid: place deposits relative to the ANODE (t0 = L/v_ref - d_anode/v(E)) instead of the cathode, so eField does
+    # not shift the whole event in time (enable_anode_referenced_time). Default off (historical convention).
+    anode_referenced_time: bool = struct.field(pytree_node=False, default=False)
+    time_ref_vdrift: float = struct.field(pytree_node=False, default=0.0)  # v_ref of the anode-referenced time [cm/us]
+    # t-grid: Ramo-scaled induced-current template (compressed in time by 1/r, r = v(E)/time_ref_vdrift, about the
+    # collection sample response_full_drift_t/t_sampling). With anode_referenced_time this is the physical clocked-
+    # detector model (enable_physical_time_grid): the reference / stochastic-data generator for the drift mode.
+    ramo_template: bool = struct.field(pytree_node=False, default=False)
 
 def build_params_class(params_with_grad):
     """
@@ -490,27 +505,52 @@ def get_tick_time_scale(params):
 
 
 def u_ticks_to_time_ticks(params, ticks, template_nt):
-    """Convert drift-coordinate-mode FEE tick outputs to the t-grid tick convention.
+    """Convert drift-coordinate-mode FEE tick outputs to time ticks. Identity when the mode is off.
 
-    The waveform index convention is tick = (Nt - 1) - drift_ticks (template-end anchored, with
-    Nt the response-template length), so only the DRIFT part of the index scales with
-    r = v(E)/v_ref: tick_t = (Nt - 1) - ((Nt - 1) - tick_u) / r. With the real-time (fractional)
-    FEE windows, the in-pulse crossing lag and the window arithmetic map exactly under this
-    transformation, so the converted ticks match the default-mode ticks. Identity when the mode
-    is off.
+    Default (drift_mode_event_time): waveform index 0 is the event time (the cathode-referenced template starts with
+    the charge at the cathode and each deposit is shifted by its distance to the cathode), so a u-tick index is a
+    drift DISTANCE from the event origin in units of u_grid_vdrift * t_sampling, and the physical time is
+    tick_t = tick_u / r, r = v(E)/u_grid_vdrift: drift time d_anode/v(E) plus the in-pulse lag compressed by 1/r
+    (Ramo). Requires u_grid_vdrift = the template's drift velocity (enable_drift_coordinate_mode at the LUT field).
+    Legacy (drift_mode_event_time=False): tick_t = c0 - (c0 - tick_u)/r with c0 = Nt - 1, which reproduces the
+    cathode-referenced t-grid ticks (an eField-dependent global time offset ~ L/v(E), wrong sign w.r.t. the anode).
     """
     if params.drift_coordinate_mode:
         r = get_vdrift(params) / params.u_grid_vdrift
+        if params.drift_mode_event_time:
+            return ticks / r
         c0 = template_nt - 1.0
         return c0 - (c0 - ticks) / r
     return ticks
 
 
-def enable_drift_coordinate_mode(params):
+def enable_drift_coordinate_mode(params, legacy=False):
     """Return a copy of params with drift-coordinate mode enabled, with the u-grid unit
     frozen at the CURRENT drift velocity (so at the current eField the u-grid and t-grid
-    coincide exactly and the forward simulation is unchanged)."""
-    return params.replace(drift_coordinate_mode=True, u_grid_vdrift=float(get_vdrift(params)))
+    coincide and the nominal forward is unchanged, up to the C2 window interpolation's ~1e-7).
+
+    legacy=True: the pre-Nov-2026 mode (template stretched by r so the pulse is fixed in REAL time, template-end tick
+    anchor, Keys windows) -- kept for comparisons; its stretch re-introduces a pulse shift on the u-grid."""
+    p = params.replace(drift_coordinate_mode=True, u_grid_vdrift=float(get_vdrift(params)))
+    if legacy:
+        p = p.replace(drift_mode_stretch=True, drift_mode_c2=False, drift_mode_event_time=False)
+    return p
+
+
+def enable_physical_time_grid(params):
+    """t-grid with the physical eField dependence of the time structure: anode-referenced deposit times AND the
+    Ramo-scaled response template (pulse 1/r shorter in real time). Identical to the default at the current eField.
+    Its eField derivatives still see the (physical) sweep of the pulses across the clock -- differentiate the
+    drift-coordinate mode instead; use this as the forward reference and to generate stochastic data."""
+    return enable_anode_referenced_time(params).replace(ramo_template=True)
+
+
+def enable_anode_referenced_time(params):
+    """t-grid: reference each deposit's time to the anode, t0 = L/v_ref - d_anode/v(E) (v_ref frozen at the current
+    drift velocity), instead of t0 = d_cathode/v(E). Identical at the current eField; away from it the event time
+    origin no longer moves with E, hit times follow d_anode/v(E) (physical sign), and the pulses sweep the clock at the
+    physical rate 0.5 d_anode/(v t_s) per unit ln E instead of 0.5 d_cathode/(v t_s)."""
+    return params.replace(anode_referenced_time=True, time_ref_vdrift=float(get_vdrift(params)))
 
     #return params.eField
 

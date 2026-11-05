@@ -214,6 +214,27 @@ def simulate_drift(params, tracks, fields, rngkey):
 _RESPONSE_CUM_CACHE = {}
 
 
+def _resample_template_about(response_template, r, anchor):
+    """Conservative resample of the response template compressed in time by 1/r about sample `anchor` (new bin
+    edge e takes the old cumulative charge at anchor + (e - anchor) r; Keys-interpolated, exact at r = 1)."""
+    Nt = response_template.shape[-1]
+    C = jnp.concatenate([jnp.zeros(response_template.shape[:-1] + (1,), response_template.dtype),
+                         jnp.cumsum(response_template, axis=-1)], axis=-1)      # edges 0..Nt
+    e = jnp.arange(Nt + 1).astype(jnp.float32)
+    pos = jnp.clip(anchor + (e - anchor) * r, 0.0, float(Nt))
+    fl = jnp.floor(pos)
+    fr = pos - fl
+    taps = jnp.clip(fl.astype(int)[:, None] + jnp.array([-1, 0, 1, 2])[None, :], 0, Nt)
+    w = jnp.stack([-0.5 * fr ** 3 + fr ** 2 - 0.5 * fr,
+                   1.5 * fr ** 3 - 2.5 * fr ** 2 + 1.0,
+                   -1.5 * fr ** 3 + 2.0 * fr ** 2 + 0.5 * fr,
+                   0.5 * fr ** 3 - 0.5 * fr ** 2], axis=-1)
+    Ci = jnp.zeros(response_template.shape[:-1] + (Nt + 1,), response_template.dtype)
+    for k in range(4):
+        Ci = Ci + jnp.take(C, taps[:, k], axis=-1) * w[:, k]
+    return Ci[..., 1:] - Ci[..., :-1]
+
+
 def _stretch_response_template(response_template, r):
     """CONSERVATIVE (integral) resample of the response template onto the u-grid, stretch factor
     r = v(E)/v_ref, anchored at the template end (the arrival sample; exact identity at r = 1).
@@ -327,13 +348,23 @@ def _simulate_signals_impl(params, unique_pixels, pixels, t0_after_diff, respons
                              nelectrons, long_diff, currents_idx, nelectrons_neigh, 
                              pix_renumbering_neigh, t0_neigh, currents_idx_neigh, response_cum=None, elec_ids_neigh=None):
     
-    if params.drift_coordinate_mode:
-        # u = z grid: deposits are already indexed by drift distance (see get_vdrift_placement);
-        # the time-domain response template appears stretched by r = v(E)/v_ref on the u-grid.
+    if params.drift_coordinate_mode and params.drift_mode_stretch:
+        # LEGACY drift mode: stretch the template by r = v(E)/v_ref on the u-grid, i.e. keep the induced-current pulse
+        # fixed in REAL time (the t-grid's assumption). Not Ramo-consistent, and the end anchor (template end, ~40
+        # samples past the collection edge) moves the pulse on the u-grid. Default mode: no stretch -- on the u = z grid
+        # the template is already the Ramo-correct one (charge induced per unit drift distance is velocity-independent).
         response_template = _stretch_response_template(
             response_template, get_vdrift(params) / params.u_grid_vdrift)
         # The cached cumulative LUT (LARND_RESP_CUM_CACHE, see get_response_cum) is the cumsum of the UNSTRETCHED
         # template: it must not be used for the boundary corrections here. Recompute it from the stretched one.
+        response_cum = None
+    elif params.ramo_template and not params.drift_coordinate_mode:
+        # physical t-grid: the induced current of a charge drifting at v(E) is the LUT's (made at time_ref_vdrift)
+        # compressed in time by 1/r about the collection sample (charge per bin conserved). Pairs with the
+        # anode-referenced deposit times, which place that collection sample at d_anode / v(E).
+        response_template = _resample_template_about(
+            response_template, get_vdrift(params) / params.time_ref_vdrift,
+            params.response_full_drift_t / params.t_sampling)
         response_cum = None
     Npixels = unique_pixels.shape[0]
     Nticks = int(params.time_interval[1] / params.t_sampling) + 1
@@ -633,12 +664,23 @@ def simulate_drift_new(params, tracks, fields):
     # More efficient broadcasting
     nelectrons = (tran_diff_weights * n_electrons_base[:, None, None]).reshape(-1)
 
-    z_cathode = jnp.take(params.tpc_borders, main_electrons[:, pixel_plane_idx].astype(int), axis=0)[..., 2, 1]
-    t0 = (jnp.abs(main_electrons[:, z_idx] - z_cathode)) / get_vdrift_placement(params) #Getting t0 as the equivalent time to cathode (u-grid units in drift-coordinate mode)
+    tpc_z = jnp.take(params.tpc_borders, main_electrons[:, pixel_plane_idx].astype(int), axis=0)[..., 2, :]
+    z_anode, z_cathode = tpc_z[..., 0], tpc_z[..., 1]
+    if params.anode_referenced_time and not params.drift_coordinate_mode:
+        # t0 = time cut from the start of the cathode-referenced template. Anode-referenced: L/v_ref - d_anode/v(E), so
+        # the arrival is d_anode/v(E) after an E-independent event time (identical to the cathode form at v = v_ref).
+        t0 = (jnp.abs(z_anode - z_cathode) / params.time_ref_vdrift
+              - jnp.abs(main_electrons[:, z_idx] - z_anode) / get_vdrift_placement(params))
+    else:
+        # cathode-referenced (historical): t0 = d_cathode / v (u-grid units in drift-coordinate mode, where it is
+        # E-independent). In the t-grid this moves the whole event by ~ L/v(E) when eField changes.
+        t0 = (jnp.abs(main_electrons[:, z_idx] - z_cathode)) / get_vdrift_placement(params)
     t0_after_diff = jnp.broadcast_to(t0[:, None, None], shape_2d).reshape(-1) # More efficient than ones * t0
 
     #Need to convert long_diff into a tick number
-    long_diff = main_electrons[:, long_diff_idx] / get_vdrift(params) / params.t_sampling  # physical time-width (row selection); placement stays on the u-grid
+    # (spatial sigma_L [cm] -> template row in grid ticks: u-ticks on the u = z grid, time ticks for the legacy stretch)
+    _v_ld = get_vdrift(params) if (params.drift_mode_stretch or not params.drift_coordinate_mode) else get_vdrift_placement(params)
+    long_diff = main_electrons[:, long_diff_idx] / _v_ld / params.t_sampling
     long_diff = jnp.broadcast_to(long_diff[:, None, None], shape_2d).reshape(-1) # More efficient broadcasting
 
 
