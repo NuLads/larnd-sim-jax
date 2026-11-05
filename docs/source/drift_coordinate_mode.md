@@ -39,8 +39,12 @@ eField-independent coordinate. In this mode:
   `d_anode / v(E)` plus the in-pulse lag compressed by 1/r. (The template's index 0 is the event time: it starts with
   the charge at the cathode and each deposit is shifted by its distance to the cathode.)
 
-At the reference field (`r = 1`) the waveforms are bitwise those of the default mode and the FEE outputs agree to the
-B-spline's ~1e-7.
+At the reference field (`r = 1`) the mode reproduces the default one to float32 round-off (`check_efield_u0.py`,
+NERSC A100): waveforms max |Δ| 0.02 of 1.5e4 (~1e-6 relative, the frozen u-grid unit's rounding; the legacy mode
+shows the same 0.03), first-hit tick ≤ 6e-5, ADC ≤ 8e-6, hit probability ≤ 4e-7. On identical waveforms the C²
+windows reproduce the integer ones to 1.6e-5 in log-probability. The eField Jacobian agrees between the vmap and
+chunked FEE paths (40.7712 vs 40.7713), and the second derivative is continuous through `r = 1` (−123.00, −122.99,
+−122.99 at `d = −1e-5, 0, +1e-5`).
 
 ## Validation (Nov 2026, 6 cases, NERSC A100, current FEE)
 
