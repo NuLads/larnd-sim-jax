@@ -380,7 +380,10 @@ def _simulate_signals_impl(params, unique_pixels, pixels, t0_after_diff, respons
 
     # Extract continuous tick and fractional remainder for the gradient
     float_ticks_main = t0_after_diff / params.t_sampling
-    cathode_ticks_main = jnp.clip(jnp.floor(float_ticks_main).astype(int), 0, Nt - 1)
+    # Anode-referenced time: below the reference field a deposit near the cathode arrives after the template's full drift, so
+    # t0 < 0. It must still move with t0; only the lookups into the template below are clipped to the template.
+    min_tick = -Nt if params.anode_referenced_time else 0
+    cathode_ticks_main = jnp.clip(jnp.floor(float_ticks_main).astype(int), min_tick, Nt - 1)
     frac_main = float_ticks_main - cathode_ticks_main  # The gradient flows through here!
     
     # Quadratic Interpolation setup (remains the same)
@@ -428,7 +431,7 @@ def _simulate_signals_impl(params, unique_pixels, pixels, t0_after_diff, respons
     
     # Extract continuous tick and fractional remainder for neighbors
     float_ticks_neigh = neigh_t0 / params.t_sampling
-    cathode_ticks_neigh = jnp.clip(jnp.floor(float_ticks_neigh).astype(int), 0, Nt - 1)
+    cathode_ticks_neigh = jnp.clip(jnp.floor(float_ticks_neigh).astype(int), min_tick, Nt - 1)
     frac_neigh = float_ticks_neigh - cathode_ticks_neigh
     
     neigh_start_ticks_0 = Nt - sig_len - cathode_ticks_neigh
@@ -461,7 +464,7 @@ def _simulate_signals_impl(params, unique_pixels, pixels, t0_after_diff, respons
     
     # Main Corrections - Linearly interpolate the continuous boundary integral
     base_curr = (currents_idx[:, 0] * Ny + currents_idx[:, 1]) * Nt
-    val_cum_0 = response_cum.take(idx * Nx * Ny * Nt + base_curr + cathode_ticks_main)
+    val_cum_0 = response_cum.take(idx * Nx * Ny * Nt + base_curr + jnp.clip(cathode_ticks_main, 0, Nt - 1))
     # Use jnp.clip for safety on the +1 wrap boundary
     val_cum_1 = response_cum.take(idx * Nx * Ny * Nt + base_curr + jnp.clip(cathode_ticks_main + 1, 0, Nt - 1))
     interp_cum = val_cum_0 * (1.0 - frac_main) + val_cum_1 * frac_main
@@ -475,7 +478,7 @@ def _simulate_signals_impl(params, unique_pixels, pixels, t0_after_diff, respons
 
     # Neighbor Corrections
     base_curr_neigh = (currents_idx_neigh[:, 0] * Ny + currents_idx_neigh[:, 1]) * Nt
-    val_cum_neigh_0 = response_cum[0].take(base_curr_neigh + cathode_ticks_neigh)
+    val_cum_neigh_0 = response_cum[0].take(base_curr_neigh + jnp.clip(cathode_ticks_neigh, 0, Nt - 1))
     val_cum_neigh_1 = response_cum[0].take(base_curr_neigh + jnp.clip(cathode_ticks_neigh + 1, 0, Nt - 1))
     interp_cum_neigh = val_cum_neigh_0 * (1.0 - frac_neigh) + val_cum_neigh_1 * frac_neigh
     
@@ -679,7 +682,10 @@ def simulate_drift_new(params, tracks, fields):
 
     #Need to convert long_diff into a tick number
     # (spatial sigma_L [cm] -> template row in grid ticks: u-ticks on the u = z grid, time ticks for the legacy stretch)
-    _v_ld = get_vdrift(params) if (params.drift_mode_stretch or not params.drift_coordinate_mode) else get_vdrift_placement(params)
+    if params.ramo_template and not params.drift_coordinate_mode:
+        _v_ld = params.time_ref_vdrift      # the selected row is compressed by 1/r with the template, which gives sigma_L/v(E)
+    else:
+        _v_ld = get_vdrift(params) if (params.drift_mode_stretch or not params.drift_coordinate_mode) else get_vdrift_placement(params)
     long_diff = main_electrons[:, long_diff_idx] / _v_ld / params.t_sampling
     long_diff = jnp.broadcast_to(long_diff[:, None, None], shape_2d).reshape(-1) # More efficient broadcasting
 

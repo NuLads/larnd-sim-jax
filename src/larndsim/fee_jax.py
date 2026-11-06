@@ -586,14 +586,24 @@ def _drift_mode_fee_precompute(params, q_sum_all, interval):
     window spans interval * r u-ticks (fractional), r = v(E)/v_ref. All fractional-position interpolations are
     hoisted out of the beam-search scan (see _find_one_hit_step_frac). At r = 1 every position is an integer and
     the interpolations reproduce the integer-window step's q_sum[shifted_ticks] etc. (exactly for Keys, to ~1e-7 for
-    the default C2 B-spline)."""
+    the default C2 B-spline).
+
+    Each step is real time, so all of it scales with r, measured from the mean crossing position k + 1/2 of tick k (the
+    expected ADC value subtracts 0.5 * (q[k] + q[k+1])): ADC read after interval + 1/2 ticks, reset 1 tick later, earliest
+    next hit end after interval + 1 more. Scaling only the interval closes the ADC window (r - 1)/2 u-tick early and leaves
+    the reset step at 1 u-tick, i.e. 1/r real ticks: dead time 1 - 1/r too short (run_efield_gap.py: first-hit charge low by
+    0.09-0.11 points and all-hit charge high by 0.11-0.16 points at +10 % eField). Legacy mode keeps that behaviour."""
     from larndsim.consts_jax import get_vdrift as _gv
     Nticks = q_sum_all.shape[-1]
     r = _gv(params) / params.u_grid_vdrift
-    interval_u = interval * r
-    wpos = jnp.clip(jnp.arange(Nticks - 1).astype(jnp.float32) + interval_u + 1.0, 0.0, Nticks - 1.0)
-    fhe = jnp.clip(wpos + interval_u + 1.0, 0.0, Nticks - 1.0)
-    wpos1 = jnp.clip(wpos + 1.0, 0.0, Nticks - 1.0)
+    k = jnp.arange(Nticks - 1).astype(jnp.float32)
+    if params.drift_mode_stretch:
+        wpos = k + interval * r + 1.0
+        wpos1, fhe = wpos + 1.0, wpos + interval * r + 1.0
+    else:
+        wpos = k + 0.5 + r * (interval + 0.5)
+        wpos1, fhe = k + 0.5 + r * (interval + 1.5), k + 0.5 + r * (2 * interval + 1.5)
+    wpos, wpos1, fhe = (jnp.clip(x, 0.0, Nticks - 1.0) for x in (wpos, wpos1, fhe))
     qmax_all = lax.cummax(q_sum_all, axis=1)
     q_rmax = lax.cummax(q_sum_all, axis=1, reverse=True)
     if params.drift_mode_c2:

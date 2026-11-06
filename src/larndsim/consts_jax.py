@@ -417,6 +417,10 @@ class Params_template:
     drift_mode_stretch: bool = struct.field(pytree_node=False, default=False)
     drift_mode_c2: bool = struct.field(pytree_node=False, default=True)
     drift_mode_event_time: bool = struct.field(pytree_node=False, default=True)
+    # Constant part of the FEE tick index that is not drift time, so the tick conversion must not rescale it. MEASURED, not
+    # derived: -1.33 +/- 0.09 ticks from u0 vs physical t-grid at +-10 % eField on six cases (run_efield_gap.py). Part of it is
+    # the tick-index convention and part sits in the FEE tick distribution; a toy pulse gives -0.9. About 6 ns at +10 % eField.
+    drift_mode_tick_offset: float = struct.field(pytree_node=False, default=-1.33)
     # t-grid: place deposits relative to the ANODE (t0 = L/v_ref - d_anode/v(E)) instead of the cathode, so eField does
     # not shift the whole event in time (enable_anode_referenced_time). Default off (historical convention).
     anode_referenced_time: bool = struct.field(pytree_node=False, default=False)
@@ -510,15 +514,17 @@ def u_ticks_to_time_ticks(params, ticks, template_nt):
     Default (drift_mode_event_time): waveform index 0 is the event time (the cathode-referenced template starts with
     the charge at the cathode and each deposit is shifted by its distance to the cathode), so a u-tick index is a
     drift DISTANCE from the event origin in units of u_grid_vdrift * t_sampling, and the physical time is
-    tick_t = tick_u / r, r = v(E)/u_grid_vdrift: drift time d_anode/v(E) plus the in-pulse lag compressed by 1/r
-    (Ramo). Requires u_grid_vdrift = the template's drift velocity (enable_drift_coordinate_mode at the LUT field).
+    tick_t = c + (tick_u - c) / r, r = v(E)/u_grid_vdrift, c = drift_mode_tick_offset: drift time d_anode/v(E) plus the
+    in-pulse lag compressed by 1/r (Ramo), and a constant index offset c that does not rescale.
+    Requires u_grid_vdrift = the template's drift velocity (enable_drift_coordinate_mode at the LUT field).
     Legacy (drift_mode_event_time=False): tick_t = c0 - (c0 - tick_u)/r with c0 = Nt - 1, which reproduces the
     cathode-referenced t-grid ticks (an eField-dependent global time offset ~ L/v(E), wrong sign w.r.t. the anode).
     """
     if params.drift_coordinate_mode:
         r = get_vdrift(params) / params.u_grid_vdrift
         if params.drift_mode_event_time:
-            return ticks / r
+            c = params.drift_mode_tick_offset
+            return c + (ticks - c) / r
         c0 = template_nt - 1.0
         return c0 - (c0 - ticks) / r
     return ticks
