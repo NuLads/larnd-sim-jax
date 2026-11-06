@@ -70,8 +70,9 @@ time (largest for shallow, sharp pulses). Against stochastic hit data from that 
 timing has χ²/n = 1.25–1.37 at the true parameters.
 
 **Time scale.** With physical timing, eField acts on hit times as a pure scale (`dt/t = −0.50 dE/E` at 0.5 kV/cm): a fit
-that floats a time scale cannot separate the two, and the eField precision from timing equals twice the external
-time-scale anchor. The default t-grid's stronger constraint came from the cathode-referenced time axis.
+that floats a time scale cannot separate the two. Measured in the dress rehearsal, `σ(dE/E)² = (0.021 %)² + (2 σ_s)²` for
+an external time-scale anchor `σ_s` of 1e-3, 1e-4 and 1e-5. The default t-grid's tighter constraint came from the
+cathode-referenced time axis.
 
 ## Related t-grid options
 
