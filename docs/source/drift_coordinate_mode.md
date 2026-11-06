@@ -46,22 +46,32 @@ windows reproduce the integer ones to 1.6e-5 in log-probability. The eField Jaco
 chunked FEE paths (40.7712 vs 40.7713), and the second derivative is continuous through `r = 1` (−123.00, −122.99,
 −122.99 at `d = −1e-5, 0, +1e-5`).
 
-## Validation (Nov 2026, 6 cases, NERSC A100, current FEE)
+## Validation (Nov 2026, NERSC A100, current FEE, this branch)
 
-Prototype measurements (`larndsim-taylor`: `run_efield_fine_scan.py`, `run_efield_physref.py`,
-`run_efield_propagation.py`; see `EFIELD_TAYLOR_FIX.md` there). Observables: λ-weighted first-hit and all-hit charge,
-hit-probability sum, charge-weighted first-hit tick.
+`larndsim-taylor`: `run_efield_fine_scan.py` (6 cases), `run_efield_propagation.py` (7 cases, 500 draws); see
+`EFIELD_TAYLOR_FIX.md` there. Observables: λ-weighted first-hit and all-hit charge, hit-probability sum (N1),
+charge-weighted first-hit tick.
 
 | | default t-grid | drift mode (this) |
 |---|---:|---:|
-| forward wiggle rms over ±1 % eField (% of nominal) | up to 4e-2 | ≤ 1.2e-3 |
-| AD eField Jacobian / forward slope | −37 … +7 | 1.00 (19/24), 0.96–1.02 (4) |
-| 2nd-order Taylor error at ±10 % eField (% of nominal) | up to 1955 | ≤ 0.33 |
-| eField-only propagation, band / MC (σ_E = 1–3 %) | 0.8–155 | 0.96–1.04 |
+| forward wiggle rms over ±1 % eField (% of nominal) | up to 4e-2 | ≤ 1.3e-4 (4 cases), ≤ 1.1e-3 (2) |
+| AD eField Jacobian / forward slope (24 entries) | −37 … +7 | 1.00 (20), 0.95–1.03 (3), 0.57 (1) |
+| 2nd-order Taylor error at ±10 % eField (% of nominal) | up to 1955 | ≤ 0.34 |
+| eField-only propagation, band / own forward MC, charges (σ_E = 1–3 %) | 0.8–155 | 0.96–1.04 |
 
-It agrees with an independent **physical t-grid reference** (`enable_physical_time_grid`, 32-phase clock average):
-timing ≤ 5.5 %, all-hit charge ≤ 0.65 points, first-hit charge ≤ 1.8 points of the response at ±10 % eField. The
-residual is the u-grid sampling the FEE in drift distance rather than in real time (largest for shallow, sharp pulses).
+The 0.57 is N1 of one event, a response of ~1e-3 of nominal; the two cases with the larger wiggle have a period of
+0.67 / 1.0 % of eField, one u-tick of a 150 / 100 u-tick FEE window, which tilts the local derivative. Timing is 1.00
+everywhere.
+
+Against an independent **physical t-grid reference** (`enable_physical_time_grid`, single clock phase, `run_efield_propagation.py
+--truth tP`): band / MC at σ_E = 1–3 % is 0.95–0.98 (first-hit total charge), 1.03–1.20 (all-hit charge), 0.93–0.98
+(mean hit charge), residual ≤ 0.066 %. The offset is the u-grid sampling the FEE in drift distance rather than in real
+time (largest for shallow, sharp pulses). Against stochastic hit data from that reference (dress rehearsal), the drift-mode
+timing has χ²/n = 1.25–1.37 at the true parameters.
+
+**Time scale.** With physical timing, eField acts on hit times as a pure scale (`dt/t = −0.50 dE/E` at 0.5 kV/cm): a fit
+that floats a time scale cannot separate the two, and the eField precision from timing equals twice the external
+time-scale anchor. The default t-grid's stronger constraint came from the cathode-referenced time axis.
 
 ## Related t-grid options
 
