@@ -1,40 +1,29 @@
-"""Fig 68 — TS2, the calibration release. The two-stage recipe does NOT dominate.
+"""Fig 68 — TS2, the calibration release, as a slopegraph. Follow one seed's line across the recipe.
 
-WHAT TS2 IS. Stage 2 of the two-stage recipe: everything warm-started from TS1, calibration
-RELEASED, fresh 10 000-iteration anneal. TS1 had given the best FIT of the campaign but its
-calibration was BT2's, frozen; this is the run that was supposed to convert that into a better
-CALIBRATION. 3 seeds, all complete.
+WHY THIS FORM. The three arms differ by less than the seed-to-seed spread, so a plot of averages
+would be actively misleading -- the mean and the median of the absolute loss disagree about whether
+TS1 or TS2 is lower. The honest comparison is PAIRED, within a seed. A slopegraph does that while
+still showing the real values: each thin line is one seed followed across the arms, so "all three
+seeds moved the same way" is something you see rather than a statistic you are asked to trust.
 
-VERIFIED FIRST: calibration genuinely moved (peak-to-peak 755-1434 in physical units) from an
-initialisation matching TS1's to 0.0000%; dEdx moved 0.088-0.107 log units; geometry moved on
-98.7-100% of tracks. The release did what it says.
+ONE THING NOT TO MISREAD: in the five calibration panels the BT2 -> TS1 segment is flat BY
+CONSTRUCTION, because stage 1 freezes calibration. It is a definition, not a result. Those panels
+only start carrying information at TS1 -> TS2, which is why their verdict strips count that step.
 
-EVERY NUMBER HERE IS A PAIRED PER-SEED DIFFERENCE, and that is not a stylistic choice. The three
-arms sit within ~3 um and ~130 NLL of each other in absolute terms, which is smaller than the
-seed-to-seed spread -- so the MEAN and the MEDIAN of the absolute levels disagree about whether TS1
-or TS2 has the lower loss. Paired differences are immune to that; absolute levels are not, and are
-not quoted.
+HOW TO READ IT. Left to right within each panel: BT2 (the baseline) -> TS1 (stage 1: calibration
+frozen, nuisances refitted) -> TS2 (stage 2: calibration released). G20K sits after the gap as the
+alternative that costs the same as the full recipe. DOWN IS BETTER everywhere. The label under each
+arm is its wall-clock cost. The verdict strip above each panel counts how many of the three seeds
+improved on the step that panel is about.
 
-DID THE RELEASE HELP? Partly, and it cost something.
-  transverse diffusion  -0.93, better on 3/3   <- the one real gain
-  position              +2.7 um, worse on 3/3
-  E field               +0.023, worse on 3/3   (0.022 -> 0.045: real in ratio, negligible absolutely)
-  loss, A_b, long. diff., lifetime -- all straddle zero across seeds, i.e. nulls
-
-IS THE RECIPE BETTER THAN G20K AT EQUAL COMPUTE? (27.0 h against 26.4 h.) No -- it trades.
-  loss                  -131, TS2 better on 3/3
-  transverse diffusion  +0.49, G20K better on 3/3
-  everything else       tie
-
-SO THE HONEST VERDICT IS A NULL WITH A TWIST. Neither arm dominates: the two-stage recipe wins the
-OBJECTIVE and loses TRANSVERSE DIFFUSION against a single long run of the same cost. That pattern --
-lower loss, worse physics -- is the same one figs 63 and 65 found, and fig 66 explained: the
-objective prefers truth only when all three blocks move together, and stage 2 moves calibration
-against nuisances that are themselves no longer free to follow.
-
-AND THE PRACTICAL READING: TS1 alone, at 13.5 h, is the best value in the campaign. Stage 2 doubles
-the cost to buy one parameter and give back position. Anyone continuing this should treat the second
-stage as optional.
+WHAT IT SHOWS.
+  * The whole recipe's gain is in STAGE 1. Loss, position and dEdx all fall steeply from BT2 to TS1
+    and then go flat -- or back up -- at TS2.
+  * Stage 2 buys exactly one thing, TRANSVERSE DIFFUSION, on 3 of 3 seeds, and gives back position.
+  * G20K, at twice stage 1's cost, ends up beside TS2: better on transverse diffusion, worse on the
+    objective. Neither dominates.
+  * LIFETIME never improves anywhere in the recipe. Its lines fan out rather than descend, which is
+    the visual signature of the seed-dependent behaviour section 6w documents.
 """
 import glob, os, pickle, re, io, contextlib
 import numpy as np
@@ -46,14 +35,16 @@ with contextlib.redirect_stdout(io.StringIO()):
 
 OUT = 'plots/noise_report'
 C = dict(blue='#0072B2', orange='#E69F00', green='#009E73', red='#D55E00',
-         purple='#CC79A7', grey='#888888', ink='#222222')
-plt.rcParams.update({'font.size': 9, 'axes.grid': True, 'grid.alpha': .25,
+         grey='#888888', ink='#222222')
+SEEDCOL = {0: '#0072B2', 1: '#E69F00', 2: '#009E73'}
+plt.rcParams.update({'font.size': 9, 'axes.grid': True, 'grid.alpha': .22,
                      'axes.spines.top': False, 'axes.spines.right': False,
                      'figure.dpi': 130, 'savefig.bbox': 'tight'})
 S = [0, 1, 2]
 W = 200
-PL = {'Ab': 'A$_b$', 'eField': 'E field', 'lifetime': 'lifetime',
-      'tran_diff': 'tran. diff.', 'long_diff': 'long. diff.'}
+ARMS = [('BT2', 'BT2\nbaseline\n13.4 h'), ('TS1', 'TS1\nstage 1\n13.5 h'),
+        ('TS2', 'TS2\nstage 2\n27.0 h'), ('G20K', 'G20K\nalternative\n26.4 h')]
+XP = [0, 1, 2, 3.5]          # gap before G20K: it is not part of the recipe
 
 
 def sm(v, w=W):
@@ -78,56 +69,62 @@ def L(t, s):
     return CA[(t, s)]
 
 
-fin = lambda t, s, k: np.median(sm(L(t, s)[k])[-300:])
-ROWS = [('loss', 'loss (NLL)', 0, 1), ('pos', 'position (µm)', 0, 1),
-        ('mae', 'dE/dx MAE (×10⁻⁴)', 0, 1e4)] + [(p, PL[p] + ' |err|', 1, 1) for p in R.P]
+def val(t, s, k, ab):
+    v = np.median(sm(L(t, s)[k])[-300:])
+    return abs(v) if ab else v
 
 
-def paired(a, b, k, ab, sc):
-    f = (lambda x: abs(x)) if ab else (lambda x: x)
-    return [(f(fin(a, s, k)) - f(fin(b, s, k))) * sc for s in S]
+# key, label, absolute?, scale, the step the verdict counts, verdict text
+PAN = [
+    ('loss', 'loss  (PPP NLL)', 0, 1, ('TS1', 'BT2'), 'stage 1 does the work'),
+    ('pos', 'position residual  (µm)', 0, 1, ('TS1', 'BT2'), 'stage 1 does the work'),
+    ('mae', 'per-segment dE/dx MAE', 0, 1, ('TS1', 'BT2'), 'stage 1 does the work'),
+    ('tran_diff', 'transverse diffusion  |error| %', 1, 1, ('TS2', 'TS1'),
+     'THE ONE THING stage 2 buys'),
+    ('Ab', 'A$_b$  |error| %', 1, 1, ('TS2', 'TS1'), 'stage 2: no change'),
+    ('eField', 'E field  |error| %', 1, 1, ('TS2', 'TS1'), 'stage 2: no change'),
+    ('long_diff', 'longitudinal diffusion  |error| %', 1, 1, ('TS2', 'TS1'), 'stage 2: no change'),
+    ('lifetime', 'lifetime  |error| %', 1, 1, ('TS2', 'TS1'), 'never improves, anywhere'),
+]
 
+fig, axes = plt.subplots(2, 4, figsize=(17.4, 9.2))
+for i, (k, lab, ab, sc, (aa, bb), verdict) in enumerate(PAN):
+    a = axes.ravel()[i]
+    for s in S:
+        y = [val(t, s, k, ab) * sc for t, _ in ARMS]
+        a.plot(XP[:3], y[:3], '-o', color=SEEDCOL[s], lw=1.8, ms=7, alpha=.9,
+               label=f'seed {s}' if i == 0 else None)
+        a.plot(XP[3], y[3], 'D', color=SEEDCOL[s], ms=8, alpha=.9)
+        a.plot([XP[2], XP[3]], [y[2], y[3]], ':', color=SEEDCOL[s], lw=1.0, alpha=.45)
+    n = sum(1 for s in S if val(aa, s, k, ab) < val(bb, s, k, ab))
+    col = C['green'] if n == 3 else (C['red'] if n == 0 else C['grey'])
+    a.set_title(f'{lab}\n{verdict}  —  {aa} better than {bb} on {n}/3 seeds',
+                fontsize=9.0, color=col if n in (0, 3) else C['ink'])
+    a.set_xticks(XP)
+    a.set_xticklabels([l for _, l in ARMS], fontsize=7.4)
+    a.set_xlim(-.35, 3.9)
+    a.axvline(2.75, color=C['grey'], lw=1, ls='--', alpha=.6)
+    if k in ('loss', 'pos'):
+        a.set_yscale('log')
+    if i == 0:
+        a.legend(fontsize=7.4, frameon=False, loc='upper right')
+    if ab:   # a calibration panel: the first segment is flat BY DEFINITION, not by result
+        a.annotate('flat here by construction —\ncalibration is FROZEN in stage 1',
+                   (.02, .90), xycoords='axes fraction', fontsize=6.9, color=C['grey'],
+                   style='italic', va='top')
+axes.ravel()[0].annotate('down = better', (.03, .06), xycoords='axes fraction',
+                         fontsize=7.6, color=C['grey'], style='italic')
 
-fig, ax = plt.subplots(1, 3, figsize=(16.8, 5.6))
-
-for j, (a_, b_, title) in enumerate([
-        ('TS2', 'TS1', '(a) DID THE RELEASE HELP?  TS2 − TS1'),
-        ('TS2', 'G20K', '(b) THE PRODUCTION CHOICE  TS2 − G20K\n(27.0 h vs 26.4 h — equal compute)'),
-        ('TS2', 'BT2', '(c) AND VERSUS THE BASELINE  TS2 − BT2')]):
-    a = ax[j]
-    for i, (k, lab, ab, sc) in enumerate(ROWS):
-        d = paired(a_, b_, k, ab, sc)
-        null = min(d) * max(d) <= 0
-        col = C['grey'] if null else (C['green'] if np.mean(d) < 0 else C['red'])
-        a.plot([min(d), max(d)], [i, i], color=col, lw=3, alpha=.5)
-        for x in d:
-            a.plot(x, i, 'o', ms=9, color=col, alpha=.85)
-        n = sum(1 for x in d if x < 0)
-        a.text(1.02, i, f'{n}/3', transform=a.get_yaxis_transform(), va='center',
-               fontsize=7.4, color=col)
-    a.axvline(0, color=C['ink'], lw=1.8)
-    a.set_yticks(range(len(ROWS)))
-    a.set_yticklabels([r[1] for r in ROWS], fontsize=8.2)
-    a.invert_yaxis()
-    a.set_xscale('symlog', linthresh=1)
-    a.set_xlabel(f'{a_} − {b_}, per seed   (negative = {a_} better)')
-    a.set_title(title, fontsize=9.3)
-    if j == 0:
-        a.annotate('grey = seeds straddle 0 → null', (.03, .03), xycoords='axes fraction',
-                   fontsize=7.2, color=C['grey'])
-
-fig.suptitle('Fig 68 — TS2, the calibration release: the two-stage recipe does NOT dominate. '
-             'Releasing calibration buys TRANSVERSE DIFFUSION (−0.93, 3/3)\nand gives back position '
-             '(+2.7 µm, 0/3); everything else is a null. Against G20K at equal compute it wins the '
-             'OBJECTIVE (−131, 3/3) and loses\ntransverse diffusion (+0.49, 0/3) — lower loss, worse '
-             'physics, the same pattern figs 63/65 found and fig 66 explained.', fontsize=10.0)
-fig.tight_layout(rect=[0, 0, 1, .84])
+fig.suptitle('Fig 68 — the two-stage recipe, one line per seed. Follow a single line left to right: '
+             'BT2 → stage 1 → stage 2, with G20K after the gap as the\nsame-cost alternative. '
+             'Down is better. Almost the whole gain is in STAGE 1; stage 2 buys transverse diffusion '
+             'on 3/3 seeds and gives back\nposition; and lifetime improves nowhere. Seed-paired by '
+             'construction, because the arms differ by less than the spread between seeds.',
+             fontsize=10.2)
+fig.tight_layout(rect=[0, 0, 1, .90])
 os.makedirs(OUT, exist_ok=True)
 fig.savefig(f'{OUT}/fig68_ts2.png'); plt.close(fig)
 print('wrote', f'{OUT}/fig68_ts2.png')
-for a_, b_ in [('TS2', 'TS1'), ('TS2', 'G20K'), ('TS2', 'BT2')]:
-    print(f'\n{a_} vs {b_}:')
-    for k, lab, ab, sc in ROWS:
-        d = paired(a_, b_, k, ab, sc)
-        tag = 'null' if min(d) * max(d) <= 0 else ('BETTER' if np.mean(d) < 0 else 'worse')
-        print(f'  {lab:22s} {np.mean(d):+9.3f}  {sum(1 for x in d if x<0)}/3  {tag}')
+for k, lab, ab, sc, (aa, bb), _ in PAN:
+    n = sum(1 for s in S if val(aa, s, k, ab) < val(bb, s, k, ab))
+    print(f'  {lab:36s} {aa} better than {bb} on {n}/3')

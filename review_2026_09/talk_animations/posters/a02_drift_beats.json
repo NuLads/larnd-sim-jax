@@ -1,0 +1,30 @@
+[
+ {
+  "t": 0.0,
+  "label": "one segment of the track"
+ },
+ {
+  "t": 3.0,
+  "label": "ionisation"
+ },
+ {
+  "t": 7.0,
+  "label": "recombination: A_b, E"
+ },
+ {
+  "t": 12.5,
+  "label": "drift speed: E"
+ },
+ {
+  "t": 18.0,
+  "label": "attenuation: tau"
+ },
+ {
+  "t": 23.0,
+  "label": "diffusion: D_T, D_L"
+ },
+ {
+  "t": 29.5,
+  "label": "five parameters at the anode"
+ }
+]

@@ -1,0 +1,30 @@
+[
+ {
+  "t": 0.0,
+  "label": "data fixed, model moves"
+ },
+ {
+  "t": 3.2,
+  "label": "recombination"
+ },
+ {
+  "t": 10.350000000000001,
+  "label": "electron lifetime"
+ },
+ {
+  "t": 17.500000000000004,
+  "label": "electric field"
+ },
+ {
+  "t": 26.35000000000001,
+  "label": "transverse diffusion"
+ },
+ {
+  "t": 34.35000000000001,
+  "label": "longitudinal diffusion"
+ },
+ {
+  "t": 42.650000000000006,
+  "label": "gradient predicts the response"
+ }
+]

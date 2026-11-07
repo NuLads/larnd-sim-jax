@@ -1,0 +1,26 @@
+[
+ {
+  "t": 0.0,
+  "label": "Input: straight line, initial calibration"
+ },
+ {
+  "t": 5.4,
+  "label": "Iteration 0: path seeded from the hits"
+ },
+ {
+  "t": 11.0,
+  "label": "Fit runs: curves are every iteration, panels hold the last saved state"
+ },
+ {
+  "t": 19.9,
+  "label": "Saved state at iteration 10 000"
+ },
+ {
+  "t": 27.4,
+  "label": "Saved state at iteration 14 000"
+ },
+ {
+  "t": 34.9,
+  "label": "Saved state at iteration 20 000, end of the fit"
+ }
+]

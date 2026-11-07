@@ -1,0 +1,34 @@
+[
+ {
+  "t": 0.0,
+  "label": "End of a04: one throw, two hits"
+ },
+ {
+  "t": 6.25,
+  "label": "Replay: new baseline, new tick"
+ },
+ {
+  "t": 11.568000000000001,
+  "label": "Speeding up"
+ },
+ {
+  "t": 22.695540396533612,
+  "label": "10,000 throws"
+ },
+ {
+  "t": 25.695540396533612,
+  "label": "Analytic P(t) laid on the histogram"
+ },
+ {
+  "t": 29.29554039653361,
+  "label": "Measured agreement"
+ },
+ {
+  "t": 35.29554039653361,
+  "label": "Scale the waveform"
+ },
+ {
+  "t": 43.695540396533616,
+  "label": "The fit uses the smooth probability"
+ }
+]

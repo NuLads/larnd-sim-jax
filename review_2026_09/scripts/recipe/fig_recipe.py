@@ -2,11 +2,11 @@
 import sys, numpy as np, matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 sys.path.insert(0, '/sdf/scratch/neutrino/pgranger/review_2026_09/GEOFRZ')
 import compare_arms as ca
-ARMS = [('DSREP', [1, 2, 4, 5, 6, 9], 'production\n(straight start)', 'C3'),
+ARMS = [('DSREP', [1, 2, 3, 4, 5, 6, 7, 8, 9], 'production\n(straight start)', 'C3'),
         ('GTRU', [1, 2, 4], 'truth start\n(free)', 'C1'),
         ('HITSEED', [1, 2, 4], 'hit seed\n(free)', 'C4'),
         ('STRFRZ90', [1, 2, 4], 'hit seed +\nfreeze CL 0.9', 'C8'),
-        ('STRFRZ50', [1, 2, 4, 5, 6, 9], 'RECIPE\nhit seed +\nfreeze CL 0.5', 'C2'),
+        ('STRFRZ50', [1, 2, 3, 4, 5, 6, 7, 8, 9], 'RECIPE\nhit seed +\nfreeze CL 0.5', 'C2'),
         ('DRIFTTRUK6', [1, 2, 4], 'truth drift\nfrozen (K6)', 'C7')]
 fig, axes = plt.subplots(1, 2, figsize=(14, 4.8), sharey=False)
 for k, par in enumerate(['lifetime', 'long_diff']):

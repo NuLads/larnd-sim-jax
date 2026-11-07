@@ -1,0 +1,30 @@
+[
+ {
+  "t": 0.0,
+  "label": "charge is shared"
+ },
+ {
+  "t": 13.6,
+  "label": "iteration 1000: one path, 36 dots"
+ },
+ {
+  "t": 25.3,
+  "label": "iteration 14000: the cloud has tilted"
+ },
+ {
+  "t": 33.6,
+  "label": "end points, zoomed"
+ },
+ {
+  "t": 37.0,
+  "label": "loss at true inputs"
+ },
+ {
+  "t": 40.5,
+  "label": "valley direction"
+ },
+ {
+  "t": 44.0,
+  "label": "end points against the valley"
+ }
+]

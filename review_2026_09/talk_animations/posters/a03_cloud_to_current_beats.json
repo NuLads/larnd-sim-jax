@@ -1,0 +1,26 @@
+[
+ {
+  "t": 0.0,
+  "label": "one electron approaches"
+ },
+ {
+  "t": 5.5,
+  "label": "neighbours respond"
+ },
+ {
+  "t": 12.0,
+  "label": "net charge"
+ },
+ {
+  "t": 16.5,
+  "label": "real pixel on the track"
+ },
+ {
+  "t": 19.0,
+  "label": "pieces add up"
+ },
+ {
+  "t": 33.0,
+  "label": "real waveform: hand-off to electronics"
+ }
+]

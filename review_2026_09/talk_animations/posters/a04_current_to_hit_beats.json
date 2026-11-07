@@ -1,0 +1,38 @@
+[
+ {
+  "t": 0.0,
+  "label": "The pixel and its current"
+ },
+ {
+  "t": 6.2,
+  "label": "Charge accumulates on the integrator"
+ },
+ {
+  "t": 10.5,
+  "label": "Threshold crossed: hit time"
+ },
+ {
+  "t": 16.2,
+  "label": "End of hold: digitise"
+ },
+ {
+  "t": 19.5,
+  "label": "Reset, new baseline noise"
+ },
+ {
+  "t": 24.6,
+  "label": "Second crossing"
+ },
+ {
+  "t": 28.8,
+  "label": "Second sample"
+ },
+ {
+  "t": 31.9,
+  "label": "Second reset"
+ },
+ {
+  "t": 35.6,
+  "label": "A hit is a time and a charge"
+ }
+]

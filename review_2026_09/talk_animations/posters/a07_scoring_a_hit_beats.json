@@ -1,0 +1,26 @@
+[
+ {
+  "t": 1.0,
+  "label": "one pixel of the track"
+ },
+ {
+  "t": 6.5,
+  "label": "model and data on this pixel"
+ },
+ {
+  "t": 13.0,
+  "label": "scoring the hits"
+ },
+ {
+  "t": 21.0,
+  "label": "start against iteration 20000"
+ },
+ {
+  "t": 29.5,
+  "label": "every pixel adds up"
+ },
+ {
+  "t": 37.5,
+  "label": "one number, one gradient"
+ }
+]

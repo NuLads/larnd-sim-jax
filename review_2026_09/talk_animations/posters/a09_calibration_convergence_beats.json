@@ -1,0 +1,26 @@
+[
+ {
+  "t": 0.0,
+  "label": "same wrong start, 36 samples"
+ },
+ {
+  "t": 12.2,
+  "label": "iteration 1000: first fast phase"
+ },
+ {
+  "t": 21.2,
+  "label": "iteration 7500: all spline modes free next"
+ },
+ {
+  "t": 26.4,
+  "label": "iteration 10000: main fit done"
+ },
+ {
+  "t": 31.8,
+  "label": "iteration 14000: freeze-release stage done"
+ },
+ {
+  "t": 39.0,
+  "label": "iteration 20000: final spread"
+ }
+]

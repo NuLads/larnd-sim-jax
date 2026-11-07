@@ -1,0 +1,30 @@
+[
+ {
+  "t": 0.0,
+  "label": "detector"
+ },
+ {
+  "t": 4.5,
+  "label": "muon tracks"
+ },
+ {
+  "t": 8.5,
+  "label": "ionisation charge"
+ },
+ {
+  "t": 12.0,
+  "label": "drift to the anode"
+ },
+ {
+  "t": 22.5,
+  "label": "hits on the pixels"
+ },
+ {
+  "t": 26.0,
+  "label": "hits reassemble in 3-D"
+ },
+ {
+  "t": 32.0,
+  "label": "end hold"
+ }
+]

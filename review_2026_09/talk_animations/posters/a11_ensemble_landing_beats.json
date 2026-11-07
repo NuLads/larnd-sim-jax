@@ -1,0 +1,22 @@
+[
+ {
+  "t": 0.0,
+  "label": "five parameters, start values"
+ },
+ {
+  "t": 16.430000000000007,
+  "label": "all 36 samples landed"
+ },
+ {
+  "t": 19.330000000000005,
+  "label": "mean and standard error"
+ },
+ {
+  "t": 23.330000000000005,
+  "label": "spread"
+ },
+ {
+  "t": 27.330000000000005,
+  "label": "biases stated"
+ }
+]
