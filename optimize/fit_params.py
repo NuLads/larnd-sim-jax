@@ -384,6 +384,8 @@ _FREEZE_STRAIGHT_CL = float(os.environ.get('LARND_FREEZE_STRAIGHT_CL', '0') or 0
 # an independent Gaussian error of s mm per coordinate to each end, as a reconstruction would make. Seeded per track
 # (track id + LARND_ENDPOINT_SMEAR_SEED), so it is reproducible and identical across resumes and runs.
 _ENDPOINT_SMEAR_MM = float(os.environ.get('LARND_ENDPOINT_SMEAR_MM', '0') or 0)
+if os.environ.get('LARND_ENDPOINT_SMEAR_KEY', 'trackid') not in ('trackid', 'entry'):
+    raise ValueError(f"LARND_ENDPOINT_SMEAR_KEY={os.environ['LARND_ENDPOINT_SMEAR_KEY']!r}: 'trackid' (legacy) or 'entry'")
 
 # LARND_FIT_ENDPOINTS=1 (default off; ENDFIT): FIT the two track endpoints instead of anchoring them where they are
 # given (the true points, or smeared ones with LARND_ENDPOINT_SMEAR_MM, which then act as the initial estimate).
@@ -397,6 +399,269 @@ _ENDPOINT_SMEAR_MM = float(os.environ.get('LARND_ENDPOINT_SMEAR_MM', '0') or 0)
 _FIT_ENDPOINTS = os.environ.get('LARND_FIT_ENDPOINTS', '0') == '1'
 _N_EP = 2 if _FIT_ENDPOINTS else 0
 _ENDPOINT_PRIOR_CM = 0.1 * float(os.environ.get('LARND_ENDPOINT_PRIOR_MM', '1.0') or 1.0)
+
+# LARND_ENDPOINT_DRIFT_ZERO_MEAN=1 (default off; needs LARND_FIT_ENDPOINTS=1; ENDFIT option (b), 24 Oct): after every
+# chain Adam step, project the batch's e2 endpoint coefficients onto sum_j w_j c_j = 0, where w_j is the change of
+# endpoint j's drift distance |z - z_anode| per unit coefficient (e2 . z times the sign of z - z_anode at that end).
+# The batch-mean drift shift of the endpoints is then exactly zero: each track keeps its own drift endpoint shifts but
+# the batch cannot make the common one, which is degenerate with the lifetime (14 Oct EFT0: true endpoints, fitted ->
+# coherent +35..+45 um shift away from the anode, lifetime +5..+11 points). Tracks whose e2 half is frozen are left
+# out. Minimum-norm projection of the coefficients only; the Adam moments are not touched. Legitimate when the
+# endpoint estimate is unbiased in drift on average (t0 known).
+_ENDPOINT_DRIFT_ZERO_MEAN = os.environ.get('LARND_ENDPOINT_DRIFT_ZERO_MEAN', '0') == '1'
+if _ENDPOINT_DRIFT_ZERO_MEAN and not _FIT_ENDPOINTS:
+    raise ValueError('LARND_ENDPOINT_DRIFT_ZERO_MEAN=1 needs LARND_FIT_ENDPOINTS=1')
+
+# LARND_HITS_SEED_ENDPOINTS=e1 (default '' = off; needs LARND_FIT_ENDPOINTS=1 and LARND_DRIFT_FROM_HITS=1; ENDFIT
+# option (d), 25 Oct): on a batch's first visit, also seed the e1 (pixel-plane) endpoint columns from the target hits.
+# The constant + linear terms c0 + c1 alpha of the hit fit in _seed_drift_from_hits (discarded otherwise) are exactly
+# the start / end displacements: start = c0, end = c0 + c1. The e2 (drift) terms come from the hit times and carry the
+# threshold-crossing latency; they are recorded, not applied. With this flag or LARND_SEED_DIAG_ONLY=1, every seeded
+# track's raw e1 / e2 endpoint estimates and standard errors are kept in training_history['endpoint_seed'].
+_HITS_SEED_ENDPOINTS = os.environ.get('LARND_HITS_SEED_ENDPOINTS', '').strip()
+if _HITS_SEED_ENDPOINTS not in ('', 'e1'):
+    raise ValueError(f'LARND_HITS_SEED_ENDPOINTS={_HITS_SEED_ENDPOINTS!r}: only "e1" is implemented')
+if _HITS_SEED_ENDPOINTS and not (_FIT_ENDPOINTS and _DRIFT_FROM_HITS):
+    raise ValueError('LARND_HITS_SEED_ENDPOINTS needs LARND_FIT_ENDPOINTS=1 and LARND_DRIFT_FROM_HITS=1')
+
+# LARND_SEED_DIAG_ONLY=1 (default off; study, 25 Oct): visit every batch once and seed it (LARND_DRIFT_FROM_HITS), take
+# NO step, then save a checkpoint (seeded geometry + endpoint_seed estimates) and stop. Cheap on CPU: target
+# simulation + seeding only.
+_SEED_DIAG_ONLY = os.environ.get('LARND_SEED_DIAG_ONLY', '0') == '1'
+if _SEED_DIAG_ONLY and not _DRIFT_FROM_HITS:
+    raise ValueError('LARND_SEED_DIAG_ONLY=1 needs LARND_DRIFT_FROM_HITS=1')
+
+# LARND_DEDX_LR_GLOBAL=<hold>:<end>:<frac> (default '' = off; ENDFIT (h3), 26 Oct): multiply the per-segment dE/dx Adam
+# UPDATE by m(t) of the GLOBAL iteration t: 1 up to <hold>, then exponential down to <frac> at <end>, <frac> after.
+# Adam's update is linear in its LR, so this is LR x m(t). Unlike LARND_DEDX_LR_FINAL_FRAC, which is indexed by the
+# per-batch dE/dx Adam count (restored by a resume, so a continuation would start already decayed), it works in
+# continuations. Per-segment parametrisation, Adam path only. Unset => the default path, untouched.
+_DEDX_LR_GLOBAL = os.environ.get('LARND_DEDX_LR_GLOBAL', '').strip()
+if _DEDX_LR_GLOBAL:
+    _h, _e, _f = (float(x) for x in _DEDX_LR_GLOBAL.split(':'))
+    if not (_h < _e and 0.0 < _f <= 1.0):
+        raise ValueError(f'LARND_DEDX_LR_GLOBAL={_DEDX_LR_GLOBAL!r}: need <hold> < <end> and 0 < <frac> <= 1')
+    _DEDX_LR_GLOBAL = (_h, _e, _f)
+    del _h, _e, _f
+else:
+    _DEDX_LR_GLOBAL = None
+
+
+def _dedx_lr_global_mult(t):
+    """m(t) of LARND_DEDX_LR_GLOBAL at global iteration t (1.0 when the option is off)."""
+    if _DEDX_LR_GLOBAL is None:
+        return 1.0
+    h, e, f = _DEDX_LR_GLOBAL
+    if t <= h:
+        return 1.0
+    if t >= e:
+        return f
+    return f ** ((t - h) / (e - h))
+
+
+# LARND_CALIB_SAGA=1 (default off; 27 Oct, follow-up of ENDFIT "why 44000", option 2): SAGA variance reduction of the
+# calibration gradient. The production loss is deterministic (probabilistic guess, no RNG), so the spread of the
+# per-iteration calibration gradient is the heterogeneity of a FIXED finite sum over the batches. The optimizer gets
+# g_i - G_i + mean_j G_j instead of g_i, where G_j is batch j's last stored gradient (G_i <- g_i afterwards): unbiased
+# for the full-batch gradient, with a variance that vanishes as the iterates converge. After a (re)start the first visit
+# of every batch only fills the table (the plain gradient goes to the optimizer until all batches are stored); the table
+# is not checkpointed. Acts before the optimizer (clipping and Adam see the SAGA direction); the '<param>_grad' history
+# keeps the raw batch gradient. Unset => the default path, untouched.
+_CALIB_SAGA = os.environ.get('LARND_CALIB_SAGA', '0') == '1'
+
+# LARND_GEOM_SWEEP=<t1>,<t2>,... (default '' = off; 27 Oct, option 1): curvature sweeps of the per-track geometry. In
+# the epoch that starts at each listed GLOBAL iteration t_k (iterations t_k .. t_k + n_batches - 1), the first visit of
+# every batch replaces its Adam chain step by LARND_GEOM_SWEEP_NEWTON (default 1) damped Newton steps per track, with
+# calibration and dE/dx held at their current values. Per-track Hessian blocks come from central finite differences
+# (step LARND_GEOM_SWEEP_EPS cm, default 2e-3) of the fit's own coefficient gradient, perturbing coefficient j of every
+# track of a colour group at once: tracks of different events, or of the same event on different anode sides or more
+# than LARND_GEOM_SWEEP_SEP cm apart in (x, y) (default 4.0), share no pixel and no prior term, so one gradient pair
+# gives column j of all their blocks (the cross-track blocks of tracks closer than that are not used). Step per track:
+# solve on the positive-curvature subspace with damping kappa x median|eig|; kappa from a ladder (one forward each,
+# the lowest batch objective wins, no step if none is below the start); the step is scaled down to a max coefficient
+# change of LARND_GEOM_SWEEP_MAXSTEP cm (default 0.1). The track's Adam momentum is reset (second moment and count
+# kept). LARND_GEOM_SWEEP_SAVE=1 also writes a checkpoint at the end of each sweep epoch. Spline basis only, no drift
+# freeze, no fitted endpoints. Unset => the default path, untouched.
+_GEOM_SWEEP = tuple(sorted(int(x) for x in os.environ.get('LARND_GEOM_SWEEP', '').replace(':', ',').split(',') if x.strip()))
+_GEOM_SWEEP_NEWTON = int(os.environ.get('LARND_GEOM_SWEEP_NEWTON', '1'))
+_GEOM_SWEEP_EPS = float(os.environ.get('LARND_GEOM_SWEEP_EPS', '2e-3'))
+_GEOM_SWEEP_SEP = float(os.environ.get('LARND_GEOM_SWEEP_SEP', '4.0'))
+_GEOM_SWEEP_MAXSTEP = float(os.environ.get('LARND_GEOM_SWEEP_MAXSTEP', '0.1'))
+_GEOM_SWEEP_SAVE = os.environ.get('LARND_GEOM_SWEEP_SAVE', '0') == '1'
+_GEOM_SWEEP_KAPPAS = (0.0, 0.03, 0.1, 0.3, 1.0, 3.0)
+
+# LARND_EPOCH_ACCEL_BETA=<beta> (default 0 = off; 28 Oct, ENDFIT "fewer steps", option 1): epoch-level Nesterov
+# extrapolation of the slow joint drift. At every epoch boundary inside [LARND_EPOCH_ACCEL_START, LARND_EPOCH_ACCEL_STOP]
+# (global iterations; default 0 / never stop) the state x_e reached by the epoch that just ended is pushed to
+# y_e = x_e + beta (x_e - x_{e-1}) and the next epoch starts from y_e (x_{e-1} = the previous boundary's pre-push state,
+# so a steady drift accumulates to 1 / (1 - beta) times the plain one while a component that flips sign every epoch is
+# damped). Blocks (LARND_EPOCH_ACCEL_BLOCKS, default 'geom,dedx'): 'geom' = every batch's spline coefficients, 'dedx' =
+# every batch's per-segment log dE/dx, 'calib' = the normalised calibration, extrapolated along the difference of the
+# EPOCH-MEAN values (the per-iteration jitter would otherwise be amplified). Each push is clipped element-wise to
+# LARND_EPOCH_ACCEL_CAP_GEOM cm (default 0.01), LARND_EPOCH_ACCEL_CAP_DEDX (default 0.03) and
+# LARND_EPOCH_ACCEL_CAP_CALIB (normalised x scale, default 0.01). Adaptive restart (LARND_EPOCH_ACCEL_RESTART=1,
+# default): no push when the epoch-mean loss rose over the previous epoch, and the momentum restarts from there. Adam
+# states are kept. Spline basis, per-segment dE/dx, sz_mini_bt = 1. Unset => the default path, untouched.
+_EPOCH_ACCEL_BETA = float(os.environ.get('LARND_EPOCH_ACCEL_BETA', '0') or 0)
+_EPOCH_ACCEL = _EPOCH_ACCEL_BETA > 0
+_EPOCH_ACCEL_START = int(os.environ.get('LARND_EPOCH_ACCEL_START', '0'))
+_EPOCH_ACCEL_STOP = int(os.environ.get('LARND_EPOCH_ACCEL_STOP', str(10 ** 9)))
+_EPOCH_ACCEL_BLOCKS = tuple(x.strip() for x in os.environ.get('LARND_EPOCH_ACCEL_BLOCKS', 'geom,dedx').split(',') if x.strip())
+_EPOCH_ACCEL_CAP = {'geom': float(os.environ.get('LARND_EPOCH_ACCEL_CAP_GEOM', '0.01')),
+                    'dedx': float(os.environ.get('LARND_EPOCH_ACCEL_CAP_DEDX', '0.03')),
+                    'calib': float(os.environ.get('LARND_EPOCH_ACCEL_CAP_CALIB', '0.01'))}
+_EPOCH_ACCEL_RESTART = os.environ.get('LARND_EPOCH_ACCEL_RESTART', '1') == '1'
+# Low-mode geometry push (28 Oct, after (l): the full push sped up lifetime but made long_diff wander, and modes >= 3
+# are noise-dominated, see _SPLINE_KMIN): LARND_EPOCH_ACCEL_GEOM_MODES=m pushes only sine modes 1..m of each track
+# (default 0 = every coefficient); LARND_EPOCH_ACCEL_GEOM_HALVES='e2' restricts it to the drift-carrying half of the
+# drift-frame tracks (the others get no push; default 'e1,e2' = both halves of every track).
+_EPOCH_ACCEL_GEOM_MODES = int(os.environ.get('LARND_EPOCH_ACCEL_GEOM_MODES', '0') or 0)
+_EPOCH_ACCEL_GEOM_HALVES = tuple(x.strip() for x in os.environ.get('LARND_EPOCH_ACCEL_GEOM_HALVES', 'e1,e2').split(',') if x.strip())
+
+# LARND_CHAIN_ADAM_B2=<b2> (default '' = optax's 0.999; 28 Oct, ENDFIT "fewer steps", idea 5): second-moment decay of
+# the per-track geometry Adam. A track is updated once per epoch (~100 times per stage; the per-track Adam restarts at
+# every resume), so with 0.999 its step scale is the mean squared gradient over the whole stage and shrinks behind the
+# gradient as the track converges; a shorter window (e.g. 0.95 = ~20 visits) follows the current gradient scale.
+_CHAIN_ADAM_B2 = float(os.environ.get('LARND_CHAIN_ADAM_B2', '') or 0.999)
+# LARND_CHAIN_COARSE_ITER=<t> (default 0 = off; 28 Oct, idea 3): coarse-to-fine geometry. Before global iteration t
+# only the lowest ceil(n/2) (at least 2) of the n sine modes of each half (e1, e2) are fitted -- the 20 cm-knot basis of
+# a 10 cm-knot fit -- and the upper modes are held at 0 (their gradients masked, the coefficients zeroed, which also
+# drops the hit seed's upper modes); from t on every mode is free. The switch is exact: a coarse shape has zero upper
+# modes. Spline basis only; the endpoint columns (LARND_FIT_ENDPOINTS) are never masked.
+_CHAIN_COARSE_ITER = int(os.environ.get('LARND_CHAIN_COARSE_ITER', '0') or 0)
+# LARND_SEED_DROP_UPPER=1 (default off; 29 Oct, control of LARND_CHAIN_COARSE_ITER): the hit seed (LARND_DRIFT_FROM_HITS)
+# keeps only the lowest ceil(n/2) (>= 2) sine modes of each half -- the same modes the coarse phase fits -- and every
+# mode is free from the start. Coarse-to-fine drops the seed's upper modes too; this separates the two effects.
+_SEED_DROP_UPPER = os.environ.get('LARND_SEED_DROP_UPPER', '0') == '1'
+
+
+def _coarse_kc(ns):
+    """Number of sine modes per half kept by the coarse phase / the seed drop: ceil(ns / 2), at least 2 (at most ns)."""
+    return min(ns, max(2, -(-ns // 2)))
+
+# LARND_JOINT_NEWTON=<t1>,<t2>,... (default '' = off; 28 Oct, ENDFIT "fewer steps", option 2): damped Newton steps on
+# the WHOLE problem -- calibration + every batch's per-segment log dE/dx + spline geometry -- through the Schur complement
+# of its block-arrow Hessian (the nuisances are batch-local, only the calibration is shared). Each step takes two epochs
+# in which nothing is updated (Adam is held, its schedule clock too):
+#   epoch A (the first epoch starting at or after t_k): per batch, central finite differences of the fit's own joint
+#     gradient give H_cc, H_nc (5 calibration directions, LARND_JOINT_NEWTON_EPS_CALIB normalised, default 1e-3), the
+#     dE/dx block as band(2) + the analytic rank-1 of the mean constraint (5 mod-5 probes, EPS_DEDX default 3e-3; as
+#     _dedx_gn_step), the per-track geometry blocks and their own-segment dE/dx cross blocks (colour-compressed as
+#     LARND_GEOM_SWEEP, EPS_GEOM cm default 5e-4, SEP 4 cm; cross-track terms of tracks closer than SEP are dropped);
+#     ~70 gradients per batch;
+#   end of A: for each damping pair (kc, kn) of _JN_LADDER (default kc = kn in (0, 0.03, 0.1, 0.3, 1, 3)): nuisance blocks
+#     inverted on their positive-curvature subspace (+ kn median|eig|), S = sum_b H_cc - H_cn H_nn^-1 H_nc, damping kc on S, d_cal = -S^-1 r,
+#     d_n_b = -H_nn^-1 (g_n + H_nc d_cal); steps scaled down to max |d| <= CAP_CALIB (normalised x scale, default 0.05),
+#     CAP_GEOM (cm, default 0.1), CAP_DEDX (default 0.2);
+#   epoch B: every candidate's batch objective is evaluated (forward only); at the end the kappa with the lowest
+#     total below the start is applied to all blocks at once (none if no candidate lowers it), the Adam first moments
+#     of all three blocks are zeroed. LARND_JOINT_NEWTON_SAVE=1 writes a checkpoint after each step.
+# Padding tracks are left out. Spline basis, per-segment dE/dx, Adam geometry, sz_mini_bt = 1, no drift freeze, no
+# fitted endpoints, LARND_DEDX_MIN_DX=0. Unset => the default path, untouched.
+# LARND_JOINT_NEWTON_DUMP=<file.npz> (default '' = off; 31 Oct, uncertainty / convergence diagnostics): at the end of each
+# assembly epoch, also write the per-batch profile pieces of the assembled blocks (_jn_dump); the step itself is unchanged.
+# Run it from an end-point checkpoint with --iterations 101 to get the pieces without moving the fit.
+# LARND_JOINT_NEWTON_DUMP_FULL=1 (default 0): the dump also holds every batch's assembled blocks (H_nn, H_nc, g_n, flattened
+# batch after batch; per-track geometry sizes), compressed, for offline studies of the profile.
+_JOINT_NEWTON = tuple(sorted(int(x) for x in os.environ.get('LARND_JOINT_NEWTON', '').replace(':', ',').split(',') if x.strip()))
+# LARND_JOINT_NEWTON_EPS_CALIB may also be 5 comma-separated steps, one per calibration parameter (relevant_params_list order).
+_JN_EPS_CAL = tuple(float(v) for v in os.environ.get('LARND_JOINT_NEWTON_EPS_CALIB', '1e-3').split(',') if v.strip())
+assert len(_JN_EPS_CAL) in (1, 5), f'LARND_JOINT_NEWTON_EPS_CALIB: 1 or 5 values, got {_JN_EPS_CAL}'
+_JN_EPS = {'calib': _JN_EPS_CAL[0],
+           'dedx': float(os.environ.get('LARND_JOINT_NEWTON_EPS_DEDX', '3e-3')),
+           'geom': float(os.environ.get('LARND_JOINT_NEWTON_EPS_GEOM', '5e-4'))}
+_JN_CAP = {'calib': float(os.environ.get('LARND_JOINT_NEWTON_CAP_CALIB', '0.05')),
+           'dedx': float(os.environ.get('LARND_JOINT_NEWTON_CAP_DEDX', '0.2')),
+           'geom': float(os.environ.get('LARND_JOINT_NEWTON_CAP_GEOM', '0.1'))}
+_JN_SEP = float(os.environ.get('LARND_JOINT_NEWTON_SEP', '4.0'))
+_JN_SAVE = os.environ.get('LARND_JOINT_NEWTON_SAVE', '0') == '1'
+_JN_DUMP = os.environ.get('LARND_JOINT_NEWTON_DUMP', '').strip()
+_JN_DUMP_KN = (0.0, 0.01, 0.1)   # nuisance dampings of the dumped fully profiled pieces
+_JN_DUMP_FULL = os.environ.get('LARND_JOINT_NEWTON_DUMP_FULL', '0') == '1'
+# LARND_JOINT_NEWTON_DUMP_CALIB=1 (default 0; 3 Nov, with a dump only): the assembly computes the calibration columns only
+# (H_cc, H_nc, g), not the dE/dx band nor the geometry blocks (H_nn stays 0): the conditional E1 at ~1/6 of the cost. The
+# dumped profiled pieces then equal H_cc; the dump records calib_only.
+_JN_DUMP_CALIB = os.environ.get('LARND_JOINT_NEWTON_DUMP_CALIB', '0') == '1'
+assert not _JN_DUMP_CALIB or (_JN_DUMP and not _JN_DUMP_FULL), 'LARND_JOINT_NEWTON_DUMP_CALIB needs a dump and excludes _FULL'
+_JN_KAPPAS = (0.0, 0.03, 0.1, 0.3, 1.0, 3.0)
+# Candidate (calibration damping on the 5x5 Schur complement, nuisance damping) pairs, LARND_JOINT_NEWTON_LADDER='kc:kn,...'.
+# 28 Oct GPU smoke: the most damped diagonal pair won (its calibration step ~0.1%, the undamped quadratic model off by 5x),
+# so mixed pairs keep a trusted nuisance damping with a lighter one on the calibration. Default: the diagonal of _JN_KAPPAS.
+_JN_LADDER = (tuple((float(a), float(b)) for a, b in (p.split(':') for p in os.environ.get('LARND_JOINT_NEWTON_LADDER', '').split(',') if p.strip()))
+              or tuple((k, k) for k in _JN_KAPPAS))
+
+
+def _zero_adam_mu(state):
+    """Copy of an optax state with every ScaleByAdamState first moment set to zero (second moment and count kept)."""
+    return jax.tree_util.tree_map(lambda o: o._replace(mu=jax.tree_util.tree_map(jnp.zeros_like, o.mu))
+                                  if isinstance(o, optax.ScaleByAdamState) else o,
+                                  state, is_leaf=lambda o: isinstance(o, optax.ScaleByAdamState))
+
+
+def _jn_kfmt(k):
+    """Label of a LARND_JOINT_NEWTON candidate (kc, kn): 'k' on the diagonal, else 'kc/kn'."""
+    return f'{k[0]:g}' if k[0] == k[1] else f'{k[0]:g}/{k[1]:g}'
+
+
+def _psd_eig(H, rel=1e-6):
+    """(V, w, median|eig|, n_neg) of the symmetrised H on its positive-curvature subspace (w > rel max|w|)."""
+    w, V = np.linalg.eigh(0.5 * (H + H.T))
+    m = float(np.abs(w).max()) if w.size else 0.0
+    pos = w > rel * max(m, 1e-300)
+    return V[:, pos], w[pos], float(np.median(np.abs(w))) if w.size else 0.0, int((~pos).sum())
+
+
+def _psd_inverse(H, kappa, rel=1e-6, eig=None):
+    """(V, d, n_neg) of the damped pseudo-inverse of the symmetrised H on its positive-curvature subspace: H^+ x =
+    V (d * (V^T x)), d = 1 / (w + kappa median|w|) for w > rel max|w|; eig: a precomputed _psd_eig(H, rel)."""
+    V, w, med, n_neg = _psd_eig(H, rel) if eig is None else eig
+    return V, 1.0 / (w + kappa * med), n_neg
+
+
+def _geom_sweep_colours(ctxs, sep):
+    """Greedy colouring of a batch's tracks for LARND_GEOM_SWEEP: two tracks conflict (different colours) when they belong
+    to the same event and have points on the same anode side (sign of z) closer than sep cm in (x, y). Returns a list
+    of colour indices (largest tracks coloured first)."""
+    T = len(ctxs)
+    pts = []
+    for c in ctxs:
+        u0 = _dir_from_angles(c.theta0_i, c.phi0_i)
+        a = np.linspace(0.0, 1.0, max(2, int(np.ceil(float(c.total_len) / 0.5)) + 1))[:, None]
+        pts.append(np.asarray(c.x0_fixed, np.float64)[None, :] + a * float(c.total_len) * np.asarray(u0, np.float64)[None, :])
+    conf = np.zeros((T, T), bool)
+    for i in range(T):
+        for j in range(i + 1, T):
+            if ctxs[i].track_id[0] != ctxs[j].track_id[0]:
+                continue
+            for s in (1.0, -1.0):
+                pi = pts[i][np.sign(pts[i][:, 2]) == s][:, :2]; pj = pts[j][np.sign(pts[j][:, 2]) == s][:, :2]
+                if len(pi) and len(pj) and np.sqrt(((pi[:, None] - pj[None]) ** 2).sum(-1)).min() < sep:
+                    conf[i, j] = conf[j, i] = True
+    col = -np.ones(T, int)
+    for i in np.argsort([-float(c.total_len) for c in ctxs], kind='stable'):
+        used = {col[j] for j in range(T) if conf[i, j]}
+        k = 0
+        while k in used:
+            k += 1
+        col[i] = k
+    return [int(x) for x in col]
+
+
+def _geom_newton_step(H, g, kappa, maxstep):
+    """Per-track damped Newton step of LARND_GEOM_SWEEP: -(H + kappa med|w|)^-1 g on the positive-curvature subspace of
+    the symmetrised block H (float64), scaled down to max |step| <= maxstep. Returns (step, n_negative_eigenvalues)."""
+    Hs = 0.5 * (H + H.T)
+    w, V = np.linalg.eigh(Hs)
+    pos = w > 1e-10 * max(float(np.abs(w).max()), 1e-300)
+    if not pos.any():
+        return np.zeros_like(g), int((~pos).sum())
+    lam = kappa * float(np.median(np.abs(w)))
+    y = V[:, pos].T @ g
+    s = -V[:, pos] @ (y / (w[pos] + lam))
+    m = float(np.abs(s).max())
+    if m > maxstep:
+        s = s * (maxstep / m)
+    return s, int((~pos).sum())
 
 
 def _transverse_frame(u0, frame=None):
@@ -2129,9 +2394,18 @@ class ParamFitter:
             exit_pt  = ends[-1].astype(np.float32)
             if _ENDPOINT_SMEAR_MM > 0:                      # LARND_ENDPOINT_SMEAR_MM: reconstruction-like endpoint error
                 import zlib
-                _rng = np.random.default_rng(zlib.crc32(f"{(ev, tr)}|{os.environ.get('LARND_ENDPOINT_SMEAR_SEED', '0')}".encode()))
-                entry_pt = (entry_pt + _rng.normal(0.0, 0.1 * _ENDPOINT_SMEAR_MM, 3)).astype(np.float32)
-                exit_pt = (exit_pt + _rng.normal(0.0, 0.1 * _ENDPOINT_SMEAR_MM, 3)).astype(np.float32)
+                # (eventID, trackID) are batch-LOCAL ids: the legacy key repeats the same few dozen draws in every batch
+                # and every sample (25 Oct: 39 distinct keys over 962 tracks; overall drift offset -43..-69 um instead of
+                # +-24). LARND_ENDPOINT_SMEAR_KEY=entry keys the draw on the TRUE entry point (10 um grid) instead:
+                # independent per physical track, and still identical across resumes and runs. Default: legacy.
+                _key = (f"{np.round(np.asarray(entry_pt, np.float64), 3).tolist()}"
+                        if os.environ.get('LARND_ENDPOINT_SMEAR_KEY', 'trackid') == 'entry' else f"{(ev, tr)}")
+                _rng = np.random.default_rng(zlib.crc32(f"{_key}|{os.environ.get('LARND_ENDPOINT_SMEAR_SEED', '0')}".encode()))
+                _s1, _s2 = _rng.normal(0.0, 0.1 * _ENDPOINT_SMEAR_MM, 3), _rng.normal(0.0, 0.1 * _ENDPOINT_SMEAR_MM, 3)
+                entry_pt = (entry_pt + _s1).astype(np.float32)
+                exit_pt = (exit_pt + _s2).astype(np.float32)
+                # kept for analysis (training_history['endpoint_smear'][batch][(ev, tr)] = (entry, exit) offsets, cm)
+                self.__dict__.setdefault('_ep_smear', {}).setdefault(int(batch_idx), {})[(ev, tr)] = (_s1, _s2)
             d = exit_pt - entry_pt
             total_len = float(np.linalg.norm(d))
             if total_len < 1e-4:
@@ -2556,6 +2830,10 @@ class ParamFitter:
                               for ctx in ctxs]
                     for bi, ctxs in self._batch_chain_contexts.items()
                 }
+            if self.__dict__.get('_ep_seed'):                # LARND_HITS_SEED_ENDPOINTS / LARND_SEED_DIAG_ONLY
+                self.training_history['endpoint_seed'] = {int(bi): v for bi, v in self._ep_seed.items()}
+            if self.__dict__.get('_ep_smear'):               # LARND_ENDPOINT_SMEAR_MM: the drawn offsets
+                self.training_history['endpoint_smear'] = self._ep_smear
             if hasattr(self, '_batch_true_positions') and self._batch_true_positions:
                 self.training_history['true_positions'] = {
                     int(bi): {str(k): v for k, v in track_dict.items()}
@@ -3293,6 +3571,50 @@ class GradientDescentFitter(ParamFitter):
         self._dedx_opt_mode   = os.environ.get('LARND_DEDX_OPT', 'adam').lower()
         # (scale, shape) reparametrisation: 'perseg' (default, unchanged) | 'scale_shape'
         self._dedx_param_mode = os.environ.get('LARND_DEDX_PARAM', 'perseg').lower()
+        if _DEDX_LR_GLOBAL is not None:
+            if self._dedx_param_mode != 'perseg' or self._dedx_opt_mode != 'adam':
+                raise ValueError('LARND_DEDX_LR_GLOBAL acts on the per-segment Adam path only '
+                                 '(LARND_DEDX_PARAM=perseg, LARND_DEDX_OPT=adam)')
+            logger.info(f"[dEdx-LR-GLOBAL] dE/dx update x m(t): 1 to iteration {_DEDX_LR_GLOBAL[0]:g}, "
+                        f"exponential to {_DEDX_LR_GLOBAL[2]:g} at {_DEDX_LR_GLOBAL[1]:g}, then constant")
+        if _CALIB_SAGA:
+            if self.sz_mini_bt != 1:
+                raise ValueError('LARND_CALIB_SAGA needs sz_mini_bt = 1 (one batch gradient per calibration step)')
+            logger.info("[CALIB-SAGA] SAGA calibration gradient (table of the last gradient of every batch; "
+                        "plain gradient until all batches are stored)")
+        if _GEOM_SWEEP:
+            if (self._chain_basis != 'spline' or _CHAIN_FREEZE_DRIFT or _FIT_ENDPOINTS or _ENDPOINT_DRIFT_ZERO_MEAN
+                    or self._geom_optimizer != 'adam' or (self.fit_dedx and self._dedx_param_mode != 'perseg')
+                    or self.sz_mini_bt != 1):
+                raise ValueError('LARND_GEOM_SWEEP needs the spline basis, the Adam geometry optimizer, '
+                                 'LARND_CHAIN_FREEZE_DRIFT=0, LARND_FIT_ENDPOINTS=0, LARND_ENDPOINT_DRIFT_ZERO_MEAN=0, '
+                                 'LARND_DEDX_PARAM=perseg and sz_mini_bt = 1')
+            logger.info(f"[GEOM-SWEEP] per-track Newton sweeps of the geometry in the epochs starting at {list(_GEOM_SWEEP)}: "
+                        f"{_GEOM_SWEEP_NEWTON} step(s) per batch, FD eps {_GEOM_SWEEP_EPS:g} cm, colour separation "
+                        f"{_GEOM_SWEEP_SEP:g} cm, max step {_GEOM_SWEEP_MAXSTEP:g} cm, kappa ladder {list(_GEOM_SWEEP_KAPPAS)}"
+                        + (", checkpoint after each sweep" if _GEOM_SWEEP_SAVE else ""))
+        if _EPOCH_ACCEL:
+            if (self._chain_basis != 'spline' or self.sz_mini_bt != 1 or (self.fit_dedx and self._dedx_param_mode != 'perseg')
+                    or not set(_EPOCH_ACCEL_BLOCKS) <= {'geom', 'dedx', 'calib'} or not 0 < _EPOCH_ACCEL_BETA < 1
+                    or not _EPOCH_ACCEL_GEOM_HALVES or not set(_EPOCH_ACCEL_GEOM_HALVES) <= {'e1', 'e2'}):
+                raise ValueError('LARND_EPOCH_ACCEL needs 0 < beta < 1, blocks within geom,dedx,calib, geometry halves within '
+                                 'e1,e2, the spline basis, LARND_DEDX_PARAM=perseg and sz_mini_bt = 1')
+            logger.info(f"[EPOCH-ACCEL] epoch-level extrapolation beta {_EPOCH_ACCEL_BETA:g} of {list(_EPOCH_ACCEL_BLOCKS)} "
+                        f"in iterations [{_EPOCH_ACCEL_START}, {_EPOCH_ACCEL_STOP}], caps {_EPOCH_ACCEL_CAP}, "
+                        f"restart {'on' if _EPOCH_ACCEL_RESTART else 'off'}, geometry modes "
+                        f"{_EPOCH_ACCEL_GEOM_MODES if _EPOCH_ACCEL_GEOM_MODES > 0 else 'all'} of halves {list(_EPOCH_ACCEL_GEOM_HALVES)}"
+                        + (' (drift-frame tracks only)' if 'e1' not in _EPOCH_ACCEL_GEOM_HALVES else ''))
+        if _JOINT_NEWTON:
+            if (self._chain_basis != 'spline' or _CHAIN_FREEZE_DRIFT or _FIT_ENDPOINTS or _ENDPOINT_DRIFT_ZERO_MEAN
+                    or self._geom_optimizer != 'adam' or not self.fit_dedx or self._dedx_param_mode != 'perseg'
+                    or self._dedx_opt_mode != 'adam' or self.sz_mini_bt != 1 or not self.fit_chain_positions
+                    or float(os.environ.get('LARND_DEDX_MIN_DX', '0.0')) > 0 or _GEOM_SWEEP or _EPOCH_ACCEL or _CALIB_SAGA):
+                raise ValueError('LARND_JOINT_NEWTON needs the spline basis with Adam geometry, per-segment Adam dE/dx, '
+                                 'sz_mini_bt = 1, LARND_CHAIN_FREEZE_DRIFT=0, LARND_FIT_ENDPOINTS=0, LARND_DEDX_MIN_DX=0, '
+                                 'and none of LARND_GEOM_SWEEP / LARND_EPOCH_ACCEL_BETA / LARND_CALIB_SAGA')
+            logger.info(f"[JOINT-NEWTON] joint Newton steps (calibration + dE/dx + geometry, Schur complement) starting at "
+                        f"{list(_JOINT_NEWTON)}: FD eps {_JN_EPS}, caps {_JN_CAP}, colour separation {_JN_SEP:g} cm, "
+                        f"(kappa_calib, kappa_nuis) ladder {list(_JN_LADDER)}" + (", checkpoint after each step" if _JN_SAVE else ""))
         self._dedx_mu_lr_mult = float(os.environ.get('LARND_DEDX_MU_LR_MULT', '1.0'))
         self._dedx_ss: dict = {}   # batch_idx -> {'mu':float, 'a':array, 'opt_state':...}
         self._dedx_min_dx = float(os.environ.get('LARND_DEDX_MIN_DX', '0.0'))
@@ -3366,7 +3688,18 @@ class GradientDescentFitter(ParamFitter):
         # ── Per-track chain geometry fitting state ───────────────────────────
         # _chain_cache: batch_idx → list of {'angles': jnp.array(2*n_chain,), 'opt_state'}
         self._chain_cache: dict = {}
-        self._chain_optimizer = optax.adam(self._chain_lr) if self.fit_chain_positions else None
+        self._chain_optimizer = optax.adam(self._chain_lr, b2=_CHAIN_ADAM_B2) if self.fit_chain_positions else None
+        if self.fit_chain_positions and _CHAIN_ADAM_B2 != 0.999:
+            logger.info(f"[CHAIN] per-track geometry Adam b2 = {_CHAIN_ADAM_B2:g} (LARND_CHAIN_ADAM_B2)")
+        if _CHAIN_COARSE_ITER > 0:
+            if self._chain_basis != 'spline' or not self.fit_chain_positions:
+                raise ValueError('LARND_CHAIN_COARSE_ITER needs --fit_chain_positions with the spline basis')
+            logger.info(f"[CHAIN] coarse-to-fine geometry: lowest ceil(n/2) (>= 2) sine modes per half until iteration "
+                        f"{_CHAIN_COARSE_ITER}, then all (LARND_CHAIN_COARSE_ITER)")
+        if _SEED_DROP_UPPER:
+            if self._chain_basis != 'spline' or not self.fit_chain_positions:
+                raise ValueError('LARND_SEED_DROP_UPPER needs --fit_chain_positions with the spline basis')
+            logger.info("[CHAIN] hit seed keeps only the lowest ceil(n/2) (>= 2) sine modes per half (LARND_SEED_DROP_UPPER)")
         # _batch_true_positions: batch_idx → (N_fine, 3) float32 array of true midpoints
         self._batch_true_positions: dict = {}
 
@@ -3438,6 +3771,9 @@ class GradientDescentFitter(ParamFitter):
             logger.warning("Got NaN gradients! Skipping update for this batch")
             return relevant_grads
 
+        # LARND_CALIB_SAGA: the optimizer gets the SAGA direction; the returned (logged) gradient stays the raw one
+        opt_grads = self._saga_direction(relevant_grads) if _CALIB_SAGA else relevant_grads
+
         if (_OPT_JIT and self.normalization_scheme != "divide" and not self._calib_pinned
                 and not (self.normalization_scheme == "divide" and self.clip_from_range)):
             # LARND_OPT_JIT: optax update + norm update + norm->phys map as ONE jitted program (~120 eager ops before)
@@ -3452,7 +3788,7 @@ class GradientDescentFitter(ParamFitter):
                     phys = {k: map_norm_to_phys(new_norm[k], k, scheme=scheme, scale=scale) for k in keys}
                     return st2, new_norm, phys
                 fn = self._calib_step_jit = jax.jit(_step)
-            self.opt_state, _nn, _ph = fn(relevant_grads, self.opt_state,
+            self.opt_state, _nn, _ph = fn(opt_grads, self.opt_state,
                                           {k: getattr(self.norm_params, k) for k in self.relevant_params_list})
             self.norm_params = self.norm_params.replace(**_nn)
             self.current_params = self.ref_params.replace(**_ph)
@@ -3463,9 +3799,11 @@ class GradientDescentFitter(ParamFitter):
                 key: relevant_grads[key] * getattr(self.params_normalization, key)
                 for key in self.relevant_params_list
             }
+            opt_grads = ({key: opt_grads[key] * getattr(self.params_normalization, key)
+                          for key in self.relevant_params_list} if _CALIB_SAGA else relevant_grads)
 
         # Update the optimizer state and get the updates for norm_params
-        updates, self.opt_state = self.optimizer.update(relevant_grads, self.opt_state)
+        updates, self.opt_state = self.optimizer.update(opt_grads, self.opt_state)
 
         # PROFILE: zero the update for any pinned parameter. Done AFTER optimizer.update so the
         # other parameters' Adam moments and the shared schedule counter advance exactly as they
@@ -3482,8 +3820,32 @@ class GradientDescentFitter(ParamFitter):
 
         # Re-map unconstrained values to physical values for the next simulation step
         self.update_params()
-        
+
         return relevant_grads
+
+    def _saga_direction(self, g):
+        """LARND_CALIB_SAGA: SAGA estimate g_i - G_i + mean_j G_j of the full-batch calibration gradient for the current
+        batch i (self._saga_batch = (i, n_batches), set by the training loop). Returns g itself until the table holds
+        every batch."""
+        bi, nb = self.__dict__.get('_saga_batch', (None, None))
+        if bi is None:
+            return g
+        keys = tuple(self.relevant_params_list)
+        v = jnp.stack([jnp.asarray(g[k], jnp.float32).reshape(()) for k in keys])
+        st = self.__dict__.get('_saga_state')
+        if st is None or st['nb'] != nb:
+            st = self._saga_state = {'nb': nb, 'tab': jnp.zeros((nb, len(keys)), jnp.float32), 'seen': np.zeros(nb, bool)}
+        full = bool(st['seen'].all())
+        if full:
+            d = v - st['tab'][bi] + jnp.mean(st['tab'], axis=0)
+        st['tab'] = st['tab'].at[bi].set(v)
+        st['seen'][bi] = True
+        if not full:
+            if st['seen'].all():
+                logger.info(f"[CALIB-SAGA] table complete ({nb} batches) at iteration "
+                            f"{self.__dict__.get('_cur_total_iter')}; SAGA direction from the next iteration")
+            return g
+        return {k: d[j].reshape(jnp.shape(g[k])).astype(jnp.asarray(g[k]).dtype) for j, k in enumerate(keys)}
 
     # def process_grads(self, grads):
     #     scaled_grads = {key: getattr(grads, key)*getattr(self.params_normalization, key) for key in self.relevant_params_list}
@@ -4223,6 +4585,19 @@ class GradientDescentFitter(ParamFitter):
     def _process_dedx_grads(self, batch_idx, grads_dedx, current_log_dedx):
         """Apply one Adam step for per-segment log-dEdx of *batch_idx*."""
         _, opt_state = self._get_or_init_dedx_state(batch_idx, len(current_log_dedx))
+        if _DEDX_LR_GLOBAL is not None:   # LARND_DEDX_LR_GLOBAL: update x m(global iteration)
+            fn = self.__dict__.get('_dedx_step_jit_m')
+            if fn is None:
+                opt = self._dedx_optimizer
+
+                def _step_m(g, st, x, m):
+                    u, st2 = opt.update(g, st)
+                    return x + m * u, st2
+                fn = self._dedx_step_jit_m = jax.jit(_step_m)
+            _m = _dedx_lr_global_mult(int(self.__dict__.get('_cur_total_iter', self.total_iter)))
+            new_log_dedx, new_opt_state = fn(grads_dedx, opt_state, current_log_dedx, jnp.float32(_m))
+            self._dedx_cache[batch_idx] = {'log_dedx': new_log_dedx, 'opt_state': new_opt_state}
+            return new_log_dedx
         if _OPT_JIT:
             fn = self.__dict__.get('_dedx_step_jit')
             if fn is None:
@@ -4628,6 +5003,8 @@ class GradientDescentFitter(ParamFitter):
         tp = getattr(self, '_batch_true_positions', {}).get(batch_idx, {})
         n_trk = n_e2 = n_e1 = n_skip = 0; dv = {'e1': [], 'e2': [], 'e1_0': [], 'e2_0': []}
         straight = set()                                    # track indices called straight (LARND_FREEZE_STRAIGHT_CL)
+        rec_ep = bool(_HITS_SEED_ENDPOINTS) or _SEED_DIAG_ONLY   # record the hit endpoint estimates
+        ep_rec, n_ep1 = [], 0
 
         def robust_fit(A, y, sw, kmin):
             keep = np.ones(len(y), bool)
@@ -4704,8 +5081,9 @@ class GradientDescentFitter(ParamFitter):
                 straight.add(ti); new[K:] = 0.0              # called straight: e2 at the straight line (frozen)
             elif (cl2 <= 0 or T2 > _chi2.ppf(cl2, Kf)) and sane(b2):
                 new[K:] = 0.0; new[K:K + Kf] = b2; n_e2 += 1
+            if do_e1 or rec_ep:
+                coef1, cov1 = robust_fit(np.hstack([one, a[:, None], B]), d @ e1, sw, 3 * Kf + 2)
             if do_e1:
-                coef1, _ = robust_fit(np.hstack([one, a[:, None], B]), d @ e1, sw, 3 * Kf + 2)
                 b1 = coef1[2:]
                 ag = np.linspace(0, 1, 101)
                 if np.sqrt(np.mean((np.sin(np.outer(ag, np.pi * np.arange(1, Kf + 1))) @ b1) ** 2)) > amp1 and sane(b1):
@@ -4713,7 +5091,17 @@ class GradientDescentFitter(ParamFitter):
                         n_alias += 1                        # the seed would mostly be pixel-grid aliasing
                     else:
                         new[:K] = 0.0; new[:Kf] = b1; n_e1 += 1
+            if rec_ep:                                      # endpoint estimates: start = c0, end = c0 + c1 (cm)
+                ez = float(e2[2]); G = np.array([[1.0, 0.0], [1.0, 1.0]])
+                p1, p2 = G @ coef1[:2], G @ coef[:2] / ez     # e2: the z fit's constant / linear, over e2 . z
+                se1 = np.sqrt(np.diag(G @ cov1[:2, :2] @ G.T)); se2 = np.sqrt(np.diag(G @ cov[:2, :2] @ G.T)) / abs(ez)
+                ep_rec.append({'ti': ti, 'track_id': ctx.track_id, 'e1': p1, 'e1_se': se1, 'e2': p2, 'e2_se': se2,
+                               'e2z': ez, 'straight': ti in straight, 'npix': int(len(a))})
+                if _HITS_SEED_ENDPOINTS and _N_EP and float(np.abs(p1).max()) < 0.5:   # 5 mm sanity cap
+                    new[K - 2:K] = p1; n_ep1 += 1
             if apply_seed:                                  # never overwrite geometry restored from a checkpoint
+                if _SEED_DROP_UPPER:
+                    kc = _coarse_kc(Ks); new[kc:Ks] = 0.0; new[K + kc:K + Ks] = 0.0
                 st['angles'] = jnp.asarray(new.astype(np.float32))
                 st['opt_state'] = self._chain_optimizer.init(st['angles'])
             tru = tp.get(ctx.track_id)                      # diagnostic only: seeded vs truth-projected shape
@@ -4730,6 +5118,11 @@ class GradientDescentFitter(ParamFitter):
         self.__dict__.setdefault('_geom_hits_diag', []).extend(zip(dv['e1'], dv['e1_0'], dv['e2'], dv['e2_0']))
         self.__dict__.setdefault('_straight_freeze', {})[batch_idx] = straight
         self.__dict__.get('_drift_mask_cache', {}).pop(batch_idx, None)   # masks must see the classification
+        if rec_ep:
+            self.__dict__.setdefault('_ep_seed', {})[batch_idx] = ep_rec
+            if _HITS_SEED_ENDPOINTS:
+                logger.info(f"[GEOM-HITS] batch {batch_idx}: e1 endpoints seeded from hits on {n_ep1}/{len(ep_rec)} tracks"
+                            f"{'' if apply_seed else ' (not applied: restored geometry)'}")
         med = lambda v: np.median(v) if v else float('nan')
         logger.info(f"[GEOM-HITS] batch {batch_idx}: {n_trk} drift-frame tracks (skipped {n_skip}); "
                     f"{'seeding' if apply_seed else 'classification only (restored geometry)'}; "
@@ -4762,6 +5155,44 @@ class GradientDescentFitter(ParamFitter):
             logger.info(f'[CHAIN] batch {batch_idx}: drift-direction geometry FROZEN on {n_frozen}/{len(masks)} tracks')
         return cache[batch_idx]
 
+    def _endpoint_drift_weights(self, batch_idx, states):
+        """LARND_ENDPOINT_DRIFT_ZERO_MEAN: per-track weight vectors w (zero except at the e2 start / end coefficients,
+        layout [e1 sine, e1 start, e1 end, e2 sine, e2 start, e2 end]) with w . c = the drift-distance shift of that
+        end, and sum(w . w) over the batch. Tracks with a frozen e2 half get w = 0."""
+        cache = self.__dict__.setdefault('_ep_drift_w_cache', {})
+        if batch_idx not in cache:
+            ctxs = self._batch_chain_contexts.get(batch_idx, [])
+            if len(ctxs) != len(states):
+                raise RuntimeError(f'endpoint drift constraint: {len(ctxs)} contexts vs {len(states)} chain states in batch {batch_idx}')
+            masks = (self._drift_freeze_masks(batch_idx, states)
+                     if _CHAIN_FREEZE_DRIFT and self._chain_basis == 'spline' else None)
+            zb = np.asarray(self.ref_params.tpc_borders, np.float64)[:, 2, :]    # per TPC: z of [anode, cathode]
+            ws, n_used = [], 0
+            for ti, (ctx, st) in enumerate(zip(ctxs, states)):
+                n = int(np.asarray(st['angles']).shape[0]); K = n // 2
+                u0 = _dir_from_angles(ctx.theta0_i, ctx.phi0_i)
+                _, e2 = _transverse_frame(u0)
+                w = np.zeros(n, np.float32)
+                if masks is None or float(masks[ti][2 * K - 1]) > 0:
+                    for j, z in ((2 * K - 2, float(ctx.x0_fixed[2])), (2 * K - 1, float(ctx.x0_fixed[2] + ctx.total_len * u0[2]))):
+                        t = int(np.argmin(np.abs(zb.mean(1) - z)))                  # nearest TPC
+                        w[j] = float(e2[2]) * float(np.sign(z - zb[t, 0]))
+                    n_used += 1
+                ws.append(w)
+            ww = float(sum(float(np.dot(w, w)) for w in ws))
+            cache[batch_idx] = ([jnp.asarray(w) for w in ws], ww)
+            logger.info(f'[CHAIN] batch {batch_idx}: endpoint drift zero-mean constraint on {n_used}/{len(ws)} tracks '
+                        f'(sum w^2 {ww:.3f})')
+        return cache[batch_idx]
+
+    def _project_endpoint_drift(self, batch_idx, states):
+        """LARND_ENDPOINT_DRIFT_ZERO_MEAN: c <- c - w (w . c) / (w . w) over the batch (see _endpoint_drift_weights)."""
+        ws, ww = self._endpoint_drift_weights(batch_idx, states)
+        if ww <= 0.:
+            return states
+        lam = sum(jnp.sum(w * st['angles']) for w, st in zip(ws, states)) / ww
+        return [{'angles': st['angles'] - lam * w, 'opt_state': st['opt_state']} for w, st in zip(ws, states)]
+
     def _process_chain_grads(self, batch_idx, grads_chain_per_track, total_iter=0):
         """Apply one (decayed) Adam step for per-track chain angles of batch_idx.
 
@@ -4771,8 +5202,16 @@ class GradientDescentFitter(ParamFitter):
         """
         states = self._get_or_init_chain_state(batch_idx)
         lr_scale = self._chain_lr_scale(total_iter)
+        coarse = self._chain_coarse_masks(batch_idx, states) if total_iter < _CHAIN_COARSE_ITER else None
+        if coarse is not None:
+            grads_chain_per_track = [g * m for g, m in zip(grads_chain_per_track, coarse)]
         if _CHAIN_FLAT_ADAM and self._chain_flat_ok(states, grads_chain_per_track, 1 if _OPT_JIT else _CHAIN_FLAT_MIN_T):
-            self._chain_cache[batch_idx] = self._chain_adam_flat(batch_idx, states, grads_chain_per_track, lr_scale)
+            new_states = self._chain_adam_flat(batch_idx, states, grads_chain_per_track, lr_scale)
+            if _ENDPOINT_DRIFT_ZERO_MEAN and self._chain_basis == 'spline':
+                new_states = self._project_endpoint_drift(batch_idx, new_states)
+            if coarse is not None:
+                new_states = [{**s, 'angles': s['angles'] * m} for s, m in zip(new_states, coarse)]
+            self._chain_cache[batch_idx] = new_states
             return
         if _CHAIN_FREEZE_DRIFT and self._chain_basis == 'spline':
             grads_chain_per_track = [g * m for g, m in
@@ -4786,7 +5225,561 @@ class GradientDescentFitter(ParamFitter):
             new_angles = jnp.where(bad, state['angles'], cand_angles)
             new_opt = jax.tree_util.tree_map(lambda o, n: jnp.where(bad, o, n), state['opt_state'], new_opt_state)
             new_states.append({'angles': new_angles, 'opt_state': new_opt})
+        if _ENDPOINT_DRIFT_ZERO_MEAN and self._chain_basis == 'spline':
+            new_states = self._project_endpoint_drift(batch_idx, new_states)
+        if coarse is not None:
+            new_states = [{**s, 'angles': s['angles'] * m} for s, m in zip(new_states, coarse)]
         self._chain_cache[batch_idx] = new_states
+
+    def _chain_coarse_masks(self, batch_idx, states):
+        """Per-track masks for LARND_CHAIN_COARSE_ITER: 1 on the lowest ceil(n/2) (>= 2) of the n sine modes of each
+        half and on the endpoint columns, 0 on the upper sine modes."""
+        cache = self.__dict__.setdefault('_coarse_mask_cache', {})
+        if batch_idx not in cache:
+            masks, n_free, n_all = [], 0, 0
+            for st in states:
+                n = int(np.asarray(st['angles']).shape[0]); K = n // 2; ns = _spline_nsine(K)
+                kc = _coarse_kc(ns)
+                m = np.ones(n, np.float32); m[kc:ns] = 0.0; m[K + kc:K + ns] = 0.0
+                masks.append(jnp.asarray(m)); n_free += int(m.sum()); n_all += n
+            cache[batch_idx] = masks
+            logger.info(f'[CHAIN] batch {batch_idx}: coarse geometry, {n_free}/{n_all} coefficients free')
+        return cache[batch_idx]
+
+    def _geom_sweep_due(self, batch_idx, total_iter, n_batches):
+        """LARND_GEOM_SWEEP: True at the first visit of batch_idx inside a sweep epoch [t_k, t_k + n_batches)."""
+        for k, t0 in enumerate(_GEOM_SWEEP):
+            if t0 <= total_iter < t0 + n_batches:
+                done = self.__dict__.setdefault('_geom_sweep_done', set())
+                if (k, int(batch_idx)) in done:
+                    return False
+                done.add((k, int(batch_idx)))
+                return True
+        return False
+
+    def _geom_sweep_batch(self, batch_idx, tracks, ref, use_dedx, parent_ids, epoch, total_iter):
+        """LARND_GEOM_SWEEP: _GEOM_SWEEP_NEWTON damped per-track Newton steps on batch_idx's spline coefficients, with
+        calibration and dE/dx held at their current values (see the flag for the method). Replaces the Adam chain step
+        of this visit; logs one [GEOM-SWEEP] line per Newton step and appends a record to training_history['geom_sweep']."""
+        t_start = time()
+        i = batch_idx
+        states = self._chain_cache[i]
+        ctxs = self._batch_chain_contexts[i]
+        assert len(states) == len(ctxs), (len(states), len(ctxs))
+        cols = self.__dict__.setdefault('_geom_sweep_cols', {})
+        if i not in cols:
+            cols[i] = _geom_sweep_colours(ctxs, _GEOM_SWEEP_SEP)
+        col = cols[i]
+        ld = self._dedx_cache[i]['log_dedx'] if use_dedx else None    # current (already updated this visit)
+
+        def vg(xs):
+            lv, _, _, gc, _, _, _ = self.compute_loss(tracks, i, *ref, epoch=epoch, with_loss=True, with_grad=True,
+                                                      log_dedx=ld, parent_ids=parent_ids, chain_angles_per_track=xs)
+            return float(lv), [np.asarray(g, np.float64) for g in gc]
+
+        def val(xs):
+            return float(self.compute_loss(tracks, i, *ref, epoch=epoch, with_loss=True, with_grad=False, log_dedx=ld,
+                                           parent_ids=parent_ids, chain_angles_per_track=xs)[0])
+
+        x = [jnp.asarray(s['angles'], jnp.float32) for s in states]
+        n_t = [int(a.shape[0]) for a in x]
+        T, ncol, eps = len(x), max(col) + 1, _GEOM_SWEEP_EPS
+        rec = dict(iter=int(total_iter), batch=int(i), T=T, ncol=ncol, n_coef=n_t, newton=[])
+        for it in range(_GEOM_SWEEP_NEWTON):
+            t0 = time()
+            L0, g0 = vg(x)
+            if not np.isfinite(L0) or any(not np.all(np.isfinite(g)) for g in g0):
+                rec['newton'].append(dict(step=it, skipped='non-finite loss or gradient'))
+                break
+            H = [np.zeros((n, n)) for n in n_t]
+            ndir = 0
+            for c in range(ncol):
+                mem = [t for t in range(T) if col[t] == c]
+                for j in range(max(n_t[t] for t in mem)):
+                    on = [t for t in mem if j < n_t[t]]
+                    xp, xm = list(x), list(x)
+                    for t in on:
+                        xp[t] = x[t].at[j].add(eps)
+                        xm[t] = x[t].at[j].add(-eps)
+                    _, gp = vg(xp)
+                    _, gm = vg(xm)
+                    ndir += 1
+                    for t in on:
+                        H[t][:, j] = (gp[t] - gm[t]) / (2.0 * eps)
+            asym = max(float(np.abs(h - h.T).max() / max(float(np.abs(np.diag(h)).max()), 1e-30)) for h in H)
+            ladder, best = [], None
+            for kap in _GEOM_SWEEP_KAPPAS:
+                st = [_geom_newton_step(H[t], g0[t], kap, _GEOM_SWEEP_MAXSTEP) for t in range(T)]
+                xt = [x[t] + jnp.asarray(st[t][0], jnp.float32) for t in range(T)]
+                Lk = val(xt)
+                model = sum(float(g0[t] @ st[t][0] + 0.5 * st[t][0] @ (0.5 * (H[t] + H[t].T)) @ st[t][0]) for t in range(T))
+                ladder.append(dict(kappa=kap, dJ=Lk - L0, model=model))
+                if np.isfinite(Lk) and Lk < L0 and (best is None or Lk < best[0]):
+                    best = (Lk, kap, xt, st, model)
+            r = dict(step=it, L0=L0, ndir=ndir, asym=asym, ladder=ladder, time_s=time() - t0)
+            if best is None:
+                r.update(accepted=False)
+                rec['newton'].append(r)
+                logger.info(f"[GEOM-SWEEP] it{total_iter} b{i}: T {T} colours {ncol} dirs {ndir} | newton {it}: no rung "
+                            f"lowers the objective (best dJ {min(e['dJ'] for e in ladder):+.3g}) asym {asym:.1e} | {time() - t0:.0f} s")
+                break
+            Lb, kap, xt, st, model = best
+            s_all = np.concatenate([s for s, _ in st])
+            r.update(accepted=True, kappa=kap, dJ=Lb - L0, model=model, max_step_um=1e4 * float(np.abs(s_all).max()),
+                     rms_step_um=1e4 * float(np.sqrt(np.mean(s_all ** 2))), n_tracks_neg=int(sum(nn > 0 for _, nn in st)),
+                     n_capped=int(sum(float(np.abs(s).max()) >= _GEOM_SWEEP_MAXSTEP * (1 - 1e-6) for s, _ in st)))
+            rec['newton'].append(r)
+            x = xt
+            logger.info(f"[GEOM-SWEEP] it{total_iter} b{i}: T {T} colours {ncol} dirs {ndir} | newton {it}: dJ {Lb - L0:+.3g} "
+                        f"(model {model:+.3g}) kappa {kap:g} max|step| {r['max_step_um']:.0f} um rms {r['rms_step_um']:.0f} um "
+                        f"neg {r['n_tracks_neg']} capped {r['n_capped']} asym {asym:.1e} | {time() - t0:.0f} s")
+        new_states = []
+        for s, a in zip(states, x):
+            o = s.get('opt_state')
+            if isinstance(o, tuple) and len(o) == 2 and isinstance(o[0], optax.ScaleByAdamState):
+                o = (o[0]._replace(mu=jnp.zeros_like(o[0].mu)), o[1])     # momentum of the pre-sweep path: drop it
+            new_states.append({'angles': a, 'opt_state': o})
+        self._chain_cache[i] = new_states
+        rec['time_s'] = time() - t_start
+        self.training_history.setdefault('geom_sweep', []).append(rec)
+
+    def _epoch_accel_add_calib(self):
+        """LARND_EPOCH_ACCEL_BETA with 'calib': accumulate the normalised calibration after this step (epoch mean)."""
+        v = jnp.stack([jnp.asarray(getattr(self.norm_params, k), jnp.float32).reshape(()) for k in self.relevant_params_list])
+        s = self.__dict__.get('_ea_cal_sum')
+        self._ea_cal_sum = v if s is None else s + v
+        self._ea_cal_n = self.__dict__.get('_ea_cal_n', 0) + 1
+
+    def _epoch_accel_geom_masks(self, batch_idx, states):
+        """Per-track 0/1 masks of the pushed geometry coefficients (layout [e1 modes, e2 modes], K per half) for
+        LARND_EPOCH_ACCEL_GEOM_MODES / _HALVES, or None (every coefficient pushed). A track is in the drift frame as in
+        _drift_freeze_masks (e1 has no drift component); with HALVES = 'e2' only those tracks are pushed."""
+        if _EPOCH_ACCEL_GEOM_MODES <= 0 and set(_EPOCH_ACCEL_GEOM_HALVES) >= {'e1', 'e2'}:
+            return None
+        cache = self.__dict__.setdefault('_ea_mask_cache', {})
+        if batch_idx not in cache:
+            ctxs = self._batch_chain_contexts.get(batch_idx, [])
+            if len(ctxs) != len(states):
+                raise RuntimeError(f'epoch accel: {len(ctxs)} contexts vs {len(states)} chain states in batch {batch_idx}')
+            masks = []
+            for ctx, st in zip(ctxs, states):
+                n = int(np.asarray(st['angles']).shape[0]); K = n // 2
+                u0 = _dir_from_angles(ctx.theta0_i, ctx.phi0_i)
+                e1, _ = _transverse_frame(u0)
+                in_df = abs(float(e1[2])) < 1e-6 and float(np.linalg.norm(np.cross(_DRIFT_AXIS, u0))) > 1e-3
+                nm = min(_EPOCH_ACCEL_GEOM_MODES, K) if _EPOCH_ACCEL_GEOM_MODES > 0 else K
+                m = np.zeros(n, np.float64)
+                if 'e1' in _EPOCH_ACCEL_GEOM_HALVES:
+                    m[:nm] = 1.0
+                if 'e2' in _EPOCH_ACCEL_GEOM_HALVES and (in_df or 'e1' in _EPOCH_ACCEL_GEOM_HALVES):
+                    m[K:K + nm] = 1.0
+                masks.append(m)
+            cache[batch_idx] = masks
+        return cache[batch_idx]
+
+    def _epoch_accel(self, total_iter):
+        """LARND_EPOCH_ACCEL_BETA: at an epoch boundary, push every selected block from x_e to x_e + beta (x_e - x_{e-1})
+        (see the flag), with adaptive restart; logs one [EPOCH-ACCEL] line and appends to training_history['epoch_accel']."""
+        st = self.__dict__.setdefault('_ea', {'prev': None})
+        hist = self.training_history.get('losses_iter', [])
+        i0 = st.get('loss_idx')
+        loss_ep = float(np.mean(hist[i0:])) if i0 is not None and len(hist) > i0 else None
+        st['loss_idx'] = len(hist)
+        cur = {'it': int(total_iter), 'loss': loss_ep, 'geom': {}, 'dedx': {}, 'calib': None}
+        if 'geom' in _EPOCH_ACCEL_BLOCKS:
+            cur['geom'] = {bi: [np.asarray(s['angles'], np.float64) for s in sts] for bi, sts in self._chain_cache.items()}
+        if 'dedx' in _EPOCH_ACCEL_BLOCKS:
+            cur['dedx'] = {bi: np.asarray(v['log_dedx'], np.float64) for bi, v in self._dedx_cache.items()}
+        if 'calib' in _EPOCH_ACCEL_BLOCKS and self.__dict__.get('_ea_cal_n', 0):
+            cur['calib'] = np.asarray(self._ea_cal_sum, np.float64) / self._ea_cal_n
+        self._ea_cal_sum, self._ea_cal_n = None, 0
+        prev, st['prev'] = st['prev'], cur        # Nesterov: the next difference is taken from the PRE-push state
+        if prev is None or not (_EPOCH_ACCEL_START <= total_iter <= _EPOCH_ACCEL_STOP):
+            return
+        b = _EPOCH_ACCEL_BETA
+        rec = {'iter': int(total_iter), 'loss_ep': loss_ep, 'loss_prev': prev['loss']}
+        if _EPOCH_ACCEL_RESTART and loss_ep is not None and prev['loss'] is not None and loss_ep > prev['loss']:
+            rec['restart'] = True
+            self.training_history.setdefault('epoch_accel', []).append(rec)
+            logger.info(f"[EPOCH-ACCEL] it{total_iter}: epoch-mean loss {loss_ep:.6g} > {prev['loss']:.6g} -> restart, no push")
+            return
+
+        def push(x, xp, cap):
+            d = np.clip(b * (x - xp), -cap, cap)
+            return x + d, d
+
+        msg = []
+        if cur['geom']:
+            ds, n_cap = [], 0
+            for bi, xs in cur['geom'].items():
+                xps = prev['geom'].get(bi)
+                if xps is None or len(xps) != len(xs) or any(a.shape != c.shape for a, c in zip(xs, xps)):
+                    continue
+                sts = self._chain_cache[bi]
+                masks = self._epoch_accel_geom_masks(bi, sts)
+                new = []
+                for ti, (s, x, xp) in enumerate(zip(sts, xs, xps)):
+                    y, d = push(x, xp, _EPOCH_ACCEL_CAP['geom'])
+                    if masks is not None:
+                        d = d * masks[ti]; y = x + d
+                        ds.append(d[masks[ti] > 0])              # push statistics over the pushed coefficients only
+                    else:
+                        ds.append(d)
+                    n_cap += int(np.sum(np.abs(d) >= _EPOCH_ACCEL_CAP['geom'] * (1 - 1e-9)))
+                    ns = dict(s); ns['angles'] = jnp.asarray(y, jnp.asarray(s['angles']).dtype); new.append(ns)
+                self._chain_cache[bi] = new
+            if ds:
+                d = np.concatenate([x.ravel() for x in ds])
+                rec['geom'] = dict(rms_um=1e4 * float(np.sqrt(np.mean(d ** 2))), max_um=1e4 * float(np.abs(d).max()), n_capped=n_cap, n=int(d.size))
+                msg.append(f"geom push rms {rec['geom']['rms_um']:.2f} max {rec['geom']['max_um']:.1f} um (capped {n_cap}/{d.size})")
+        if cur['dedx']:
+            ds, n_cap = [], 0
+            for bi, x in cur['dedx'].items():
+                xp = prev['dedx'].get(bi)
+                if xp is None or xp.shape != x.shape:
+                    continue
+                y, d = push(x, xp, _EPOCH_ACCEL_CAP['dedx'])
+                ds.append(d); n_cap += int(np.sum(np.abs(d) >= _EPOCH_ACCEL_CAP['dedx'] * (1 - 1e-9)))
+                c = self._dedx_cache[bi]
+                self._dedx_cache[bi] = {**c, 'log_dedx': jnp.asarray(y, jnp.asarray(c['log_dedx']).dtype)}
+            if ds:
+                d = np.concatenate(ds)
+                rec['dedx'] = dict(rms=float(np.sqrt(np.mean(d ** 2))), max=float(np.abs(d).max()), n_capped=n_cap, n=int(d.size))
+                msg.append(f"dedx push rms {rec['dedx']['rms']:.2e} max {rec['dedx']['max']:.2e} (capped {n_cap}/{d.size})")
+        if cur['calib'] is not None and prev['calib'] is not None:
+            sc = self._norm_scale_for_scheme()
+            d = np.clip(b * (cur['calib'] - prev['calib']), -_EPOCH_ACCEL_CAP['calib'] / sc, _EPOCH_ACCEL_CAP['calib'] / sc)
+            self.norm_params = self.norm_params.replace(**{k: getattr(self.norm_params, k) + jnp.asarray(d[j], jnp.asarray(getattr(self.norm_params, k)).dtype)
+                                                           for j, k in enumerate(self.relevant_params_list)})
+            self.update_params()
+            rec['calib'] = {k: float(d[j] * sc) for j, k in enumerate(self.relevant_params_list)}
+            msg.append('calib push ' + ' '.join(f'{k} {v:+.2e}' for k, v in rec['calib'].items()))
+        self.training_history.setdefault('epoch_accel', []).append(rec)
+        logger.info(f"[EPOCH-ACCEL] it{total_iter}: beta {b:g} | " + ' | '.join(msg)
+                    + (f" | epoch-mean loss {loss_ep:.6g} (prev {prev['loss']:.6g})" if loss_ep is not None and prev['loss'] is not None else ''))
+
+    # ── LARND_JOINT_NEWTON (see the flag) ────────────────────────────────────────────────────────────────────────────
+    def _jn_boundary(self, total_iter):
+        """Epoch boundary: end of an assembly epoch -> solve; end of an evaluation epoch -> apply; then start the next
+        step's assembly epoch if one is due."""
+        st = self.__dict__.setdefault('_jn', {'phase': None, 'k': 0})
+        if st['phase'] == 'A':
+            self._jn_solve(total_iter)
+            st['phase'] = 'B'
+            return
+        if st['phase'] == 'B':
+            self._jn_apply(total_iter)
+            st['phase'] = None
+            if _JN_SAVE:
+                self.save_checkpoint(total_iter)
+        if st['phase'] is None and st['k'] < len(_JOINT_NEWTON) and total_iter >= _JOINT_NEWTON[st['k']]:
+            st.update(phase='A', k=st['k'] + 1, blocks={}, t0=time(), it0=int(total_iter))
+            logger.info(f"[JOINT-NEWTON] step {st['k']}: assembly epoch from iteration {total_iter} (Adam held)")
+
+    def _jn_grad(self, tracks, i, ref, epoch, pids, ld, xs, dcal=None, with_grad=True):
+        """Joint loss (and gradient) of batch i at calibration norm_params + dcal (dict, normalised), log dE/dx ld and
+        geometry xs; the calibration is restored afterwards. Returns L or (L, g_cal[5], g_dedx, [g_track])."""
+        base = self.norm_params
+        if dcal:
+            self.norm_params = base.replace(**{k: getattr(base, k) + jnp.asarray(v, jnp.asarray(getattr(base, k)).dtype)
+                                               for k, v in dcal.items()})
+            self.update_params()
+        try:
+            out = self.compute_loss(tracks, i, *ref, epoch=epoch, with_loss=True, with_grad=with_grad, log_dedx=ld,
+                                    parent_ids=pids, chain_angles_per_track=xs)
+        finally:
+            if dcal:
+                self.norm_params = base
+                self.update_params()
+        if not with_grad:
+            return float(out[0])
+        lv, g, gd, gc = out[0], out[1], out[2], out[3]
+        return (float(lv), np.array([float(getattr(g, k)) for k in self.relevant_params_list], np.float64),
+                np.asarray(gd, np.float64).ravel(), [np.asarray(c, np.float64).ravel() for c in gc])
+
+    def _jn_assemble(self, i, tracks, ref, ld, pids, epoch, base):
+        """Assembly visit of batch i: gradient and Hessian blocks (calibration columns, dE/dx band + rank-1, per-track
+        geometry and own-segment cross blocks) by central finite differences of the joint gradient."""
+        t0 = time()
+        st = self._jn
+        P5 = list(self.relevant_params_list)
+        ctxs = self._batch_chain_contexts[i]; states = self._chain_cache[i]
+        assert len(ctxs) == len(states), (len(ctxs), len(states))
+        real = [t for t, c in enumerate(ctxs) if tuple(int(v) for v in c.track_id) != (-1, -1)]
+        x = [jnp.asarray(s['angles'], jnp.float32) for s in states]
+        ld0 = jnp.asarray(ld); Nd = int(ld0.shape[0]); x0d = np.asarray(ld0, np.float64)
+        lv, g, gd, gc = base
+        L0 = float(lv)
+        gcal = np.array([float(getattr(g, k)) for k in P5], np.float64)
+        gd = np.asarray(gd, np.float64).ravel(); gc = [np.asarray(c, np.float64).ravel() for c in gc]
+        n_t = {t: int(x[t].shape[0]) for t in real}
+        off, o = {}, Nd
+        for t in real:
+            off[t] = o; o += n_t[t]
+        n = o
+        Hnn = np.zeros((n, n)); Hnc = np.zeros((n, 5)); Hcc = np.zeros((5, 5))
+
+        def nuis(gd_, gc_):
+            return np.concatenate([gd_] + [gc_[t] for t in real])
+
+        gn = nuis(gd, gc)
+        # calibration columns (exact rows for every block)
+        for j, k in enumerate(P5):
+            h = _JN_EPS_CAL[j if len(_JN_EPS_CAL) == 5 else 0]
+            _, cp, dp, tp = self._jn_grad(tracks, i, ref, epoch, pids, ld0, x, dcal={k: +h})
+            _, cm, dm, tm = self._jn_grad(tracks, i, ref, epoch, pids, ld0, x, dcal={k: -h})
+            Hcc[:, j] = (cp - cm) / (2 * h)
+            Hnc[:, j] = (nuis(dp, tp) - nuis(dm, tm)) / (2 * h)
+        if _JN_DUMP_CALIB:
+            st['blocks'][int(i)] = dict(L0=L0, gc=gcal, gn=gn, Hcc=0.5 * (Hcc + Hcc.T), Hnc=Hnc, Hnn=Hnn, Nd=Nd, real=real,
+                                        n_t=n_t, off=off, asym_cc=float(np.abs(Hcc - Hcc.T).max()))
+            logger.info(f"[JOINT-NEWTON] assemble b{i}: calibration columns only (n {n}) | {time() - t0:.0f} s")
+            return
+        # dE/dx: band(2) from 5 mod-5 probes, minus the analytic rank-1 of the mean constraint, restored below
+        q = None
+        w = float(self.dedx_mean_constraint_weight)
+        sdx = self._batch_seg_dx.get(i)
+        if w > 0 and sdx is not None and np.asarray(sdx).shape[0] >= Nd:
+            l = np.asarray(sdx, np.float64)[:Nd]; Ls = float(l.sum())
+            if Ls > 1e-6:
+                q = np.sqrt(2.0 * w) * (l * np.exp(x0d) / Ls)
+        if Nd >= 2 * _DEDX_GN_BW + 1:
+            V = _dedx_probe_matrix(Nd).astype(np.float64); hd = _JN_EPS['dedx']
+            probes = np.empty((V.shape[0], Nd))
+            for c in range(V.shape[0]):
+                _, _, dp, _ = self._jn_grad(tracks, i, ref, epoch, pids, jnp.asarray(x0d + hd * V[c], ld0.dtype), x)
+                _, _, dm, _ = self._jn_grad(tracks, i, ref, epoch, pids, jnp.asarray(x0d - hd * V[c], ld0.dtype), x)
+                probes[c] = (dp - dm) / (2 * hd)
+            if q is not None:
+                probes = probes - np.outer(V @ q, q)
+            ab = _dedx_band_from_probes(probes, Nd)
+            D = np.zeros((Nd, Nd)); ii = np.arange(Nd)
+            for dlt in range(-_DEDX_GN_BW, _DEDX_GN_BW + 1):
+                jj = ii + dlt; ok = (jj >= 0) & (jj < Nd)
+                D[ii[ok], jj[ok]] = ab[_DEDX_GN_BW - dlt, jj[ok]]
+            D = 0.5 * (D + D.T)
+            if q is not None:
+                D = D + np.outer(q, q)
+            Hnn[:Nd, :Nd] = D
+        # geometry: per-track blocks and own-segment dE/dx cross blocks, colour-compressed
+        cols = self.__dict__.setdefault('_jn_cols', {})
+        if i not in cols:
+            cols[i] = _geom_sweep_colours([ctxs[t] for t in real], _JN_SEP)
+        col = dict(zip(real, cols[i]))
+        pid = np.asarray(self._batch_parent_ids[i], np.int64)
+        segs = {}
+        for t in real:
+            s_ = np.unique(pid[np.asarray(ctxs[t].idxs)]); segs[t] = s_[(s_ >= 0) & (s_ < Nd)]
+        hg = _JN_EPS['geom']; ndir = 0
+        for c in sorted(set(col.values())):
+            mem = [t for t in real if col[t] == c]
+            for j in range(max(n_t[t] for t in mem)):
+                on = [t for t in mem if j < n_t[t]]
+                xp, xm = list(x), list(x)
+                for t in on:
+                    xp[t] = x[t].at[j].add(hg); xm[t] = x[t].at[j].add(-hg)
+                _, _, dp, tp = self._jn_grad(tracks, i, ref, epoch, pids, ld0, xp)
+                _, _, dm, tm = self._jn_grad(tracks, i, ref, epoch, pids, ld0, xm)
+                ndir += 1
+                for t in on:
+                    a = off[t]
+                    Hnn[a:a + n_t[t], a + j] = (tp[t] - tm[t]) / (2 * hg)
+                    if segs[t].size:
+                        Hnn[segs[t], a + j] = (dp[segs[t]] - dm[segs[t]]) / (2 * hg)
+        # symmetrise: the geometry columns filled (geometry rows, own-segment dE/dx rows) of each track's columns
+        G = Hnn.copy()
+        for t in real:
+            a, b = off[t], off[t] + n_t[t]
+            G[a:b, a:b] = 0.5 * (Hnn[a:b, a:b] + Hnn[a:b, a:b].T)
+            if segs[t].size:
+                G[a:b, segs[t]] = Hnn[segs[t], a:b].T
+        Hcc = 0.5 * (Hcc + Hcc.T)
+        st['blocks'][int(i)] = dict(L0=L0, gc=gcal, gn=gn, Hcc=Hcc, Hnc=Hnc, Hnn=G, Nd=Nd, real=real, n_t=n_t, off=off,
+                                    asym_cc=float(np.abs(Hcc - Hcc.T).max()))
+        logger.info(f"[JOINT-NEWTON] assemble b{i}: n {n} (dE/dx {Nd}, geometry {n - Nd} in {len(real)} tracks, "
+                    f"{ndir} colour dirs) | {time() - t0:.0f} s")
+
+    def _jn_solve(self, total_iter):
+        """End of the assembly epoch: candidate steps (calibration, every batch's nuisances) for each damping."""
+        st = self._jn
+        B = st['blocks']
+        if _JN_DUMP:
+            self._jn_dump(total_iter)
+        sc = self._norm_scale_for_scheme()
+        st['cand'], st['eval'] = {}, {}
+        st['L0'] = float(sum(b['L0'] for b in B.values()))
+        Hcc_tot = sum(b['Hcc'] for b in B.values())
+        eig = {bi: _psd_eig(b['Hnn']) for bi, b in B.items()}
+        schur = {}
+        for kc, kn in _JN_LADDER:
+            if kn not in schur:
+                S = np.zeros((5, 5)); r = np.zeros(5); inv = {}; n_neg = 0
+                for bi, b in B.items():
+                    Vp, d, nn = _psd_inverse(b['Hnn'], kn, eig=eig[bi]); n_neg += nn
+                    Z = Vp @ (d[:, None] * (Vp.T @ b['Hnc'])); z = Vp @ (d * (Vp.T @ b['gn']))
+                    S += b['Hcc'] - b['Hnc'].T @ Z; r += b['gc'] - b['Hnc'].T @ z
+                    inv[bi] = (Vp, d)
+                schur[kn] = (S, r, inv, n_neg)
+            S, r, inv, n_neg = schur[kn]
+            Vs, ds, s_neg = _psd_inverse(S, kc)
+            dc = -(Vs @ (ds * (Vs.T @ r)))
+            mc = float(np.abs(dc).max()) * sc
+            if mc > _JN_CAP['calib']:
+                dc = dc * (_JN_CAP['calib'] / mc)
+            steps, n_capped = {}, 0
+            model = float(dc @ sum(b['gc'] for b in B.values()) + 0.5 * dc @ Hcc_tot @ dc)
+            for bi, b in B.items():
+                Vp, d = inv[bi]
+                dn = -(Vp @ (d * (Vp.T @ (b['gn'] + b['Hnc'] @ dc))))
+                Nd = b['Nd']
+                m_d = float(np.abs(dn[:Nd]).max()) / _JN_CAP['dedx'] if Nd else 0.0
+                m_g = float(np.abs(dn[Nd:]).max()) / _JN_CAP['geom'] if dn.size > Nd else 0.0
+                f = max(m_d, m_g, 1.0)
+                if f > 1.0:
+                    dn = dn / f; n_capped += 1
+                model += float(b['gn'] @ dn + 0.5 * dn @ b['Hnn'] @ dn + dn @ b['Hnc'] @ dc)
+                steps[bi] = dn
+            st['cand'][(kc, kn)] = dict(dc=dc, dn=steps, model=model, n_neg=n_neg, s_neg=s_neg, n_capped=n_capped)
+            st['eval'][(kc, kn)] = 0.0
+        del eig, schur
+        logger.info(f"[JOINT-NEWTON] it{total_iter}: assembled {len(B)} batches in {time() - st['t0']:.0f} s; candidates "
+                    + ' | '.join(f"kappa {_jn_kfmt(k)}: model {c['model']:+.4g}, d_cal(%) "
+                                 + ','.join(f'{100 * v * sc:+.2f}' for v in c['dc']) + f", capped {c['n_capped']}"
+                                 for k, c in st['cand'].items()))
+        st['t1'] = time()
+
+    def _jn_dump(self, total_iter):
+        """LARND_JOINT_NEWTON_DUMP: write the per-batch profile pieces of the assembled blocks (nothing is changed). Per
+        batch b, in the normalised calibration variables: the conditional H_cc,b and g_c,b; the dE/dx-profiled
+        S_b = H_cc - H_cn D^+ H_nc and r_b = g_c - H_cn D^+ g_n on the dE/dx block D alone (geometry conditional); the
+        fully profiled S_b, r_b (dE/dx + geometry, as _jn_solve) for each nuisance damping in _JN_DUMP_KN; counts of the
+        dropped (non-positive) nuisance eigenvalues. jac = d ln(phys) / d(norm) at the current point converts the
+        calibration directions to relative units."""
+        B = self._jn['blocks']
+        bis = sorted(B)
+        P5 = list(self.relevant_params_list)
+        out = dict(iteration=int(total_iter), batches=np.array(bis), params=np.array(P5), kn=np.array(_JN_DUMP_KN),
+                   eps=np.array([_JN_EPS['calib'], _JN_EPS['dedx'], _JN_EPS['geom']]),
+                   eps_calib=np.array(_JN_EPS_CAL * (5 // len(_JN_EPS_CAL))), calib_only=np.array(_JN_DUMP_CALIB),
+                   L0=np.array([B[b]['L0'] for b in bis]), Nd=np.array([B[b]['Nd'] for b in bis]),
+                   n=np.array([B[b]['Hnn'].shape[0] for b in bis]),
+                   Hcc=np.stack([B[b]['Hcc'] for b in bis]), gc=np.stack([B[b]['gc'] for b in bis]))
+        Sd, rd, nd_neg = [], [], []
+        S = np.zeros((len(_JN_DUMP_KN), len(bis), 5, 5)); r = np.zeros((len(_JN_DUMP_KN), len(bis), 5))
+        n_neg, wmin, wmax = [], [], []
+        for j, b in enumerate(bis):
+            blk = B[b]; Nd = blk['Nd']
+            eig = _psd_eig(blk['Hnn'])
+            n_neg.append(eig[3]); wmin.append(float(eig[1].min()) if eig[1].size else np.nan)
+            wmax.append(float(eig[1].max()) if eig[1].size else np.nan)
+            for k, kn in enumerate(_JN_DUMP_KN):
+                Vp, d, _ = _psd_inverse(blk['Hnn'], kn, eig=eig)
+                Z = Vp @ (d[:, None] * (Vp.T @ blk['Hnc'])); z = Vp @ (d * (Vp.T @ blk['gn']))
+                S[k, j] = blk['Hcc'] - blk['Hnc'].T @ Z; r[k, j] = blk['gc'] - blk['Hnc'].T @ z
+            if Nd:
+                Vp, d, nn = _psd_inverse(blk['Hnn'][:Nd, :Nd], 0.0)
+                Hd = blk['Hnc'][:Nd]; Z = Vp @ (d[:, None] * (Vp.T @ Hd)); z = Vp @ (d * (Vp.T @ blk['gn'][:Nd]))
+                Sd.append(blk['Hcc'] - Hd.T @ Z); rd.append(blk['gc'] - Hd.T @ z); nd_neg.append(nn)
+            else:
+                Sd.append(blk['Hcc']); rd.append(blk['gc']); nd_neg.append(0)
+        out.update(S=S, r=r, n_neg=np.array(n_neg), eig_min=np.array(wmin), eig_max=np.array(wmax),
+                   Sd=np.stack(Sd), rd=np.stack(rd), nd_neg=np.array(nd_neg))
+        scheme = getattr(self, 'normalization_scheme', None)
+        if scheme in ('sigmoid', 'exp_log'):
+            jac, phys = [], []
+            for k in P5:
+                x = float(getattr(self.norm_params, k))
+                if scheme == 'sigmoid':
+                    s_ = float(self.normalization_scale_sigmoid); lo, hi = float(ranges[k]['min']), float(ranges[k]['max'])
+                    sg = 1.0 / (1.0 + np.exp(-s_ * x)); p_ = lo + (hi - lo) * sg
+                    jac.append((hi - lo) * s_ * sg * (1.0 - sg) / p_)
+                else:
+                    p_ = float(ranges[k]['nom']) * np.exp(float(self.normalization_scale_exp_log) * x)
+                    jac.append(float(self.normalization_scale_exp_log))
+                phys.append(p_)
+            out.update(jac=np.array(jac), phys=np.array(phys), scheme=scheme)
+        if _JN_DUMP_FULL:
+            out.update(Hnn_flat=np.concatenate([B[b]['Hnn'].ravel() for b in bis]),
+                       Hnc_flat=np.concatenate([B[b]['Hnc'].ravel() for b in bis]),
+                       gn_flat=np.concatenate([B[b]['gn'] for b in bis]),
+                       n_tracks=np.array([len(B[b]['real']) for b in bis]),
+                       n_t_flat=np.concatenate([np.array([B[b]['n_t'][t] for t in B[b]['real']], np.int64) for b in bis]))
+            np.savez_compressed(_JN_DUMP, **out)
+        else:
+            np.savez(_JN_DUMP, **out)
+        Stot = S[0].sum(0); rtot = r[0].sum(0)
+        try:
+            Vc = np.linalg.inv(Stot); z = -(Vc @ rtot) / np.sqrt(np.abs(np.diag(Vc)))
+            msg = 'Newton offset / sigma ' + ', '.join(f'{p} {v:+.2f}' for p, v in zip(P5, z))
+        except np.linalg.LinAlgError:
+            msg = 'S singular'
+        logger.info(f"[JOINT-NEWTON] it{total_iter}: dumped the profile pieces of {len(bis)} batches to {_JN_DUMP} "
+                    f"(nuisance eigenvalues dropped: {int(np.sum(n_neg))} of {int(out['n'].sum())}) | kn 0: {msg}")
+
+    def _jn_candidate(self, bi, c):
+        """(log dE/dx, geometry list) of batch bi moved by candidate c."""
+        b = self._jn['blocks'][int(bi)]
+        dn = c['dn'][int(bi)]; Nd = b['Nd']
+        ld = jnp.asarray(np.asarray(self._dedx_cache[bi]['log_dedx'], np.float64) + dn[:Nd], jnp.asarray(self._dedx_cache[bi]['log_dedx']).dtype)
+        xs = [s['angles'] for s in self._chain_cache[bi]]
+        for t in b['real']:
+            a = b['off'][t]
+            xs[t] = jnp.asarray(np.asarray(xs[t], np.float64) + dn[a:a + b['n_t'][t]], jnp.asarray(xs[t]).dtype)
+        return ld, xs
+
+    def _jn_evaluate(self, i, tracks, ref, ld, pids, epoch):
+        """Evaluation visit of batch i: its objective at every candidate (forward only)."""
+        st = self._jn
+        if int(i) not in st['blocks']:
+            raise RuntimeError(f'LARND_JOINT_NEWTON: batch {i} was not assembled')
+        for kap, c in st['cand'].items():
+            ldc, xs = self._jn_candidate(i, c)
+            st['eval'][kap] += self._jn_grad(tracks, i, ref, epoch, pids, ldc, xs,
+                                             dcal={k: c['dc'][j] for j, k in enumerate(self.relevant_params_list)},
+                                             with_grad=False)
+
+    def _jn_apply(self, total_iter):
+        """End of the evaluation epoch: apply the best candidate to every block (or nothing)."""
+        st = self._jn
+        L0 = st['L0']
+        ok = {k: v for k, v in st['eval'].items() if np.isfinite(v) and v < L0}
+        sc = self._norm_scale_for_scheme()
+        rec = dict(step=st['k'], it_start=st['it0'], it_end=int(total_iter), L0=L0,
+                   ladder=[dict(kappa=k[1], kappa_c=k[0], dJ=st['eval'][k] - L0, model=c['model'], n_capped=c['n_capped'],
+                                d_cal={p: float(c['dc'][j] * sc) for j, p in enumerate(self.relevant_params_list)})
+                           for k, c in st['cand'].items()],
+                   time_s=time() - st['t0'])
+        if not ok:
+            rec['accepted'] = False
+            logger.info(f"[JOINT-NEWTON] step {st['k']}: no candidate lowers the objective (dJ "
+                        + ', '.join(f"{_jn_kfmt(k)}: {v - L0:+.4g}" for k, v in st['eval'].items()) + ") -> no step")
+        else:
+            kap = min(ok, key=ok.get); c = st['cand'][kap]
+            for bi in st['blocks']:
+                ldc, xs = self._jn_candidate(bi, c)
+                dc_ = self._dedx_cache[bi]
+                self._dedx_cache[bi] = {**dc_, 'log_dedx': ldc, 'opt_state': _zero_adam_mu(dc_['opt_state'])}
+                self._chain_cache[bi] = [{**s, 'angles': a, 'opt_state': _zero_adam_mu(s['opt_state'])}
+                                         if 'opt_state' in s else {**s, 'angles': a}
+                                         for s, a in zip(self._chain_cache[bi], xs)]
+            self.norm_params = self.norm_params.replace(**{k: getattr(self.norm_params, k) + jnp.asarray(c['dc'][j], jnp.asarray(getattr(self.norm_params, k)).dtype)
+                                                           for j, k in enumerate(self.relevant_params_list)})
+            self.update_params()
+            self.opt_state = _zero_adam_mu(self.opt_state)
+            dn = np.concatenate([v for v in c['dn'].values()])
+            gs = np.concatenate([c['dn'][bi][b['Nd']:] for bi, b in st['blocks'].items()])
+            ds = np.concatenate([c['dn'][bi][:b['Nd']] for bi, b in st['blocks'].items()])
+            rec.update(accepted=True, kappa=kap[1], kappa_c=kap[0], dJ=ok[kap] - L0, model=c['model'],
+                       geom_rms_um=1e4 * float(np.sqrt(np.mean(gs ** 2))) if gs.size else 0.0,
+                       geom_max_um=1e4 * float(np.abs(gs).max()) if gs.size else 0.0,
+                       dedx_rms=float(np.sqrt(np.mean(ds ** 2))) if ds.size else 0.0)
+            logger.info(f"[JOINT-NEWTON] step {st['k']} APPLIED at it{total_iter}: kappa {_jn_kfmt(kap)}, dJ {ok[kap] - L0:+.5g} "
+                        f"(model {c['model']:+.5g}) | d_cal(%) " + ' '.join(f'{p} {100 * c["dc"][j] * sc:+.2f}' for j, p in enumerate(self.relevant_params_list))
+                        + f" | geometry rms {rec['geom_rms_um']:.1f} max {rec['geom_max_um']:.0f} um | dE/dx rms {rec['dedx_rms']:.2e}"
+                        f" | ladder dJ " + ', '.join(f"{_jn_kfmt(k)}: {v - L0:+.4g}" for k, v in st['eval'].items())
+                        + f" | {rec['time_s'] / 60:.1f} min")
+        self.training_history.setdefault('joint_newton', []).append(rec)
+        st.update(blocks={}, cand={}, eval={})
 
     @staticmethod
     def _chain_flat_ok(states, grads, min_t=None):
@@ -6060,6 +7053,10 @@ class GradientDescentFitter(ParamFitter):
 
                 for i_bt, i in enumerate(indices):
                     start_time = time()
+                    if _EPOCH_ACCEL and i_bt == 0:
+                        self._epoch_accel(total_iter)   # LARND_EPOCH_ACCEL_BETA: push along the last epoch's drift
+                    if _JOINT_NEWTON and i_bt == 0:
+                        self._jn_boundary(total_iter)   # LARND_JOINT_NEWTON: phase change (assemble / evaluate / apply)
 
                     # sim (host-side batch cache: the chopped+padded batch is a pure function of the batch
                     # index, so it is built and validated once per batch instead of on every visit)
@@ -6100,6 +7097,8 @@ class GradientDescentFitter(ParamFitter):
 
                     # dEdx local state for this batch (gated by dedx_start_iter / dedx_freeze_iter)
                     self._cur_total_iter = total_iter  # for the calibration-start gate in process_grads
+                    if _CALIB_SAGA:
+                        self._saga_batch = (int(i), len(dataloader_sim))   # LARND_CALIB_SAGA: table slot of this gradient
                     _dedx_active  = self.fit_dedx and (total_iter >= self.dedx_start_iter)
                     # Adaptive freeze: latch once the dEdx MAE history plateaus (mean over the last
                     # window vs the previous window changes < rtol) -> robust across seeds/batch sizes.
@@ -6199,6 +7198,15 @@ class GradientDescentFitter(ParamFitter):
                     else:
                         _chain_angles_pt = None
 
+                    if _SEED_DIAG_ONLY:                         # study: seed every batch once, no step, save, stop
+                        _ndone, _ntot = len(self.__dict__.get('_drift_hits_done', ())), len(dataloader_sim)
+                        if _ndone >= _ntot:
+                            logger.info(f"[SEED-DIAG] all {_ntot} batches seeded; saving")
+                            self.save_checkpoint(total_iter)
+                            terminate_fit = True
+                            break
+                        continue
+
                     # ── Study 2 hook: evaluate the objective at the truth point vs the fit
                     # point for this batch, then move on WITHOUT taking a step. Placed here
                     # because _log_dedx / _parent_ids / _chain_angles_pt / selected_tracks_sim /
@@ -6248,6 +7256,16 @@ class GradientDescentFitter(ParamFitter):
                     # loss
                     loss_val, grads, _grads_dedx, _grads_chain, aux, _, _ = self.compute_loss(selected_tracks_sim, i, ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id, epoch=epoch, with_loss=True, with_grad=True, log_dedx=_log_dedx, parent_ids=_parent_ids, chain_angles_per_track=_chain_angles_pt, diff_scale=_diff_scale)
 
+                    # LARND_JOINT_NEWTON: in an assembly / evaluation epoch nothing is updated (the held flag below)
+                    _jn_hold = bool(_JOINT_NEWTON) and self.__dict__.get('_jn', {}).get('phase') is not None
+                    if _jn_hold:
+                        _jn_ref = (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id)
+                        if self._jn['phase'] == 'A':
+                            self._jn_assemble(i, selected_tracks_sim, _jn_ref, _log_dedx, _parent_ids, epoch,
+                                              (loss_val, grads, _grads_dedx, _grads_chain))
+                        else:
+                            self._jn_evaluate(i, selected_tracks_sim, _jn_ref, _log_dedx, _parent_ids, epoch)
+
                     # Apply per-segment dEdx update immediately after every step.
                     # Default = Adam (unchanged). LARND_DEDX_OPT=gn uses the structured Newton
                     # step (banded + Sherman-Morrison); it falls back to Adam whenever the solve
@@ -6258,7 +7276,7 @@ class GradientDescentFitter(ParamFitter):
                         _fm = self._dedx_frozen_mask[i]
                         if _fm.shape[0] == _grads_dedx.shape[0]:
                             _grads_dedx = jnp.where(_fm, 0.0, _grads_dedx)
-                    if _grads_dedx is not None and _log_dedx is not None and not _dedx_frozen:
+                    if _grads_dedx is not None and _log_dedx is not None and not _dedx_frozen and not _jn_hold:
                         _did_gn = False
                         if self._dedx_opt_mode == 'gn' and not _chain_available:
                             _lf = self.compute_loss(
@@ -6292,7 +7310,7 @@ class GradientDescentFitter(ParamFitter):
                     # Geometry block: per-track chain-angle update. Default = Adam (unchanged path);
                     # 'lbfgs' = jitted L-BFGS geometry solve (calibration held at current, as a traced
                     # arg) alternating with the calibration gradient step applied below.
-                    if _chain_active and _grads_chain is not None and not _chain_frozen_now:
+                    if _chain_active and _grads_chain is not None and not _chain_frozen_now and not _jn_hold:
                         if self._geom_optimizer == 'lbfgs':
                             _ref = (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z, ref_ticks, ref_hit_prob, ref_event, ref_pixel_id)
                             _init = [s['angles'] for s in self._chain_cache[i]]
@@ -6305,6 +7323,11 @@ class GradientDescentFitter(ParamFitter):
                             _solver = self._solve_chain_ggn if self._geom_optimizer == 'ggn' else self._solve_chain_gn
                             _solver(i, selected_tracks_sim, _ref, _log_dedx, _parent_ids,
                                     max_iter=self._geom_lbfgs_steps)
+                        elif _GEOM_SWEEP and self._geom_sweep_due(i, total_iter, len(dataloader_sim)):
+                            # LARND_GEOM_SWEEP: per-track Newton step(s) instead of this visit's Adam step
+                            self._geom_sweep_batch(i, selected_tracks_sim, (ref_adcs, ref_pixel_x, ref_pixel_y, ref_pixel_z,
+                                                   ref_ticks, ref_hit_prob, ref_event, ref_pixel_id),
+                                                   _log_dedx is not None, _parent_ids, epoch, total_iter)
                         else:
                             self._process_chain_grads(i, _grads_chain, total_iter)
                         if self._freq_gate('posres', i, self._pos_residual_freq):
@@ -6392,8 +7415,11 @@ class GradientDescentFitter(ParamFitter):
                                     break
 
                     else:
-                        modified_grads = self.process_grads(grads)
+                        modified_grads = (extract_relevant_params(grads, self.relevant_params_list) if _jn_hold
+                                          else self.process_grads(grads))
                         stop_time = time()
+                        if _EPOCH_ACCEL and 'calib' in _EPOCH_ACCEL_BLOCKS:
+                            self._epoch_accel_add_calib()
                         if _FEW_SYNC:
                             # start every device->host copy read below at once (the reads are unchanged; bitwise)
                             for _x in ([modified_grads.get(p) for p in self.relevant_params_list] + [loss_val]
@@ -6427,6 +7453,8 @@ class GradientDescentFitter(ParamFitter):
                         total_iter += 1
                         self.total_iter = total_iter
                         pbar.update(1)
+                        if _GEOM_SWEEP and _GEOM_SWEEP_SAVE and (total_iter - len(dataloader_sim)) in _GEOM_SWEEP:
+                            self.save_checkpoint(total_iter)   # LARND_GEOM_SWEEP_SAVE: the state right after a sweep epoch
 
                         # Checkpointing and termination should only happen after an update
                         if iterations is not None:
