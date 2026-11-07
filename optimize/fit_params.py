@@ -558,6 +558,9 @@ def _coarse_kc(ns):
 #     of all three blocks are zeroed. LARND_JOINT_NEWTON_SAVE=1 writes a checkpoint after each step.
 # Padding tracks are left out. Spline basis, per-segment dE/dx, Adam geometry, sz_mini_bt = 1, no drift freeze, no
 # fitted endpoints, LARND_DEDX_MIN_DX=0. Unset => the default path, untouched.
+# The step counter is not checkpointed: a run resumed at iteration T redoes every listed step with t_k <= T, one after
+# the other, and continuations inherit LARND_* variables from the checkpoint. So unset LARND_JOINT_NEWTON when continuing
+# a run that used it. (Production is safe: POLISH is the last stage and starts at its single step, 20000.)
 # LARND_JOINT_NEWTON_DUMP=<file.npz> (default '' = off; 31 Oct, uncertainty / convergence diagnostics): at the end of each
 # assembly epoch, also write the per-batch profile pieces of the assembled blocks (_jn_dump); the step itself is unchanged.
 # Run it from an end-point checkpoint with --iterations 101 to get the pieces without moving the fit.
@@ -3613,7 +3616,7 @@ class GradientDescentFitter(ParamFitter):
                                  'sz_mini_bt = 1, LARND_CHAIN_FREEZE_DRIFT=0, LARND_FIT_ENDPOINTS=0, LARND_DEDX_MIN_DX=0, '
                                  'and none of LARND_GEOM_SWEEP / LARND_EPOCH_ACCEL_BETA / LARND_CALIB_SAGA')
             logger.info(f"[JOINT-NEWTON] joint Newton steps (calibration + dE/dx + geometry, Schur complement) starting at "
-                        f"{list(_JOINT_NEWTON)}: FD eps {_JN_EPS}, caps {_JN_CAP}, colour separation {_JN_SEP:g} cm, "
+                        f"{list(_JOINT_NEWTON)}: FD eps {dict(_JN_EPS, calib=_JN_EPS_CAL)}, caps {_JN_CAP}, colour separation {_JN_SEP:g} cm, "
                         f"(kappa_calib, kappa_nuis) ladder {list(_JN_LADDER)}" + (", checkpoint after each step" if _JN_SAVE else ""))
         self._dedx_mu_lr_mult = float(os.environ.get('LARND_DEDX_MU_LR_MULT', '1.0'))
         self._dedx_ss: dict = {}   # batch_idx -> {'mu':float, 'a':array, 'opt_state':...}
@@ -5532,7 +5535,7 @@ class GradientDescentFitter(ParamFitter):
             Hnc[:, j] = (nuis(dp, tp) - nuis(dm, tm)) / (2 * h)
         if _JN_DUMP_CALIB:
             st['blocks'][int(i)] = dict(L0=L0, gc=gcal, gn=gn, Hcc=0.5 * (Hcc + Hcc.T), Hnc=Hnc, Hnn=Hnn, Nd=Nd, real=real,
-                                        n_t=n_t, off=off, asym_cc=float(np.abs(Hcc - Hcc.T).max()))
+                                        n_t=n_t, off=off)
             logger.info(f"[JOINT-NEWTON] assemble b{i}: calibration columns only (n {n}) | {time() - t0:.0f} s")
             return
         # dE/dx: band(2) from 5 mod-5 probes, minus the analytic rank-1 of the mean constraint, restored below
@@ -5594,8 +5597,7 @@ class GradientDescentFitter(ParamFitter):
             if segs[t].size:
                 G[a:b, segs[t]] = Hnn[segs[t], a:b].T
         Hcc = 0.5 * (Hcc + Hcc.T)
-        st['blocks'][int(i)] = dict(L0=L0, gc=gcal, gn=gn, Hcc=Hcc, Hnc=Hnc, Hnn=G, Nd=Nd, real=real, n_t=n_t, off=off,
-                                    asym_cc=float(np.abs(Hcc - Hcc.T).max()))
+        st['blocks'][int(i)] = dict(L0=L0, gc=gcal, gn=gn, Hcc=Hcc, Hnc=Hnc, Hnn=G, Nd=Nd, real=real, n_t=n_t, off=off)
         logger.info(f"[JOINT-NEWTON] assemble b{i}: n {n} (dE/dx {Nd}, geometry {n - Nd} in {len(real)} tracks, "
                     f"{ndir} colour dirs) | {time() - t0:.0f} s")
 
@@ -5613,15 +5615,15 @@ class GradientDescentFitter(ParamFitter):
         schur = {}
         for kc, kn in _JN_LADDER:
             if kn not in schur:
-                S = np.zeros((5, 5)); r = np.zeros(5); inv = {}; n_neg = 0
+                S = np.zeros((5, 5)); r = np.zeros(5); inv = {}
                 for bi, b in B.items():
-                    Vp, d, nn = _psd_inverse(b['Hnn'], kn, eig=eig[bi]); n_neg += nn
+                    Vp, d, _ = _psd_inverse(b['Hnn'], kn, eig=eig[bi])
                     Z = Vp @ (d[:, None] * (Vp.T @ b['Hnc'])); z = Vp @ (d * (Vp.T @ b['gn']))
                     S += b['Hcc'] - b['Hnc'].T @ Z; r += b['gc'] - b['Hnc'].T @ z
                     inv[bi] = (Vp, d)
-                schur[kn] = (S, r, inv, n_neg)
-            S, r, inv, n_neg = schur[kn]
-            Vs, ds, s_neg = _psd_inverse(S, kc)
+                schur[kn] = (S, r, inv)
+            S, r, inv = schur[kn]
+            Vs, ds, _ = _psd_inverse(S, kc)
             dc = -(Vs @ (ds * (Vs.T @ r)))
             mc = float(np.abs(dc).max()) * sc
             if mc > _JN_CAP['calib']:
@@ -5639,14 +5641,13 @@ class GradientDescentFitter(ParamFitter):
                     dn = dn / f; n_capped += 1
                 model += float(b['gn'] @ dn + 0.5 * dn @ b['Hnn'] @ dn + dn @ b['Hnc'] @ dc)
                 steps[bi] = dn
-            st['cand'][(kc, kn)] = dict(dc=dc, dn=steps, model=model, n_neg=n_neg, s_neg=s_neg, n_capped=n_capped)
+            st['cand'][(kc, kn)] = dict(dc=dc, dn=steps, model=model, n_capped=n_capped)
             st['eval'][(kc, kn)] = 0.0
         del eig, schur
         logger.info(f"[JOINT-NEWTON] it{total_iter}: assembled {len(B)} batches in {time() - st['t0']:.0f} s; candidates "
                     + ' | '.join(f"kappa {_jn_kfmt(k)}: model {c['model']:+.4g}, d_cal(%) "
                                  + ','.join(f'{100 * v * sc:+.2f}' for v in c['dc']) + f", capped {c['n_capped']}"
                                  for k, c in st['cand'].items()))
-        st['t1'] = time()
 
     def _jn_dump(self, total_iter):
         """LARND_JOINT_NEWTON_DUMP: write the per-batch profile pieces of the assembled blocks (nothing is changed). Per
@@ -5766,7 +5767,6 @@ class GradientDescentFitter(ParamFitter):
                                                            for j, k in enumerate(self.relevant_params_list)})
             self.update_params()
             self.opt_state = _zero_adam_mu(self.opt_state)
-            dn = np.concatenate([v for v in c['dn'].values()])
             gs = np.concatenate([c['dn'][bi][b['Nd']:] for bi, b in st['blocks'].items()])
             ds = np.concatenate([c['dn'][bi][:b['Nd']] for bi, b in st['blocks'].items()])
             rec.update(accepted=True, kappa=kap[1], kappa_c=kap[0], dJ=ok[kap] - L0, model=c['model'],
