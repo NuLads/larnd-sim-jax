@@ -5167,3 +5167,12 @@ replica ensemble).
   replica-measured optimiser scatter, reproduce the production spread of Ab and lifetime; they miss part of tran_diff (x1.3)
   and long_diff (x1.5) and most of eField (x4.4: the endpoint smear acts per sample). As pre-registered, the pooled ensemble
   stays the quoted uncertainty. The derivative thread (DXPROF -> GNPROF -> GNREAL) is complete; nothing further launched.
+
+## 7 Nov 2026 — code state committed (branch dedx_soft_barrier, not pushed)
+- c111f0a + 50d5c58: the live fit code exactly as validated (fit_params.py md5 627cf151, example_run.py md5 61dd8b6a =
+  the 6 Nov production / EXP41C75 acceptance tree). 755c42c then removes dead joint-Newton bookkeeping (no computation
+  changed; checked statically) -> live fit_params.py md5 62ba3408 from that commit on.
+- 5eb427e: the hand-written code of the study workspaces (/sdf/scratch/.../review_2026_09/<STUDY>) copied to
+  review_2026_09/studies/ (README.md, PRODUCTION.md = the production pipeline, MANIFEST.txt + sync_from_scratch.sh to
+  refresh it). The scripts still run from /sdf/scratch. TRUTHC's review-copy change is now a patch (TRUTHC/patch_truthc.diff).
+- review_2026_09/reports/kn10_uncertainty.html: the 7 Nov uncertainty findings report.

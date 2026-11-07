@@ -1,0 +1,430 @@
+<title>KN10 Uncertainty Findings</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~68ch) with full-column figures; summary first, then one section per finding. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --fg: #1b2330;
+  --muted: #5a6577;
+  --rule: #d9dee6;
+  --accent: #1f5c99;
+  --band: #dfeee3;
+  --band-edge: #9cc7a7;
+  --good: #2f7d4a;
+  --bad: #b0442c;
+  --s-truth: #6c7a90;
+  --s-fixed: #b0442c;
+  --s-dedx: #b98113;
+  --s-geom: #3f8a5a;
+  --s-both: #1f5c99;
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161d; --surface: #1a2029; --fg: #e3e8ef; --muted: #9aa5b5; --rule: #2d3542;
+    --accent: #7fb2ea; --band: #1f3326; --band-edge: #3f6e4c; --good: #6cc48b; --bad: #ec8a70;
+    --s-truth: #9fadc2; --s-fixed: #ec8a70; --s-dedx: #e2b04a; --s-geom: #6cc48b; --s-both: #7fb2ea;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --fg: #e3e8ef; --muted: #9aa5b5; --rule: #2d3542;
+  --accent: #7fb2ea; --band: #1f3326; --band-edge: #3f6e4c; --good: #6cc48b; --bad: #ec8a70;
+  --s-truth: #9fadc2; --s-fixed: #ec8a70; --s-dedx: #e2b04a; --s-geom: #6cc48b; --s-both: #7fb2ea;
+  color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 17px; line-height: 1.55;
+}
+.page {
+  max-width: 46rem; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 64px;
+  display: flex; flex-direction: column; gap: 40px;
+}
+header { display: flex; flex-direction: column; gap: 10px; }
+.eyebrow {
+  font-family: var(--font-data); font-size: 12.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: 34px; line-height: 1.12; font-weight: 700; }
+h2 { font-size: 23px; line-height: 1.2; font-weight: 600; }
+h3 { font-size: 16px; font-weight: 600; letter-spacing: 0.01em; }
+p { margin: 0; }
+.lead { color: var(--muted); font-size: 17.5px; }
+section { display: flex; flex-direction: column; gap: 16px; }
+section > h2 { padding-top: 18px; border-top: 1px solid var(--rule); }
+ul, ol { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 8px; }
+code, .mono { font-family: var(--font-data); font-size: 0.86em; }
+.findings {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 6px;
+  padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;
+}
+.findings ol { gap: 10px; }
+.findings li::marker { font-family: var(--font-display); font-weight: 600; color: var(--accent); }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+thead th { font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--muted); letter-spacing: 0.02em; }
+td.num, th.num { font-family: var(--font-data); font-size: 13.5px; }
+td.wrap { white-space: normal; text-align: left; min-width: 14rem; }
+.pill {
+  display: inline-block; font-family: var(--font-display); font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
+  padding: 2px 8px; border-radius: 99px; border: 1px solid currentColor;
+}
+.pill.good { color: var(--good); }
+.pill.bad { color: var(--bad); }
+.in { color: var(--good); font-weight: 500; }
+.out { color: var(--bad); font-weight: 500; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+figcaption { font-size: 15px; color: var(--muted); }
+figcaption b { color: var(--fg); font-family: var(--font-display); font-weight: 600; }
+.chart { width: 100%; min-width: 0; }
+.chart svg { display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-family: var(--font-display); font-size: 13px; color: var(--fg); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+.sw.hollow { background: transparent !important; border: 2px solid; box-sizing: border-box; }
+.sw.band { border-radius: 2px; width: 16px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.two > * { min-width: 0; }
+@media (max-width: 640px) { .two { grid-template-columns: 1fr; } h1 { font-size: 28px; } body { font-size: 16.5px; } }
+.box {
+  border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; display: flex; flex-direction: column; gap: 8px; font-size: 15.5px;
+}
+.sources { font-size: 14px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+.sources code { word-break: break-all; }
+svg text { font-family: var(--font-display); }
+svg .val { font-family: var(--font-data); }
+</style>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">larnd-sim-jax · KN10 calibration · simulation closure · 6–7 Nov 2026</div>
+    <h1>KN10 uncertainty findings</h1>
+    <p class="lead">This report covers the production changes adopted on 6 November and the uncertainty work that followed them. That work asked why the Hessian-based uncertainty failed, then tested a width built from derivatives on production fits. Every number comes from simulation, and errors are in % of the true value. The parameters are Ab (Birks), eField (drift field), tran_diff and long_diff (diffusion) and lifetime (electron lifetime).</p>
+  </header>
+
+  <div class="findings">
+    <h3>Conclusions</h3>
+    <ol>
+      <li>Production now runs fit → FR → H → POLISH with a shared compile cache and targets on <code>/sdf/data</code>. The acceptance run on an unseen sample passed all five checks.</li>
+      <li>The uncertainty to quote stays the ensemble spread of the polished estimate over 30 production fits. That is 0.16 % on Ab, 0.043 % on eField, 1.3 % on tran_diff, 5.2 % on long_diff and 3.7 % on lifetime.</li>
+      <li>The textbook Hessian is about 3× too narrow (20× on eField) because it treats the fitted dE/dx and track geometry as known. Evaluated at the truth with every nuisance true, the same formula is right.</li>
+      <li>Most of the gap closes when the curvature is profiled over every fitted nuisance using first derivatives only (Gauss–Newton). Each batch must be bounded so it cannot remove more information than it holds, and with that bound the width is stable on 12 of 12 fits.</li>
+      <li>On production fits, that width plus the measured optimiser scatter matches the spread for Ab and lifetime. It falls short for tran_diff (1.3×), long_diff (1.5×) and eField (4.4×). The 1 mm endpoint smear shifts eField coherently within each sample, and no derivative at the fit point can see that.</li>
+    </ol>
+  </div>
+
+  <section>
+    <h2>In production since 6 November</h2>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Change</th><th>Status</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr><td>POLISH: a calibration-only Newton step at the end point, as a fourth job</td><td><span class="pill good">ADOPTED</span></td><td class="wrap">12 unseen fits: long_diff improves on 11 of 12 (p = 0.002), RMS 7.99 → 6.49 %. Lifetime RMS 4.04 → 3.13 %. No parameter got worse.</td></tr>
+          <tr><td>Shared compile cache per pipeline</td><td><span class="pill good">ADOPTED</span></td><td class="wrap">First epoch FR 3:23, H 2:06, against 9:50 with a per-job cache</td></tr>
+          <tr><td>Targets written to <code>/sdf/data</code></td><td><span class="pill good">ADOPTED</span></td><td class="wrap">All four target directories land there and none in the repository</td></tr>
+          <tr><td>Acceptance run EXP41C75 (unseen sample)</td><td><span class="pill good">PASS 5/5</span></td><td class="wrap">3.1 GPU-hours for the whole pipeline. Polished errors are within 2.5 σ (table below).</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>EXP41C75, polished</th><th class="num">Ab</th><th class="num">eField</th><th class="num">tran_diff</th><th class="num">long_diff</th><th class="num">lifetime</th></tr></thead>
+        <tbody>
+          <tr><td>error (%)</td><td class="num">−0.14</td><td class="num">+0.108</td><td class="num">+1.32</td><td class="num">+4.55</td><td class="num">+4.92</td></tr>
+          <tr><td>error ÷ quoted uncertainty</td><td class="num">−0.91</td><td class="num">+2.48</td><td class="num">0.98</td><td class="num">0.87</td><td class="num">1.32</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>eField's +2.5 σ is its known offset of about +0.13 %, which is left in because we do not subtract simulation-derived offsets.</p>
+  </section>
+
+  <section>
+    <h2>The uncertainty to quote</h2>
+    <p>The spread of the polished estimate over the 30 production end points with realistic 1 mm endpoints: samples 1–6 and 17–40 at iteration 20000.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>n = 30, polished estimate</th><th class="num">Ab</th><th class="num">eField</th><th class="num">tran_diff</th><th class="num">long_diff</th><th class="num">lifetime</th></tr></thead>
+        <tbody>
+          <tr><td><b>spread (SD, %)</b></td><td class="num"><b>0.156</b></td><td class="num"><b>0.043</b></td><td class="num"><b>1.32</b></td><td class="num"><b>5.25</b></td><td class="num"><b>3.74</b></td></tr>
+          <tr><td>mean offset, diagnostic only (%)</td><td class="num">+0.01 ± 0.03</td><td class="num">+0.129 ± 0.008</td><td class="num">+0.71 ± 0.24</td><td class="num">+3.06 ± 0.96</td><td class="num">+0.51 ± 0.68</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The ensemble spread has been checked out of sample: on 12 unseen fits, 78 % of the 60 pulls fall within 1 σ (expected 67 %) and 97 % within 2 σ (expected 94 %). This used the end-point estimate against the 24-fit reference. Averaging four H-stage reruns would cut the error by only 7–11 % (nothing on eField) for 90 % more GPU time, so it was not recommended.</p>
+  </section>
+
+  <section>
+    <h2>Why the Hessian width failed</h2>
+    <p>Each row below compares the spread of the polished estimate over 8 fits with a predicted width. A ratio of 1 means the width is right, and the shaded band is the range consistent with 1 for 8 fits. These fits used true track endpoints, so the only error sources are the data and the fit itself.</p>
+    <figure>
+      <div class="legend" id="leg1"></div>
+      <div class="chart" id="fig1" role="img" aria-label="Ratio of observed spread to predicted width for five ways of building the width, per parameter, on a log scale"></div>
+      <figcaption><b>Figure 1.</b> Observed spread ÷ predicted width, true-end fits KN10N1–8 C75H at 20000 (log scale). The band [0.49, 1.51] is the 95 % range for an SD from 8 fits. Above 1, the width is too narrow.</figcaption>
+    </figure>
+    <ul>
+      <li><b>The theory holds at the truth.</b> With every nuisance (dE/dx and geometry) set to its true value, the sandwich width falls within the band for four parameters. eField's 1.96 lies above it.</li>
+      <li><b>Holding the fitted nuisances fixed is the cause.</b> At the fit point, the old Hessian ignores that dE/dx and track positions move together with the calibration. That makes the width 3× too narrow, and 20× on eField.</li>
+      <li><b>Each nuisance block carries different parameters.</b> Profiling over dE/dx brings Ab and lifetime to 1.1–1.3, and profiling over geometry takes eField from 20 to 1.9. Doing both brings Ab, long_diff and lifetime within about 30 % of 1.</li>
+    </ul>
+    <div class="box">
+      <h3>How the profiled width is built</h3>
+      <p>For each batch, one forward and one reverse derivative through the simulator are taken per column. The columns are the 5 calibration parameters, 5 dE/dx probes and every geometry spline coefficient, about 500 nuisances per batch. The curvature is the loss's own Gauss–Newton matrix, so no second derivative of the non-smooth geometry is needed. The bread is B = Σ<sub>b</sub> (F<sub>cc</sub> − F<sub>cn</sub> A<sub>nn</sub><sup>−1</sup> F<sub>nc</sub>), and the meat comes from the per-batch calibration gradients. The width is the square root of the diagonal of B<sup>−1</sup> J B<sup>−1</sup>. The block costs about 90 s per batch on an A100.</p>
+    </div>
+    <p>Two variants did not work:</p>
+    <ul>
+      <li><b>The textbook expected information.</b> It ignores the ±2-tick hit-matching window and so counts about twice the information. That makes it 1.4–5× too narrow.</li>
+      <li><b>A one-step estimate using the profiled score.</b> With dE/dx profiled exactly by finite differences, the curvature was stable, but the profiled score is heavy-tailed. The resulting estimate was 4–8× noisier than the plain conditional estimate on Ab, long_diff and lifetime.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Making the width stable</h2>
+    <p>The loss curvature is not positive definite in the nuisances: it has a median of 2 negative directions per batch, because the hit-matching term is concave. In about 1 batch in 100, an eigenvalue near zero makes that batch's profile term explode. The fix is a per-batch bound, 0 ≤ F<sub>cn</sub>A<sub>nn</sub><sup>−1</sup>F<sub>nc</sub> ≤ F<sub>cc</sub>. In words, profiling cannot remove more information than the batch holds. I chose the bound after the first test, so it was checked again on four production fits it had not seen.</p>
+    <figure>
+      <div class="legend" id="leg2"></div>
+      <div class="chart" id="fig2" role="img" aria-label="Per-fit change of the width between two regularisation strengths, with and without the per-batch bound"></div>
+      <figcaption><b>Figure 2.</b> Largest change of a fit's width over the 5 parameters when the ridge goes from 0 to 10<sup>−3</sup> (log scale). The pre-registered rule allows 10 %. Without the bound, 7 of 12 fits break it. With the bound, every fit changes by less than 6 %.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>The check on production fits</h2>
+    <p>The test used the bounded width on four production end points, EXP29–32 C75H at 20000 with realistic endpoints. It was compared with the spread over the 30 production fits. A derivative cannot see optimiser scatter, which is the run-to-run spread on identical data, so that scatter was added in quadrature. It was measured from four repeated H stages per sample. The rules were written before submission, and every consistency check passed.</p>
+    <figure>
+      <div class="legend" id="leg3"></div>
+      <div class="chart" id="fig3" role="img" aria-label="Ratio of production spread to the derivative width with and without optimiser scatter, per parameter"></div>
+      <figcaption><b>Figure 3.</b> Production spread (n = 30) ÷ predicted width (log scale). The band [0.74, 1.26] is the 95 % range for an SD from 30 fits. Result: 2 of 5 inside, <span class="pill bad">NOT CONFIRMED</span>, as predicted before the run.</figcaption>
+    </figure>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>production, % of truth</th><th class="num">Ab</th><th class="num">eField</th><th class="num">tran_diff</th><th class="num">long_diff</th><th class="num">lifetime</th></tr></thead>
+        <tbody>
+          <tr><td>spread of the estimate (n = 30)</td><td class="num">0.156</td><td class="num">0.043</td><td class="num">1.32</td><td class="num">5.25</td><td class="num">3.74</td></tr>
+          <tr><td>derivative width (bounded, median of 4)</td><td class="num">0.111</td><td class="num">0.0078</td><td class="num">0.79</td><td class="num">2.54</td><td class="num">3.00</td></tr>
+          <tr><td>optimiser scatter (4 H-stage runs)</td><td class="num">0.097</td><td class="num">0.006</td><td class="num">0.64</td><td class="num">2.46</td><td class="num">1.97</td></tr>
+          <tr><td><b>spread ÷ √(width² + scatter²)</b></td><td class="num in">1.06</td><td class="num out">4.38</td><td class="num out">1.30</td><td class="num out">1.48</td><td class="num in">1.04</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figure>
+      <div class="legend" id="leg4"></div>
+      <div class="chart" id="fig4" role="img" aria-label="Growth from true to realistic endpoints of the observed spread and of the derivative width"></div>
+      <figcaption><b>Figure 4.</b> Growth from true endpoints to realistic 1 mm endpoints (log scale), for the observed spread (8 true-end fits → 30 production fits) and for the derivative width. The width sees part of the smear: eField grows 2.4×, but its spread grows 7×.</figcaption>
+    </figure>
+    <p>eField's spread from the smear behaves like a separate offset in each sample. Its per-fit pulls are +2.5, +1.0, +0.4 and +4.0. Comparing batches within one fit therefore cannot reveal it. The shortfall on tran_diff and long_diff remains under a robust spread measure, so outliers do not cause it. The unbounded variant looks closer on average (0.78 / 2.21 / 1.15 / 0.90 / 0.72), but on two of the four fits it changes by up to 8× with the ridge, so that agreement is an artefact.</p>
+  </section>
+
+  <section>
+    <h2>What this means</h2>
+    <ul>
+      <li><b>Quote the ensemble.</b> The pooled spread of the polished estimate stays the uncertainty for all five parameters.</li>
+      <li><b>A per-fit width is possible for Ab and lifetime.</b> It needs the bounded Gauss–Newton profile, at about 2.5–3.5 A100-hours per fit, plus a few H-stage reruns for the optimiser scatter, which is 30–40 % of their variance. This becomes useful when real data no longer match the simulated ensemble.</li>
+      <li><b>eField's uncertainty comes from the endpoint estimate.</b> Only an ensemble with realistic endpoints captures it. An offline comparison of true-end and smeared-end fits of the same data (samples 1–12, no GPU) could show what sets each sample's offset.</li>
+      <li><b>long_diff remains the weakest parameter</b>, at 5.2 % spread and a +3 % offset. The open levers are coarser dE/dx segments and marginalising over dE/dx, and neither is built yet.</li>
+    </ul>
+  </section>
+
+  <footer class="sources">
+    <h3>Sources</h3>
+    <p>Rules, results and post-hoc notes are in <code>review_2026_09/REVIEW.md</code>, in the sections "Acceptance pipeline EXP41C75 RESULT", "DXPROF RESULT", "GNPROF RESULT" and "GNREAL RESULT".</p>
+    <p>Readouts: <code>/sdf/scratch/neutrino/pgranger/review_2026_09/TRUTHC/theory_check.py</code>, <code>…/GNPROF/read_gn.py</code> with <code>diag_gn*.py</code>, <code>…/GNREAL/read_gr.py</code> with <code>diag_gr.py</code>, and <code>…/UQ/polish_table.py</code>.</p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var P = ['Ab', 'eField', 'tran_diff', 'long_diff', 'lifetime'];
+  var NS = 'http://www.w3.org/2000/svg';
+
+  function el(tag, attrs, parent) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function txt(parent, x, y, s, attrs) {
+    var t = el('text', Object.assign({ x: x, y: y }, attrs || {}), parent);
+    t.textContent = s;
+    return t;
+  }
+  function logx(v, lo, hi, x0, x1) {
+    return x0 + (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)) * (x1 - x0);
+  }
+  function fmt(v) { return v >= 10 ? v.toFixed(1) : v.toFixed(2); }
+
+  function legend(id, items) {
+    var box = document.getElementById(id);
+    box.innerHTML = '';
+    items.forEach(function (it) {
+      var s = document.createElement('span');
+      var sw = document.createElement('i');
+      sw.className = 'sw' + (it.hollow ? ' hollow' : '') + (it.band ? ' band' : '');
+      if (it.band) { sw.style.background = 'var(--band)'; sw.style.border = '1px solid var(--band-edge)'; }
+      else if (it.hollow) sw.style.borderColor = it.color;
+      else sw.style.background = it.color;
+      s.appendChild(sw);
+      s.appendChild(document.createTextNode(it.label));
+      box.appendChild(s);
+    });
+  }
+
+  /* Rows of parameters, one sub-row per series, log x axis, shaded band. */
+  function dotRows(id, cfg) {
+    var box = document.getElementById(id);
+    var W = Math.max(300, box.clientWidth);
+    var narrow = W < 480;
+    var labW = narrow ? 66 : 86, padR = 34, top = 6, sub = narrow ? 15 : 17, gap = 12, axisH = 30;
+    var ns = cfg.series.length;
+    var rowH = ns * sub + gap;
+    var H = top + P.length * rowH + axisH;
+    box.innerHTML = '';
+    var svg = el('svg', { width: W, height: H, viewBox: '0 0 ' + W + ' ' + H }, box);
+    var x0 = labW, x1 = W - padR, lo = cfg.domain[0], hi = cfg.domain[1];
+    var X = function (v) { return logx(Math.min(Math.max(v, lo), hi), lo, hi, x0, x1); };
+    var yb = top + P.length * rowH;
+    if (cfg.band) {
+      el('rect', { x: X(cfg.band[0]), y: top - 2, width: X(cfg.band[1]) - X(cfg.band[0]), height: yb - top,
+        style: 'fill: var(--band); stroke: var(--band-edge); stroke-width: 1' }, svg);
+    }
+    cfg.ticks.forEach(function (t) {
+      var x = X(t);
+      el('line', { x1: x, x2: x, y1: top - 2, y2: yb, style: 'stroke: var(--rule); stroke-width: 1' }, svg);
+      txt(svg, x, yb + 16, String(t), { 'text-anchor': 'middle', 'font-size': 11.5, style: 'fill: var(--muted)' });
+    });
+    if (cfg.ref) {
+      el('line', { x1: X(cfg.ref), x2: X(cfg.ref), y1: top - 2, y2: yb, style: 'stroke: var(--muted); stroke-width: 1.3' }, svg);
+    }
+    P.forEach(function (p, i) {
+      var ry = top + i * rowH;
+      if (i > 0) el('line', { x1: 0, x2: W, y1: ry - gap / 2, y2: ry - gap / 2, style: 'stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 3' }, svg);
+      txt(svg, 0, ry + (ns * sub) / 2 + 4, p, { 'font-size': narrow ? 12 : 13, 'font-weight': 600, style: 'fill: var(--fg)' });
+      cfg.series.forEach(function (s, j) {
+        var v = s.v[i], cy = ry + j * sub + sub / 2, cx = X(v);
+        if (s.bar) {
+          el('line', { x1: X(cfg.domain[0]), x2: cx, y1: cy, y2: cy, style: 'stroke: ' + s.color + '; stroke-width: ' + (sub - 7) + '; stroke-linecap: butt' }, svg);
+        } else if (s.hollow) {
+          el('circle', { cx: cx, cy: cy, r: 4.5, style: 'fill: var(--surface); stroke: ' + s.color + '; stroke-width: 2' }, svg);
+        } else {
+          el('circle', { cx: cx, cy: cy, r: 5, style: 'fill: ' + s.color }, svg);
+        }
+        var right = cx < x1 - 40;
+        var t = txt(svg, right ? cx + 9 : cx - 9, cy + 4, fmt(v) + (v > hi ? ' →' : ''),
+          { 'text-anchor': right ? 'start' : 'end', 'font-size': 11, 'class': 'val', style: 'fill: var(--muted)' });
+        var tt = el('title', {}, t); tt.textContent = s.label + ', ' + p + ': ' + fmt(v);
+      });
+    });
+    txt(svg, x1, H - 2, cfg.axis, { 'text-anchor': 'end', 'font-size': 11.5, style: 'fill: var(--muted)' });
+  }
+
+  /* Per-fit stability: categorical x (two groups), log y, threshold line. */
+  function stability(id) {
+    var groups = [
+      { label: 'true ends (KN10N1–8)', s: ['1', '2', '3', '4', '5', '6', '7', '8'],
+        un: [0.082, 0.754, 2.795, 0.367, 0.402, 0.041, 0.080, 0.042],
+        bd: [0.005, 0.008, 0.054, 0.006, 0.005, 0.029, 0.013, 0.012] },
+      { label: 'production (EXP29–32)', s: ['29', '30', '31', '32'],
+        un: [0.850, 0.506, 0.087, 0.872], bd: [0.013, 0.005, 0.009, 0.006] }
+    ];
+    var box = document.getElementById(id);
+    var W = Math.max(300, box.clientWidth), narrow = W < 480;
+    var padL = narrow ? 40 : 46, padR = 8, top = 10, plotH = narrow ? 190 : 220, bottom = 46;
+    var H = top + plotH + bottom;
+    box.innerHTML = '';
+    var svg = el('svg', { width: W, height: H, viewBox: '0 0 ' + W + ' ' + H }, box);
+    var lo = 0.003, hi = 4, yb = top + plotH;
+    var Y = function (v) { return yb - (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)) * plotH; };
+    [0.01, 0.1, 1].forEach(function (t) {
+      el('line', { x1: padL, x2: W - padR, y1: Y(t), y2: Y(t), style: 'stroke: var(--rule); stroke-width: 1' }, svg);
+      txt(svg, padL - 6, Y(t) + 4, (t * 100) + ' %', { 'text-anchor': 'end', 'font-size': 11, style: 'fill: var(--muted)' });
+    });
+    el('line', { x1: padL, x2: W - padR, y1: Y(0.1), y2: Y(0.1), style: 'stroke: var(--bad); stroke-width: 1.4; stroke-dasharray: 5 4' }, svg);
+    txt(svg, W - padR, Y(0.1) - 6, '10 % rule', { 'text-anchor': 'end', 'font-size': 11.5, 'font-weight': 600, style: 'fill: var(--bad)' });
+    var n = 12, gapSlots = 1, slots = n + gapSlots, sw = (W - padL - padR) / slots, k = 0;
+    groups.forEach(function (g, gi) {
+      var start = k;
+      g.s.forEach(function (lab, i) {
+        var cx = padL + (k + 0.5) * sw;
+        el('line', { x1: cx, x2: cx, y1: Y(g.un[i]), y2: Y(g.bd[i]), style: 'stroke: var(--rule); stroke-width: 1.5' }, svg);
+        var a = el('circle', { cx: cx, cy: Y(g.un[i]), r: 4.5, style: 'fill: var(--surface); stroke: var(--s-fixed); stroke-width: 2' }, svg);
+        el('title', {}, a).textContent = 'fit ' + lab + ', unbounded: ' + (g.un[i] * 100).toFixed(1) + ' %';
+        var b = el('circle', { cx: cx, cy: Y(g.bd[i]), r: 5, style: 'fill: var(--s-both)' }, svg);
+        el('title', {}, b).textContent = 'fit ' + lab + ', bounded: ' + (g.bd[i] * 100).toFixed(1) + ' %';
+        txt(svg, cx, yb + 15, lab, { 'text-anchor': 'middle', 'font-size': 11, 'class': 'val', style: 'fill: var(--muted)' });
+        k++;
+      });
+      var gx0 = padL + start * sw, gx1 = padL + k * sw;
+      el('line', { x1: gx0 + 3, x2: gx1 - 3, y1: yb + 24, y2: yb + 24, style: 'stroke: var(--muted); stroke-width: 1' }, svg);
+      txt(svg, (gx0 + gx1) / 2, yb + 39, g.label, { 'text-anchor': 'middle', 'font-size': narrow ? 10.5 : 12, style: 'fill: var(--fg)' });
+      k += gapSlots;
+    });
+  }
+
+  function render() {
+    legend('leg1', [
+      { label: 'truth point, all nuisances true', color: 'var(--s-truth)' },
+      { label: 'fit point, nuisances held fixed (old)', color: 'var(--s-fixed)' },
+      { label: 'profiled over dE/dx', color: 'var(--s-dedx)' },
+      { label: 'profiled over geometry', color: 'var(--s-geom)' },
+      { label: 'profiled over both, bounded', color: 'var(--s-both)' },
+      { label: 'consistent with 1', band: true }
+    ]);
+    dotRows('fig1', {
+      domain: [0.4, 30], ticks: [0.5, 1, 2, 5, 10, 20], band: [0.49, 1.51], ref: 1,
+      axis: 'spread ÷ width',
+      series: [
+        { label: 'truth point', color: 'var(--s-truth)', v: [0.74, 1.96, 1.28, 1.16, 0.85] },
+        { label: 'held fixed', color: 'var(--s-fixed)', v: [2.94, 19.69, 2.96, 2.67, 3.31] },
+        { label: 'dE/dx profiled', color: 'var(--s-dedx)', v: [1.08, 17.27, 2.50, 2.74, 1.31] },
+        { label: 'geometry profiled', color: 'var(--s-geom)', v: [2.75, 1.87, 2.49, 1.75, 3.25] },
+        { label: 'both, bounded', color: 'var(--s-both)', v: [1.04, 1.77, 1.87, 1.32, 1.27] }
+      ]
+    });
+    legend('leg2', [
+      { label: 'unbounded', color: 'var(--s-fixed)', hollow: true },
+      { label: 'with the per-batch bound', color: 'var(--s-both)' }
+    ]);
+    stability('fig2');
+    legend('leg3', [
+      { label: 'width + optimiser scatter (primary)', color: 'var(--s-both)' },
+      { label: 'width alone', color: 'var(--s-both)', hollow: true },
+      { label: 'consistent with 1', band: true }
+    ]);
+    dotRows('fig3', {
+      domain: [0.5, 8], ticks: [0.5, 1, 2, 4, 8], band: [0.74, 1.26], ref: 1,
+      axis: 'spread ÷ predicted width',
+      series: [
+        { label: 'width + scatter', color: 'var(--s-both)', v: [1.06, 4.38, 1.30, 1.48, 1.04] },
+        { label: 'width alone', color: 'var(--s-both)', hollow: true, v: [1.41, 5.53, 1.67, 2.07, 1.25] }
+      ]
+    });
+    legend('leg4', [
+      { label: 'observed spread', color: 'var(--s-dedx)' },
+      { label: 'derivative width', color: 'var(--s-both)' }
+    ]);
+    dotRows('fig4', {
+      domain: [1, 8], ticks: [1, 2, 4, 8], axis: 'growth, realistic ÷ true endpoints',
+      series: [
+        { label: 'observed spread', color: 'var(--s-dedx)', bar: true, v: [1.49, 7.29, 1.20, 2.96, 1.21] },
+        { label: 'derivative width', color: 'var(--s-both)', bar: true, v: [1.10, 2.36, 1.34, 1.89, 1.23] }
+      ]
+    });
+  }
+
+  render();
+  var t;
+  window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(render, 120); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(render);
+})();
+</script>
