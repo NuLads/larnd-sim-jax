@@ -1,0 +1,8 @@
+name: larndsim_env
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.12  # Specify the Python version you need
+  - jax
+  - jaxlib=*=cuda*  # JAX library with CUDA support
