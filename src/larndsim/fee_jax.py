@@ -274,6 +274,8 @@ def get_adc_values(params, pixels_signals, noise_rng_key):
         q_vals_no_noise = q_cumsum[end2d_idx]
         q_cumsum = q_cumsum - q_vals_no_noise[..., jnp.newaxis]
         q_cumsum = jnp.where(q_cumsum < 0, 0, q_cumsum)
+        if _FEE_STOCH_STOP:
+            q_cumsum = jnp.where((idx_t == q_sum.shape[1] - 2)[:, jnp.newaxis], 0, q_cumsum)
         q_sum = q_sum_base[:, jnp.newaxis] + q_cumsum
         
 
@@ -355,6 +357,67 @@ def get_adc_values(params, pixels_signals, noise_rng_key):
 # the same order), so the transposed (reverse-mode) computation is the same sequence of floating-point operations.
 # ---------------------------------------------------------------------------------------------------------------------
 _FEE_FAST = os.environ.get('LARND_FEE_FAST', '1') == '1'
+# LARND_FEE_SMEARED_EDGE (Taylor study, Nov 2026; adopted: default ON, =0 restores; a behaviour change): the stochastic FEE keeps a crossing at tick t when the
+# charge at the end of the ADC window, plus uncorrelated noise, is above threshold. Noise common to both instants cancels, so the
+# cut is on (q_window_end - q_crossing) smeared by sigma_uncorr. The average-noise step has that as log_accept, but also a hard cut at
+# q_window_end = q_crossing through log_diff_ndtr (a > b). On a pulse that falls within one window that edge sits on a tick, and the hit
+# probability summed over ticks becomes a staircase in the parameters: AD returns the slope of one step. With this flag on, the
+# crossing probability is log_guess and the window-end cut is log_accept alone. It only changes ticks where the charge falls within the window.
+_FEE_SMEARED_EDGE = os.environ.get('LARND_FEE_SMEARED_EDGE', '1') == '1'
+# LARND_FEE_CONDITIONAL_ADC (same study; default ON, =0 restores): the stochastic FEE keeps adc = m + U only when adc >= threshold, with U the uncorrelated
+# noise. The returned expected charge is the unconditional m. The mean of the hits actually kept is m + sigma phi(z) / Phi(z), z = (m - threshold) / sigma.
+_FEE_CONDITIONAL_ADC = os.environ.get('LARND_FEE_CONDITIONAL_ADC', '1') == '1'
+# LARND_FEE_BEAM_MERGE (same study; default ON, =0 restores): the beam keeps fee_paths_scaling start ticks per hit and the rest of the probability is lost for the
+# later hits. On a slow ramp the crossing spreads over hundreds of ticks, and every hit after it is under-counted. Rescaling the kept paths to the total
+# over-counts instead, because top-k selects on mass * future hit probability, so the survivors are the ticks most likely to retrigger.
+# With this flag on, every start tick stays. The heaviest ticks keep a path each, as in top-k, and
+# the others are cut in adjacent bins of equal weight, each carrying the whole mass of its ticks and restarting from their centroid. The weight mixes
+# the mass and the selection measure, so the ticks that carry the later hits stay resolved. LARND_FEE_BEAM_SINGLE is the share of fee_paths_scaling
+# kept as single ticks: a sharp crossing fits in them and stays the top-k result, while merging everything adds step noise and spoils H on clean events.
+# A crossing spreads over about +-2 sigma of charge, so on a ramp a bin spans a small part of sigma. Total mass is conserved exactly.
+_FEE_BEAM_MERGE = os.environ.get('LARND_FEE_BEAM_MERGE', '1') == '1'
+_FEE_BEAM_SINGLE = float(os.environ.get('LARND_FEE_BEAM_SINGLE', '0.5'))
+# LARND_FEE_STOCH_STOP (same study; default ON, =0 restores; get_adc_values only): a slot with no crossing clips its window end to the last tick and still removes the
+# charge there, although nothing was reset. A cumulative charge that ends negative is then added to the pixel, and a charge that ends near zero
+# leaves the pulse in place, so the next slot retries it with a new noise draw: hits that the electronics cannot make, up to MAX_ADC_VALUES tries.
+# With this flag on, a pixel with no crossing is finished.
+_FEE_STOCH_STOP = os.environ.get('LARND_FEE_STOCH_STOP', '1') == '1'
+
+
+def _merge_beam(log_mass, log_sel, k):
+    """Mass-conserving beam (LARND_FEE_BEAM_MERGE). Returns the restart tick and the log mass of the k bins. Bins and ticks are constants for AD."""
+    log_mass0 = lax.stop_gradient(log_mass)
+    w = 0.5 * (jax.nn.softmax(log_mass0) + jax.nn.softmax(lax.stop_gradient(log_sel)))
+    ns = int(k * _FEE_BEAM_SINGLE); nb = k - ns
+    _, heavy = lax.top_k(w, ns)
+    rest = w.at[heavy].set(0.0)
+    c = (jnp.cumsum(rest) - 0.5 * rest) / jnp.maximum(jnp.sum(rest), 1e-30)
+    b = (ns + jnp.clip(jnp.floor(c * nb).astype(jnp.int32), 0, nb - 1)).at[heavy].set(jnp.arange(ns, dtype=jnp.int32))
+    ticks = jnp.arange(log_mass.shape[0], dtype=w.dtype)
+    sw = jax.ops.segment_sum(w, b, num_segments=k)
+    sw_safe = jnp.where(sw > 0, sw, 1.0)
+    top = jnp.rint(jax.ops.segment_sum(w * ticks, b, num_segments=k) / sw_safe).astype(jnp.int32)
+    ref = jax.ops.segment_max(log_mass0, b, num_segments=k)
+    full = jnp.isfinite(ref)
+    ref = jnp.where(full, ref, 0.0)
+    mass = jax.ops.segment_sum(jnp.exp(log_mass - ref[b]), b, num_segments=k)   # >= 1 in a non-empty bin
+    log_bin = jnp.where(full, jnp.log(jnp.where(full, mass, 1.0)) + ref, jnp.float32(-1e3))
+    return top, log_bin
+
+
+def _conditional_adc(m, threshold, excess_offset, sigma):
+    """Mean ADC charge of the hits that pass the uncorrelated-noise cut. Below z = -12 no hit survives and the ratio is rounding noise."""
+    z = jnp.maximum((m - threshold + excess_offset) / sigma, -12.0)
+    return m + sigma * jnp.exp(-0.5 * z ** 2 - 0.9189385332046727 - jss.log_ndtr(z))
+
+
+def _pixel_esperance(params, q_sum_all, shifted_ticks):
+    """esperance_value of _find_one_hit_step for whole pixels (path and state independent): the charge output of a dead pixel."""
+    m = q_sum_all[:, shifted_ticks] + params.DISCRIMINATION_THRESHOLD - 0.5 * (q_sum_all[:, 1:] + q_sum_all[:, :-1])
+    if _FEE_CONDITIONAL_ADC:
+        m = _conditional_adc(m, params.DISCRIMINATION_THRESHOLD, params.excess_offset,
+                             jnp.maximum(params.UNCORRELATED_NOISE_CHARGE * params.smooth_sigma_scale, 1.0))
+    return m
 # LARND_FEE_PEEL0 (fee2, 23 Oct; adopted 24 Oct: default ON, =0 restores; KN10R2 consistent): beam-search step 0 outside the scan, its per-path work done once (all
 # paths start at charge 0). Forward values identical; backward = same terms summed in another order (round-off).
 _FEE_PEEL0 = os.environ.get('LARND_FEE_PEEL0', '1') == '1'
@@ -642,12 +705,15 @@ def _find_one_hit_step_frac(q_sum, qs_w, qs_w1, qmax, mf_fhe, prev_charges, prev
     )
 
     # 2. Log-probability of a hit being collected in the (fractional) shifted window
-    log_prob_event = log_diff_ndtr(
-        (qs_w - c - threshold) * z_scale,            # interp(q_sum - c, wpos) = qs_w - c
-        (q_sum[..., :-1] - c - threshold) * z_scale,
-        min_log_prob=min_log_prob
-    )
-    log_prob_event = jnp.minimum(log_prob_event, log_guess)
+    if _FEE_SMEARED_EDGE:
+        log_prob_event = log_guess
+    else:
+        log_prob_event = log_diff_ndtr(
+            (qs_w - c - threshold) * z_scale,            # interp(q_sum - c, wpos) = qs_w - c
+            (q_sum[..., :-1] - c - threshold) * z_scale,
+            min_log_prob=min_log_prob
+        )
+        log_prob_event = jnp.minimum(log_prob_event, log_guess)
     log_prob_event = _soft_max(log_prob_event, min_log_prob, sharpness=1.0)
 
     esperance_value = qs_w + threshold - 0.5 * (q_sum[..., 1:] + q_sum[..., :-1])
@@ -656,6 +722,8 @@ def _find_one_hit_step_frac(q_sum, qs_w, qs_w1, qmax, mf_fhe, prev_charges, prev
     safe_sigma_uncorr = jnp.maximum(sigma_uncorr * smooth_sigma_scale, 1.0)
     log_accept = jss.log_ndtr((esperance_value - threshold + excess_offset) / safe_sigma_uncorr)
     log_prob_event = log_prob_event + log_accept
+    if _FEE_CONDITIONAL_ADC:
+        esperance_value = _conditional_adc(esperance_value, threshold, excess_offset, safe_sigma_uncorr)
 
     # 3. Aggregate Results
     log_prob_distrib = log_prob_event + previous_log_prob[:, None]
@@ -671,9 +739,12 @@ def _find_one_hit_step_frac(q_sum, qs_w, qs_w1, qmax, mf_fhe, prev_charges, prev
     log_total_sel_prob_tick = jax.nn.logsumexp(log_selection_prob, axis=0)
 
     # 5. Construct State for Next Iteration (stop_gradient on discrete indices)
-    _, top_k_ticks = lax.top_k(log_total_sel_prob_tick, k=Nvalues)
-    top_k_ticks = lax.stop_gradient(top_k_ticks)
-    new_log_prob = log_total_dist_tick[top_k_ticks]
+    if _FEE_BEAM_MERGE:
+        top_k_ticks, new_log_prob = _merge_beam(log_total_dist_tick, log_total_sel_prob_tick, Nvalues)
+    else:
+        _, top_k_ticks = lax.top_k(log_total_sel_prob_tick, k=Nvalues)
+        top_k_ticks = lax.stop_gradient(top_k_ticks)
+        new_log_prob = log_total_dist_tick[top_k_ticks]
     charges_new = qs_w1[top_k_ticks]                 # q_sum at (fractional) window-end + 1
 
     return (charges_new, new_log_prob), (log_total_hit_dist_tick, esperance_value)
@@ -697,8 +768,8 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     if _FEE_FAST:
         q_max_future = _cummax_loc(q_sum_loc, q_sum, prev_charges, False)
         log_guess = _log_diff_ndtr_pre(*_lndtr_pair_guess(q_max_future, threshold, z_scale), min_log_prob=min_log_prob)
-        log_prob_event = _log_diff_ndtr_pre(*_lndtr_pair_event(q_sum_loc, threshold, z_scale, shifted_ticks),
-                                            min_log_prob=min_log_prob)
+        log_prob_event = None if _FEE_SMEARED_EDGE else _log_diff_ndtr_pre(*_lndtr_pair_event(q_sum_loc, threshold, z_scale, shifted_ticks),
+                                                                           min_log_prob=min_log_prob)
     else:
         # 1. Log-probability of a hit starting
         q_max_future = lax.cummax(q_sum_loc, axis=1)
@@ -709,12 +780,12 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
         )
 
         # 2. Log-probability of a hit being collected in the shifted window
-        log_prob_event = log_diff_ndtr(
+        log_prob_event = None if _FEE_SMEARED_EDGE else log_diff_ndtr(
             (q_sum_loc[..., shifted_ticks] - threshold) * z_scale,
             (q_sum_loc[..., :-1] - threshold) * z_scale,
             min_log_prob=min_log_prob
         )
-    log_prob_event = jnp.minimum(log_prob_event, log_guess)
+    log_prob_event = log_guess if _FEE_SMEARED_EDGE else jnp.minimum(log_prob_event, log_guess)
     log_prob_event = _soft_max(log_prob_event, min_log_prob, sharpness=1.0)
 
     # esperance_value: expected ADC given a crossing at tick t.
@@ -727,6 +798,8 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     safe_sigma_uncorr = jnp.maximum(sigma_uncorr * smooth_sigma_scale, 1.0)
     log_accept = (_log_ndtr_fast if _FEE_FAST else jss.log_ndtr)((esperance_value - threshold + excess_offset) / safe_sigma_uncorr)
     log_prob_event = log_prob_event + log_accept
+    if _FEE_CONDITIONAL_ADC:
+        esperance_value = _conditional_adc(esperance_value, threshold, excess_offset, safe_sigma_uncorr)
 
     # 3. Aggregate Results
     log_prob_distrib = bc(log_prob_event) + previous_log_prob[:, None]
@@ -745,9 +818,12 @@ def _find_one_hit_step(q_sum, prev_charges, previous_log_prob, sigma, sigma_unco
     log_total_sel_prob_tick = jax.nn.logsumexp(log_selection_prob, axis=0)
 
     # 5. Construct State for Next Iteration (stop_gradient on discrete indices)
-    _, top_k_ticks = lax.top_k(log_total_sel_prob_tick, k=Nvalues)
-    top_k_ticks = lax.stop_gradient(top_k_ticks)
-    new_log_prob = log_total_dist_tick[top_k_ticks]
+    if _FEE_BEAM_MERGE:
+        top_k_ticks, new_log_prob = _merge_beam(log_total_dist_tick, log_total_sel_prob_tick, Nvalues)
+    else:
+        _, top_k_ticks = lax.top_k(log_total_sel_prob_tick, k=Nvalues)
+        top_k_ticks = lax.stop_gradient(top_k_ticks)
+        new_log_prob = log_total_dist_tick[top_k_ticks]
     best_path_next_ticks = jnp.clip(shifted_ticks[top_k_ticks] + 1, 0, Nticks - 1)
     charges_new = q_sum[best_path_next_ticks]
 
@@ -844,7 +920,7 @@ def get_adc_values_average_noise_vmap(params, wfs, stop_threshold=1e-9, min_log_
     esp_all = None
     if _FEE_PIXEL_STOP == '2' and _FEE_STOP_DEAD == 'low':
         _sh = jnp.clip(jnp.arange(Nticks - 1) + interval + 1, 0, Nticks - 1)
-        esp_all = q_sum_all[:, _sh] + params.DISCRIMINATION_THRESHOLD - 0.5 * (q_sum_all[:, 1:] + q_sum_all[:, :-1])
+        esp_all = _pixel_esperance(params, q_sum_all, _sh)
 
     def _rows_step(q_rows, charges, probs):
         return vmapped_step_fun(q_rows, charges, probs,
@@ -1103,7 +1179,7 @@ def _fee_global_pixel_stop(params, wfs, chunk_size, stop_threshold=1e-9, min_log
     vstep = vmap(_find_one_hit_step, in_axes=(0, 0, 0, None, None, None, None, None, None, None, None))
     q_sum_all = (wfs * params.t_sampling).cumsum(axis=-1)
     sh = jnp.clip(jnp.arange(Nticks - 1) + interval + 1, 0, Nticks - 1)
-    esp_all = q_sum_all[:, sh] + params.DISCRIMINATION_THRESHOLD - 0.5 * (q_sum_all[:, 1:] + q_sum_all[:, :-1])
+    esp_all = _pixel_esperance(params, q_sum_all, sh)
     chunk_of_row = jnp.arange(P) // chunk_size
     f32 = jnp.float32
 
