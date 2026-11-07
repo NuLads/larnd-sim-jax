@@ -16,3 +16,42 @@ logs/
 /.idea/
 tests/taylor/IGNORE/
 tests/taylor/results/
+
+# --- research outputs (added 7 Nov 2026) ---
+# Fit results and targets are symlinks to /sdf/data or fit_result_staging; a trailing
+# slash would only match real directories, so these patterns have none.
+/target_*
+/fit_result/*
+!/fit_result/hessian_analysis/
+/output/*.h5
+/data/
+/profiling/
+/profile_dir/
+/plots/large_fit/
+/plots/*.npz
+/plots_comparison*/
+/scripts/*_results/
+/review_2026_09/figs/
+/review_2026_09/talk_animations/**/*.mp4
+/review_2026_09/scripts/paperfigs/*.npz
+/review_2026_09/scripts/talk_anim/*.npz
+# root-level data and run outputs (small inputs read by tracked scripts are force-added)
+/*.h5
+/*.root
+/*.npy
+/*.json
+/*.csv
+/*.html
+/slurm-*.out
+/slurm_*.log
+# binaries, profiles, editor state, one-offs
+*.sif
+*.vsix
+*.nsys-rep
+*.prof
+*.bak
+/.vscode/
+/.antigravitycli/
+/uv.lock
+/scratch/
+/attic/
