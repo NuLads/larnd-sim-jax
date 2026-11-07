@@ -1,0 +1,24 @@
+
+KN10S (16 @ 10000): mean, SD per window
+  W  1000: Ab +0.109,0.133  eField +0.032,0.010  tran_diff +0.997,1.051  long_diff +4.212,5.171  lifetime +2.260,3.999
+  W  2000: Ab +0.108,0.137  eField +0.032,0.010  tran_diff +1.001,1.056  long_diff +4.275,5.218  lifetime +2.302,3.976
+           SD ratio lifetime 0.99 long_diff 1.01; |mean| change (SE) lifetime +0.04 long_diff +0.05 -> NEUTRAL
+  W  3000: Ab +0.106,0.138  eField +0.032,0.011  tran_diff +1.020,1.066  long_diff +4.354,5.274  lifetime +2.344,3.984
+           SD ratio lifetime 1.00 long_diff 1.02; |mean| change (SE) lifetime +0.08 long_diff +0.11 -> NEUTRAL
+  W  5000: Ab +0.085,0.137  eField +0.034,0.011  tran_diff +1.125,1.103  long_diff +4.661,5.466  lifetime +2.490,4.127
+           SD ratio lifetime 1.03 long_diff 1.06; |mean| change (SE) lifetime +0.23 long_diff +0.35 -> NEUTRAL
+
+KN10C (16 @ 14000): mean, SD per window
+  W  1000: Ab +0.185,0.122  eField +0.032,0.009  tran_diff +0.608,1.067  long_diff +1.180,4.447  lifetime +0.139,3.158
+  W  2000: Ab +0.181,0.122  eField +0.032,0.010  tran_diff +0.607,1.064  long_diff +1.276,4.507  lifetime +0.233,3.202
+           SD ratio lifetime 1.01 long_diff 1.01; |mean| change (SE) lifetime +0.12 long_diff +0.09 -> NEUTRAL
+  W  3000: Ab +0.173,0.117  eField +0.032,0.010  tran_diff +0.634,1.079  long_diff +1.557,4.571  lifetime +0.514,3.270
+           SD ratio lifetime 1.04 long_diff 1.03; |mean| change (SE) lifetime +0.48 long_diff +0.34 -> NEUTRAL
+  W  5000: Ab +0.151,0.115  eField +0.032,0.010  tran_diff +0.742,1.057  long_diff +2.438,4.709  lifetime +1.115,3.482
+           SD ratio lifetime 1.10 long_diff 1.06; |mean| change (SE) lifetime +1.24 long_diff +1.13 -> WORSE
+
+same-data SD (12 runs, pooled within sample) per window:
+  W  1000: Ab 0.120  eField 0.008  tran_diff 0.771  long_diff 4.670  lifetime 3.536
+  W  2000: Ab 0.120  eField 0.008  tran_diff 0.798  long_diff 4.697  lifetime 3.567
+  W  3000: Ab 0.121  eField 0.008  tran_diff 0.820  long_diff 4.748  lifetime 3.609
+  W  5000: Ab 0.123  eField 0.009  tran_diff 0.826  long_diff 5.088  lifetime 3.746

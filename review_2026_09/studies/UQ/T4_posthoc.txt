@@ -1,0 +1,12 @@
+Ab         spearman(sigma_E1, |e-bias|) +0.18   sigma_E1 range 0.0298-0.0318
+eField     spearman(sigma_E1, |e-bias|) +0.18   sigma_E1 range 0.000414-0.000468
+tran_diff  spearman(sigma_E1, |e-bias|) +0.10   sigma_E1 range 0.311-0.64
+long_diff  spearman(sigma_E1, |e-bias|) -0.27   sigma_E1 range 0.771-0.945
+lifetime   spearman(sigma_E1, |e-bias|) +0.37   sigma_E1 range 0.734-0.903
+flagged (max|z|>3): [21, 25, 26, 27, 28]  params: ['Ab', 'long_diff', 'Ab', 'lifetime', 'long_diff']
+chain position (first pipeline s=17..22? see uqtest_jobs) -- skipped
+Ab         spearman(|z|, |A-B|) +0.26
+eField     spearman(|z|, |A-B|) -0.05
+tran_diff  spearman(|z|, |A-B|) +0.12
+long_diff  spearman(|z|, |A-B|) +0.10
+lifetime   spearman(|z|, |A-B|) +0.31

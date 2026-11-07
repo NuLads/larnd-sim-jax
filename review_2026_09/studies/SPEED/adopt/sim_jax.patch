@@ -1,0 +1,47 @@
+--- a/src/larndsim/sim_jax.py
++++ b/src/larndsim/sim_jax.py
+@@ -5,6 +5,7 @@
+ from numpy.lib import recfunctions as rfn
+ from functools import partial
+ import logging
++import os
+ # from jax.experimental import checkify
+ 
+ # from larndsim.consts_jax import consts
+@@ -20,6 +21,24 @@
+ 
+ size_history_dict = {}
+ 
++# LARND_UNIQUE_BUCKET=1 (speed, 20 Oct; default OFF => identical behaviour): the dynamic unique path's output size is the
++# exact number of active pixels, which changes from one iteration to the next as the tracks move, so the unique / append /
++# pad ops are re-traced, re-lowered and looked up in the compilation cache on every step (~28% of a 10 cm fit's host time).
++# Counting the pixels first and calling the static-size unique with the dynamic path's own padded size gives the same
++# array (after the sort: the -1 fill first, then the n sorted ids) with ops whose shapes only change at 128 boundaries.
++_UNIQUE_BUCKET = os.environ.get('LARND_UNIQUE_BUCKET', '0') == '1'
++
++
++@jit
++def _n_unique(x):
++    s = jnp.sort(x)
++    return 1 + jnp.sum(s[1:] != s[:-1])
++
++
++@partial(jit, static_argnums=1)
++def _unique_static(x, size):
++    return jnp.unique(x, size=size, fill_value=-1)
++
+ def pad_to_closest_multiple(x, dims_to_pad=None, multiple=128, pad_value=0, pad_front=False):
+     """
+     Efficiently pads array x to the closest multiple of a given value using update-in-place syntax.
+@@ -793,7 +812,10 @@
+     ################################################
+ 
+     #Sorting the pixels and getting the unique ones
+-    if unique_size is None:
++    if unique_size is None and _UNIQUE_BUCKET:
++        _n = int(_n_unique(main_pixels.ravel()))
++        unique_pixels = _unique_static(main_pixels.ravel(), ((_n + 1 + 127) // 128) * 128)  # = len(unique + [-1]) padded to 128
++    elif unique_size is None:
+         unique_pixels = jnp.unique(main_pixels.ravel())
+         unique_pixels = jnp.append(unique_pixels, -1)
+         unique_pixels = pad_to_closest_multiple(unique_pixels, multiple=128, pad_value=-1, pad_front=False)

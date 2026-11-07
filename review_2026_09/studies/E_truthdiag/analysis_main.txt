@@ -1,0 +1,68 @@
+files=4 batches=100 unique=100
+pixfrac min 1.0  npix total 94592
+occupied ticks 0..1998  -> drift -2.2..197.6 us
+
+=== E1 closure (obs/exp), exp fit ln R = a - k t_drift ; positive k = target loses MORE charge than model ===
+Q  noise-ON tgt / prod model       total=1.00337+-0.00014  k=-1.384e-05+-3.2e-06/us  ratio change over 190us=-0.263%  -> tau_eq bias +3.45+-0.77%  chi2/ndf=1.42
+N  noise-ON tgt / prod model       total=1.00441+-0.00022  k=-1.248e-05+-3.7e-06/us  ratio change over 190us=-0.237%  -> tau_eq bias +3.10+-0.88%  chi2/ndf=1.55
+Q  noise-OFF tgt / tiny-noise model total=1.00092+-0.00006  k=+2.826e-06+-1.1e-06/us  ratio change over 190us=+0.054%  -> tau_eq bias -0.68+-0.26%  chi2/ndf=1.62
+N  noise-OFF tgt / tiny-noise model total=1.00081+-0.00008  k=+5.034e-07+-1.4e-06/us  ratio change over 190us=+0.010%  -> tau_eq bias -0.12+-0.34%  chi2/ndf=1.01
+Q  noise-OFF tgt / prod model      total=1.00894+-0.00047  k=-2.468e-05+-8.4e-06/us  ratio change over 190us=-0.470%  -> tau_eq bias +6.31+-2.02%  chi2/ndf=4.19
+N  noise-OFF tgt / prod model      total=1.01676+-0.00062  k=-4.487e-05+-1.0e-05/us  ratio change over 190us=-0.856%  -> tau_eq bias +12.11+-2.50%  chi2/ndf=2.77
+
+model self-consistency: slope of E[Q](tau)/E[Q](tau_true) vs drift, compared with 1/tau_true-1/tau:
+   tau x0.8500: k=+7.629e-05  analytic 1/tau-1/tau_true = +7.333e-05
+   tau x0.8875: k=+5.472e-05  analytic 1/tau-1/tau_true = +5.268e-05
+   tau x0.9250: k=+3.496e-05  analytic 1/tau-1/tau_true = +3.369e-05
+   tau x0.9625: k=+1.678e-05  analytic 1/tau-1/tau_true = +1.619e-05
+   tau x1.0000: k=+0.000e+00  analytic 1/tau-1/tau_true = +0.000e+00
+   tau x1.0375: k=-1.553e-05  analytic 1/tau-1/tau_true = -1.502e-05
+   tau x1.0750: k=-2.994e-05  analytic 1/tau-1/tau_true = -2.899e-05
+   tau x1.1125: k=-4.336e-05  analytic 1/tau-1/tau_true = -4.202e-05
+   tau x1.1500: k=-5.588e-05  analytic 1/tau-1/tau_true = -5.420e-05
+
+=== E2 NLL profiles (sum over batches) ===
+lifetime | noise-ON target, prod model   minima (x truth): 1.0152 1.0145 1.0117 1.0209 1.0131 1.0151 1.0233 1.0085 1.0087 1.0159
+                                         mean 1.0147  seed-sd 0.0047  sem 0.0015  curvature 1-sigma(dNLL=0.5) 0.0039
+lifetime | noise-OFF target, prod model  minima (x truth): 1.0098
+                                         mean 1.0098  seed-sd nan  sem nan  curvature 1-sigma(dNLL=0.5) 0.0037
+lifetime | noise-OFF target, tiny-noise model minima (x truth): 1.0029
+                                         mean 1.0029  seed-sd nan  sem nan  curvature 1-sigma(dNLL=0.5) 0.0003
+long_diff | noise-ON target, prod model  minima (x truth): 0.9876 0.9853 0.9851 0.9944 0.9930 0.9888 0.9927 0.9851 1.0030 0.9882
+                                         mean 0.9903  seed-sd 0.0056  sem 0.0018  curvature 1-sigma(dNLL=0.5) 0.0067
+long_diff | noise-OFF target, prod model minima (x truth): 0.9331
+                                         mean 0.9331  seed-sd nan  sem nan  curvature 1-sigma(dNLL=0.5) 0.0066
+
+NLL term decomposition vs lifetime (seed-mean, relative to truth point):
+   ON  expected_total_hits      -536.95   -384.56   -245.32   -117.63     +0.00   +108.60   +209.24   +302.75   +389.87
+   ON  log_likelihood_tick     +1739.16  +1037.58   +539.23   +203.93     +0.00    -97.87   -110.11    -53.07    +60.22
+   ON  matched_hits               +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00
+   ON  no_match_penalty           +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00
+   OFF expected_total_hits      -536.95   -384.56   -245.32   -117.63     +0.00   +108.60   +209.24   +302.75   +389.87
+   OFF log_likelihood_tick     +1725.21  +1019.92   +523.16   +194.14     +0.00    -84.62    -81.07     -6.10   +126.41
+   OFF matched_hits               +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00
+   OFF no_match_penalty           +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00     +0.00
+   ON slope at truth: d(hit term)/dx = -5150.31, d(expected hits)/dx = +3068.69
+lifetime minimum (seed-mean profile) 1.0146; batch-jackknife sd 0.0012
+lifetime minimum noise-OFF 1.0098; batch-jackknife sd 0.0018
+NLL curvature (ON, seed mean): 73557.5 per (dx)^2
+bin table (noise-ON charge): t[us], R-1 [%], err [%]; hits R-1, err
+     4.6   +0.239  0.059 |  +0.486  0.088 | offtiny  +0.041  0.023 | offprod  -0.382  0.215
+    14.7   +0.132  0.069 |  +0.254  0.070 | offtiny  +0.133  0.027 | offprod  +0.772  0.142
+    24.8   +0.318  0.080 |  +0.470  0.113 | offtiny  +0.138  0.021 | offprod  +0.929  0.170
+    34.9   +0.193  0.068 |  +0.263  0.060 | offtiny  +0.141  0.022 | offprod  +1.022  0.164
+    44.9   +0.209  0.056 |  +0.305  0.083 | offtiny  +0.156  0.025 | offprod  +0.857  0.161
+    54.9   +0.422  0.077 |  +0.554  0.062 | offtiny  +0.073  0.019 | offprod  +1.331  0.178
+    64.9   +0.378  0.066 |  +0.387  0.109 | offtiny  +0.085  0.020 | offprod  +0.668  0.170
+    75.0   +0.327  0.074 |  +0.433  0.130 | offtiny  +0.095  0.022 | offprod  +1.107  0.167
+    85.0   +0.426  0.059 |  +0.403  0.090 | offtiny  +0.110  0.024 | offprod  +1.183  0.204
+    94.8   +0.409  0.075 |  +0.585  0.096 | offtiny  +0.083  0.022 | offprod  +1.248  0.219
+   104.9   +0.517  0.086 |  +0.501  0.115 | offtiny  +0.084  0.025 | offprod  +0.674  0.172
+   114.9   +0.463  0.067 |  +0.587  0.066 | offtiny  +0.092  0.021 | offprod  +1.212  0.196
+   124.9   +0.439  0.080 |  +0.388  0.087 | offtiny  +0.059  0.029 | offprod  +1.001  0.185
+   134.9   +0.410  0.049 |  +0.497  0.103 | offtiny  +0.105  0.022 | offprod  +1.342  0.229
+   144.9   +0.411  0.079 |  +0.460  0.077 | offtiny  +0.065  0.024 | offprod  +0.823  0.201
+   154.9   +0.264  0.115 |  +0.439  0.110 | offtiny  +0.071  0.025 | offprod  +0.852  0.174
+   164.9   +0.461  0.068 |  +0.603  0.060 | offtiny  +0.094  0.028 | offprod  +0.936  0.204
+   174.8   +0.285  0.118 |  +0.394  0.131 | offtiny  +0.050  0.027 | offprod  +0.732  0.281
+   182.4   +0.235  0.153 |  +0.490  0.222 | offtiny  +0.013  0.047 | offprod  +3.036  0.471

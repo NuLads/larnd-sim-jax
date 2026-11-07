@@ -1,0 +1,14 @@
+B200C: n = 12, config checks OK
+  track length used: B200 41330 cm, reference 39906 cm
+  Ab         SD 0.142 vs 0.152 (ratio 0.93, corr +0.02; Pitman-Morgan one-sided p 0.417, F p 0.413) | mean -0.046 vs -0.011, paired delta -0.034 +- 0.059
+             RMS error 0.143 vs 0.146
+  eField     SD 0.036 vs 0.024 (ratio 1.47, corr +0.64; Pitman-Morgan one-sided p 0.931, F p 0.890) | mean +0.137 vs +0.139, paired delta -0.002 +- 0.008
+             RMS error 0.141 vs 0.141
+  tran_diff  SD 1.475 vs 1.265 (ratio 1.17, corr +0.42; Pitman-Morgan one-sided p 0.698, F p 0.690) | mean +0.469 vs +0.549, paired delta -0.080 +- 0.430
+             RMS error 1.488 vs 1.330
+  long_diff  SD 6.394 vs 6.028 (ratio 1.06, corr +0.54; Pitman-Morgan one-sided p 0.585, F p 0.576) | mean +6.642 vs +5.527, paired delta +1.115 +- 1.726  PRIMARY: not reduced
+             RMS error 9.033 vs 7.990
+  lifetime   SD 3.465 vs 3.309 (ratio 1.05, corr -0.06; Pitman-Morgan one-sided p 0.557, F p 0.559) | mean +3.158 vs +2.506, paired delta +0.652 +- 1.426  PRIMARY: not reduced
+             RMS error 4.580 vs 4.039
+  position paired delta -5.3 +- 4.6 um (secondary; one-sided p for < 0: 0.134)
+B200C VERDICT: NOT CONFIRMED; SAFE (no shift away from zero)

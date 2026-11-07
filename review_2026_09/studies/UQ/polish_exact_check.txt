@@ -1,0 +1,12 @@
+fresh 12, exact form: per parameter RMS e -> m, |m| < |e|, Wilcoxon p(better), p(worse)
+  Ab          0.146 ->  0.141 | 6/12 | 0.339 0.689
+  eField      0.141 ->  0.141 | 10/12 | 0.010 0.992
+  tran_diff   1.330 ->  1.171 | 6/12 | 0.339 0.689
+  long_diff   7.990 ->  6.309 | 11/12 | 0.002 0.998
+  lifetime    4.039 ->  3.080 | 9/12 | 0.026 0.979
+n = 30, exact form: m bias +- SE | SD | RMS
+  Ab          +0.014 +- 0.028 |  0.156 |  0.154
+  eField      +0.129 +- 0.008 |  0.043 |  0.136
+  tran_diff   +0.710 +- 0.241 |  1.321 |  1.480
+  long_diff   +2.948 +- 0.937 |  5.132 |  5.844
+  lifetime    +0.469 +- 0.671 |  3.675 |  3.644

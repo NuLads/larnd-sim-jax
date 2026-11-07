@@ -1,0 +1,18 @@
+T6 config check OK; reference EXP17-24C75H (400 cm x 100), paired by sample; SD ratio band [0.45, 2.23] (F(7,7) 95 %)
+  B800: track length used 39898 cm vs ref 39998 cm (max |diff| 798 cm)
+    B800 Ab         paired delta  -0.022 +-  0.068 (detectable >= 0.136) | SD 0.106 vs ref 0.211 (ratio 0.50)
+    B800 eField     paired delta  -0.009 +-  0.018 (detectable >= 0.036) | SD 0.039 vs ref 0.070 (ratio 0.56)
+    B800 tran_diff  paired delta  +0.406 +-  0.555 (detectable >= 1.110) | SD 1.337 vs ref 1.126 (ratio 1.19)
+    B800 long_diff  paired delta  +1.844 +-  2.214 (detectable >= 4.429) | SD 8.455 vs ref 7.298 (ratio 1.16)
+    B800 lifetime   paired delta  +1.849 +-  1.813 (detectable >= 3.625) | SD 4.689 vs ref 4.982 (ratio 0.94)
+    B800 position paired delta +3.8 +- 4.1 um (descriptive)
+  -> B800: NO DETECTED IMPACT
+  B200: track length used 41644 cm vs ref 39998 cm (max |diff| 2630 cm)
+    B200 Ab         paired delta  +0.059 +-  0.047 (detectable >= 0.095) | SD 0.093 vs ref 0.211 (ratio 0.44)  <- IMPACT
+    B200 eField     paired delta  -0.007 +-  0.018 (detectable >= 0.037) | SD 0.055 vs ref 0.070 (ratio 0.79)
+    B200 tran_diff  paired delta  +0.065 +-  0.366 (detectable >= 0.732) | SD 0.777 vs ref 1.126 (ratio 0.69)
+    B200 long_diff  paired delta  +0.127 +-  1.723 (detectable >= 3.447) | SD 4.187 vs ref 7.298 (ratio 0.57)
+    B200 lifetime   paired delta  +0.110 +-  1.214 (detectable >= 2.429) | SD 2.261 vs ref 4.982 (ratio 0.45)
+    B200 position paired delta -9.8 +- 2.9 um (descriptive)
+  -> B200: IMPACT: Ab (spread)
+T6 VERDICT: batch size HAS AN IMPACT (see flags)

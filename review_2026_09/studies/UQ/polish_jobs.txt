@@ -1,0 +1,19 @@
+# submitted 2026-11-04 23:44:12
+chain 0 dump D_F29 43253705 :: after 43082359, afterok 43082349 (EXP29C75H)
+chain 0 dump D_F35 43253706 :: after 43253705, afterok 43082353 (EXP35C75H)
+chain 0 B200C head 43228743 moved behind 43253706
+chain 1 dump D_F30 43253707 :: after 43082371, afterok 43082362 (EXP30C75H)
+chain 1 dump D_F36 43253708 :: after 43253707, afterok 43082365 (EXP36C75H)
+chain 1 B200C head 43228750 moved behind 43253708
+chain 2 dump D_F31 43253711 :: after 43082383, afterok 43082374 (EXP31C75H)
+chain 2 dump D_F37 43253713 :: after 43253711, afterok 43082377 (EXP37C75H)
+chain 2 B200C head 43228758 moved behind 43253713
+chain 3 dump D_F32 43253715 :: after 43082395, afterok 43082386 (EXP32C75H)
+chain 3 dump D_F38 43253717 :: after 43253715, afterok 43082389 (EXP38C75H)
+chain 3 B200C head 43228766 moved behind 43253717
+chain 4 (EXP33C75H 43082399 already COMPLETED, checkpoint verified; afterok dropped) dump D_F33 43253830 :: afterany:43082408
+chain 4 dump D_F39 43253834 :: afterany:43253830,afterok:43082402
+chain 4 B200C head 43228774 moved behind 43253834
+chain 5 dump D_F34 43253837 :: afterany:43082423,afterok:43082411
+chain 5 dump D_F40 43253841 :: afterany:43253837,afterok:43082414
+chain 5 B200C head 43228782 moved behind 43253841

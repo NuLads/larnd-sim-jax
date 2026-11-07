@@ -1,0 +1,43 @@
+batches with a GN block per sample: [100, 100, 100, 100]; GN wall per batch median 92 s
+REF30 recomputed (n = 30):    0.1560    0.0427    1.3235    5.2449    3.7379 | frozen    0.1560    0.0430    1.3230    5.2450    3.7380 -> OK
+V-b A: median gram/vjp 2.0e-06, asym_gg 1.7e-04, asym_cg 5.2e-05 -> PASS
+V-b C: median gram/vjp 6.6e-06, asym_gg 2.9e-04, asym_cg 1.5e-04 -> PASS
+V-a A: F_cc(P0) / FD H_cc(P0) diag   1.715   2.918   1.967   2.546   1.652
+V-a C: F_cc(P0) / FD H_cc(P0) diag   1.012   1.078   1.134   1.062   1.008
+  V2 s29: m here   -0.162   +0.156   +1.494   +4.146   +4.428 | POLISH m   -0.163   +0.156   +1.497   +4.147   +4.444 | |dm|/sigma_c  0.009  0.011  0.008  0.001  0.021
+  V2 s30: m here   -0.075   +0.139   -0.746   -2.550   +2.185 | POLISH m   -0.075   +0.139   -0.746   -2.536   +2.185 | |dm|/sigma_c  0.006  0.003  0.001  0.015  0.000
+  V2 s31: m here   -0.063   +0.133   +1.542   +4.176   +5.223 | POLISH m   -0.063   +0.133   +1.542   +4.176   +5.223 | |dm|/sigma_c  0.000  0.015  0.000  0.000  0.000
+  V2 s32: m here   -0.034   +0.169   +0.829   +4.267   +1.466 | POLISH m   -0.034   +0.169   +0.830   +4.267   +1.466 | |dm|/sigma_c  0.001  0.015  0.001  0.000  0.000
+V2 reproduction of the production POLISH m (within 0.05 sigma_c on all 5, >= 3/4): 4/4 -> PASS
+  V-c s29: w(0)    0.1100    0.0088    0.8772    3.0058    2.9209 | w(1e-3)/w(0)  1.005  1.013  1.003  1.000  0.999 | counts [  4  20  20 100]
+  V-c s30: w(0)    0.1118    0.0077    0.8037    2.6349    2.8003 | w(1e-3)/w(0)  0.995  0.997  0.998  0.998  0.996 | counts [  1   9  29 100]
+  V-c s31: w(0)    0.1321    0.0067    0.7179    2.4400    3.0745 | w(1e-3)/w(0)  0.992  0.991  0.999  0.997  0.994 | counts [  0  12  19 100]
+  V-c s32: w(0)    0.1096    0.0079    0.7853    2.4261    3.0797 | w(1e-3)/w(0)  0.998  0.997  0.994  0.996  0.998 | counts [  1  15  11 100]
+V-c ridge-0 solves ok: True; clipped widths ridge 0 vs 1e-3 within 10 %: 4/4 -> PASS
+
+band [0.74, 1.26] (chi2_29); widths = median over the 4 samples (%)
+                                           Ab    eField tran_diff long_diff  lifetime
+  REF30 SD of m (n = 30)               0.1560    0.0430    1.3230    5.2450    3.7380
+  sigma_w (F2, H-stage scatter)        0.0970    0.0060    0.6370    2.4590    1.9740
+  w = clipped GN-C full, ridge 0       0.1109    0.0078    0.7945    2.5374    2.9977
+  sqrt(w^2 + sigma_w^2)                0.1473    0.0098    1.0183    3.5334    3.5893
+  R_tot = REF30 / sqrt(w^2+sw^2)         1.06      4.38      1.30      1.48      1.04
+  R_stat = REF30 / w (descr.)            1.41      5.53      1.67      2.07      1.25
+  w realistic / w true ends (descr.)     1.10      2.36      1.34      1.89      1.23
+  GN-A full (F - D) (unclipped)        0.0806    0.0023    0.4042    0.8879    2.1339  R_tot  1.24  6.69  1.75  2.01  1.29
+  hybrid-A (H - D) (unclipped)         0.2796    0.0019    8.7982   21.3666   20.5195  R_tot  0.53  6.84  0.15  0.24  0.18
+  GN-A dE/dx only (unclipped)          0.0781    0.0003    0.3343    0.4994    2.0667  R_tot  1.25  7.16  1.84  2.09  1.31
+  GN-A geometry only (unclipped)       0.0222    0.0021    0.3082    0.8459    0.7003  R_tot  1.57  6.76  1.87  2.02  1.78
+  GN-C full (F - D) (unclipped)        0.1735    0.0185    0.9558    5.2714    4.8273  R_tot  0.78  2.21  1.15  0.90  0.72
+  hybrid-C (H - D) (unclipped)         0.2691    0.0248    3.1055   10.0140    5.3083  R_tot  0.55  1.69  0.42  0.51  0.66
+  GN-C dE/dx only (unclipped)          0.1157    0.0009    0.5819    1.4915    2.9321  R_tot  1.03  7.09  1.53  1.82  1.06
+  GN-C geometry only (unclipped)       0.0428    0.0063    0.6508    2.3415    1.2727  R_tot  1.47  4.95  1.45  1.54  1.59
+  conditional sandwich (H)             0.0379    0.0006    0.5028    1.0946    1.0172  R_tot  1.50  7.13  1.63  1.95  1.68
+  robust scale of m, n = 30 (descr.)   0.1584    0.0393    1.6693    6.3066    3.9463  / sqrt(w^2+sw^2)  1.08  4.00  1.64  1.78  1.10
+  per-sample z of m (mean of n = 30 removed) / sqrt(w_s^2 + sw^2):
+     s29   -1.20   +2.49   +0.72   +0.28   +1.12
+     s30   -0.60   +1.02   -1.42   -1.55   +0.49
+     s31   -0.47   +0.43   +0.86   +0.32   +1.29
+     s32   -0.33   +4.00   +0.12   +0.35   +0.26
+
+GNREAL VERDICT (R_tot in the band on 2/5): NOT CONFIRMED  [V-b C True, V-a C True, V-c True, V2 True]

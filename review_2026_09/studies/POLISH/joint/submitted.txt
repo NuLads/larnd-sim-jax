@@ -1,0 +1,66 @@
+jsmoke_1e-2 41516212
+jsmoke_3e-3 41516213
+jsmoke2_3e-3 41517485
+jsmoke2_1e-3 41517486
+jsmoke3_3e-3 41518500
+jsmoke3_1e-3 41518501
+14:09:46 jnt_KN10V1 41518968 (eps 3e-3, iter 10000)
+14:09:51 jnt_KN10V2 41519088 (eps 3e-3, iter 10000)
+14:09:56 jnt_KN10V3 41519163 (eps 3e-3, iter 10000)
+14:10:01 jnt_KN10S1 41519170 (eps 3e-3, iter 10000)
+14:10:06 jnt_KN10S2 41519171 (eps 3e-3, iter 10000)
+14:10:14 jnt_KN10S3 41519175 (eps 3e-3, iter 10000)
+15:44:21 jnt_KN10V1b 41524610 (eps 3e-3, iter 10000)
+15:46:26 jnt_KN10V1c 41524683 (eps 3e-3, iter 10000)
+15:46:31 jnt_KN10V2b 41524684 (eps 3e-3, iter 10000)
+15:46:36 jnt_KN10V2c 41524706 (eps 3e-3, iter 10000)
+15:46:41 jnt_KN10V3b 41524711 (eps 3e-3, iter 10000)
+15:48:46 jnt_KN10V3c 41524773 (eps 3e-3, iter 10000)
+17:18:55 jnt_KN10C1 41533947 (eps 3e-3, iter 14000)
+17:21:00 jnt_KN10C2 41534418 (eps 3e-3, iter 14000)
+17:21:06 jnt_KN10C3 41534423 (eps 3e-3, iter 14000)
+17:21:11 jnt_KN10C4 41534429 (eps 3e-3, iter 14000)
+17:23:17 jnt_KN10C5 41534622 (eps 3e-3, iter 14000)
+17:25:22 jnt_KN10C6 41534799 (eps 3e-3, iter 14000)
+18:44:48 jsmoke4 41540340
+18:52:45 jit_KN10S1 41540835 (nsteps 3)
+18:54:50 jit_KN10S3 41541011 (nsteps 3)
+18:57:27 jtg_KN10S1 41541218 (nsteps 3, truth geometry)
+18:59:28 jnt_KN10C7 41541374 (eps 3e-3, iter 14000)
+18:59:33 jnt_KN10C8 41541381 (eps 3e-3, iter 14000)
+18:59:38 jnt_KN10C9 41541387 (eps 3e-3, iter 14000)
+20:31:45 jnt_KN10C10 41549830 (eps 3e-3, iter 14000)
+20:33:50 jnt_KN10C11 41549916 (eps 3e-3, iter 14000)
+20:33:57 jnt_KN10C12 41549918 (eps 3e-3, iter 14000)
+22:08:11 jnt_KN10C13 41559781 (eps 3e-3, iter 14000)
+22:08:16 jnt_KN10C14 41559805 (eps 3e-3, iter 14000)
+22:10:21 jnt_KN10C15 41560025 (eps 3e-3, iter 14000)
+23:22:27 jnt_KN10C16 41565588 (eps 3e-3, iter 14000)
+23:29:49 jsmoke5 41565811 (fixed script)
+23:29:49 jtg2_KN10S1 41565812 (fixed script, truth geometry, nsteps 6)
+23:38:17 geomloss_S1 41566123
+23:47:26 jtg2_KN10V1 41566453 (fixed script, truth geometry, nsteps 6)
+23:58:40 PRC1 41566910 (chain-LR re-heat test, KNOT/run_knot.sbatch)
+23:58:43 PRA1 41566911 (chain-LR re-heat test, KNOT/run_knot.sbatch)
+01:16:31 PRC3 41572203 (chain-LR re-heat test, sample 3)
+01:16:35 PRA3 41572206 (chain-LR re-heat test, sample 3)
+02:19:25 jtg2_KN10V1 41566453 CANCELLED (slot for the filter smoke; lower priority)
+02:19:25 jsmoke6 41577013 (drop flag smoke)
+02:27:43 geomloss2_S1 41577614
+02:49:36 PRF1 41578930 (freeze off + re-heat)
+02:57:57 jog_KN10S1 41579306 (oracle: outliers > 200 um at truth, nsteps 6)
+03:07:32 jdf_KN10S1 41580661 (G3: truth-free filter, flag q 0.8)
+04:17:21 seedloss_S1 41584033
+04:24:35 jdo_KN10S1 41584287 (G4: oracle filter, |r| > 200 um)
+04:41:00 SE0_1 41584760 (full fit, LARND_HITS_SEED_E1=0)
+05:49:53 SA1 41589683 (full fit, e1 seed with alias gate 500 um)
+07:08:33 jit_PRA1 41594628 (PRF1 rule, calibration half)
+08:27:47 jit_PRF1 41597904 (PRF1 rule, calibration half)
+09:16:56 PRF3 41601446 (freeze off + re-heat, sample 3)
+11:45:07 SA2 41607466 (SA block: alias gate 500 um, sample 2)
+11:46:37 SA3 41608805 (SA block: alias gate 500 um, sample 3)
+12:10:12 SA4 41614304 (SA block: alias gate 500 um, sample 4)
+12:26:52 SA5 41616250 (SA block: alias gate 500 um, sample 5)
+13:55:56 SA6 41624215 (SA block: alias gate 500 um, sample 6)
+18:04:30 SAF1 (gate + freeze release continuation from SA1) 41641829
+18:21:47 BENCHLZ (lazy ROI bench: lazy arm then control, 600 it each) 41642858

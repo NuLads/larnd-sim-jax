@@ -1,0 +1,264 @@
+sample 3: KN10S3 40577940 -> KN10C3 40577942
+sample 7: KN10S7 40577960 -> KN10C7 40577961
+sample 8: KN10S8 40577963 -> KN10C8 40577964
+--- ensemble 13 Oct (7 lanes, <=7 concurrent with ENDFIT)
+sample 1: KN10S1 40697334  -> KN10C1 40697335
+sample 2: KN10S2 40697336 (after 40697335) -> KN10C2 40697337
+sample 4: KN10S4 40697338  -> KN10C4 40697339
+sample 5: KN10S5 40697340 (after 40697339) -> KN10C5 40697341
+sample 6: KN10S6 40697342  -> KN10C6 40697343
+sample 9: KN10S9 40697344 (after 40697343) -> KN10C9 40697345
+sample 10: KN10S10 40697346 (after 40626907) -> KN10C10 40697347
+sample 11: KN10S11 40697348 (after 40697347) -> KN10C11 40697349
+sample 12: KN10S12 40697350 (after 40626908) -> KN10C12 40697351
+sample 13: KN10S13 40697352 (after 40697351) -> KN10C13 40697353
+sample 14: KN10S14 40697354 (after 40626909) -> KN10C14 40697355
+sample 16: KN10S16 40697356 (after 40697355) -> KN10C16 40697357
+sample 15: KN10S15 40697358 (after 40626910) -> KN10C15 40697359
+--- lifetime-regime reruns at 10 cm knot, 15 Oct (7 lanes)
+K10T1200D1 41000239  -> K10T1200C1 41000240
+K10T4400D7 41000241 (after 41000240) -> K10T4400C7 41000242
+K10T1200D3 41000243  -> K10T1200C3 41000244
+K10T4400D3 41000245 (after 41000244) -> K10T4400C3 41000246
+K10T1200D7 41000247  -> K10T1200C7 41000248
+K10T3200D1 41000249  -> K10T3200C1 41000250
+K10T3200D3 41000251  -> K10T3200C3 41000252
+K10T3200D7 41000253  -> K10T3200C7 41000254
+K10T4400D1 41000255  -> K10T4400C1 41000256
+--- paper-support jobs 18 Oct (7 lanes)
+L: KN5S3 41228678 -> KN5C3 41228680
+L: KN5S7 41228681 -> KN5C7 41228682
+L: KN5S8 41228683 -> KN5C8 41228684
+L: K10T4400I1 41228685 -> J1 41228686 -> K10SCHED7 41228687
+L: K10T4400I3 41228688 -> J3 41228689 -> K10SCHED8 41228690
+L: K10T4400I7 41228691 -> J7 41228692 -> KN10D8 41228693
+L: K10SCHED3 41228694 -> KN10D3 41228695 -> KN10D7 41228696
+--- pinning test at 10 cm, 19 Oct (K10HIT = KN10S without drift pinning; max 6 running, 1 slot left for the paper session)
+K10HIT1 41335841 | K10HIT2 41335842 | K10HIT4 41335843
+K10HIT3 41335844 (after KN10D8 41228693) | K10HIT5 41335845 (after K10SCHED7 41228687) | K10HIT6 41335846 (after K10SCHED8 41228690)
+2026-10-24 07:45:08 prod KN10N1 fit 41815294 -> cont KN10N1FR 41815295 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N1.sh
+2026-10-24 08:26:13 mwA2500_KN10S1 41818140 :: python3 /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/joint_polish_dp.py --run KN10S --sample 1 --iter 10000 --geom truth --eps 3e-3 --nsteps 6 --dpw 0 --mw 2500 --out /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA2500_KN10S1.json --state /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA2500_KN10S1_state.npz
+2026-10-24 08:26:13 mwA250_KN10S1 41818141 :: python3 /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/joint_polish_dp.py --run KN10S --sample 1 --iter 10000 --geom truth --eps 3e-3 --nsteps 6 --dpw 0 --mw 250 --out /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA250_KN10S1.json --state /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA250_KN10S1_state.npz
+2026-10-24 08:26:13 mwA25000_KN10S1 41818142 :: python3 /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/joint_polish_dp.py --run KN10S --sample 1 --iter 10000 --geom truth --eps 3e-3 --nsteps 6 --dpw 0 --mw 25000 --out /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA25000_KN10S1.json --state /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA25000_KN10S1_state.npz
+2026-10-24 08:26:29 mwA2500_KN10S1 41818149 :: export LARND_JAX_LRU=32768 LARND_UNIQUE_BUCKET=1 LARND_POSRES_VEC=1; python3 /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/joint_polish_dp.py --run KN10S --sample 1 --iter 10000 --geom truth --eps 3e-3 --nsteps 6 --dpw 0 --mw 2500 --out /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA2500_KN10S1.json --state /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA2500_KN10S1_state.npz (resubmitted with the speed bundle; 41818140-2 cancelled while pending)
+2026-10-24 08:26:29 mwA250_KN10S1 41818150 :: export LARND_JAX_LRU=32768 LARND_UNIQUE_BUCKET=1 LARND_POSRES_VEC=1; python3 /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/joint_polish_dp.py --run KN10S --sample 1 --iter 10000 --geom truth --eps 3e-3 --nsteps 6 --dpw 0 --mw 250 --out /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA250_KN10S1.json --state /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA250_KN10S1_state.npz (resubmitted with the speed bundle; 41818140-2 cancelled while pending)
+2026-10-24 08:26:29 mwA25000_KN10S1 41818151 :: export LARND_JAX_LRU=32768 LARND_UNIQUE_BUCKET=1 LARND_POSRES_VEC=1; python3 /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/joint_polish_dp.py --run KN10S --sample 1 --iter 10000 --geom truth --eps 3e-3 --nsteps 6 --dpw 0 --mw 25000 --out /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA25000_KN10S1.json --state /sdf/scratch/neutrino/pgranger/review_2026_09/POLISH/joint/mwA25000_KN10S1_state.npz (resubmitted with the speed bundle; 41818140-2 cancelled while pending)
+2026-10-24 08:27:04 prod KN10N2 fit 41818174 -> cont KN10N2FR 41818175 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N2.sh
+2026-10-24 08:27:04 prod KN10N5 fit 41818176 -> cont KN10N5FR 41818177 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N5.sh
+2026-10-24 08:27:04 prod KN10N8 fit 41818178 -> cont KN10N8FR 41818179 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N8.sh
+2026-10-24 08:27:04 prod KN10N11 fit 41818180 -> cont KN10N11FR 41818181 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N11.sh
+2026-10-24 08:27:05 prod KN10N14 fit 41818182 -> cont KN10N14FR 41818183 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N14.sh
+2026-10-24 08:27:05 prod KN10N3 fit 41818184 -> cont KN10N3FR 41818185 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N3.sh
+2026-10-24 08:27:05 prod KN10N6 fit 41818186 -> cont KN10N6FR 41818187 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N6.sh
+2026-10-24 08:27:05 prod KN10N9 fit 41818188 -> cont KN10N9FR 41818189 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N9.sh
+2026-10-24 08:27:05 prod KN10N12 fit 41818190 -> cont KN10N12FR 41818191 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N12.sh
+2026-10-24 08:27:05 prod KN10N15 fit 41818192 -> cont KN10N15FR 41818193 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N15.sh
+2026-10-24 08:27:05 prod KN10N4 fit 41818194 -> cont KN10N4FR 41818195 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N4.sh
+2026-10-24 08:27:05 prod KN10N7 fit 41818196 -> cont KN10N7FR 41818197 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N7.sh
+2026-10-24 08:27:06 prod KN10N10 fit 41818198 -> cont KN10N10FR 41818199 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N10.sh
+2026-10-24 08:27:06 prod KN10N13 fit 41818200 -> cont KN10N13FR 41818201 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N13.sh
+2026-10-24 08:27:06 prod KN10N16 fit 41818202 -> cont KN10N16FR 41818203 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N16.sh
+2026-10-25 00:31:17 prod EZT1 fit 41873499 -> cont EZT1FR 41873500 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZT1.sh
+2026-10-25 00:31:17 prod EXS1 fit 41873501 -> cont EXS1FR 41873502 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS1.sh
+2026-10-25 00:31:17 prod EZT2 fit 41873503 -> cont EZT2FR 41873504 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZT2.sh
+2026-10-25 00:31:17 prod EXS2 fit 41873505 -> cont EXS2FR 41873506 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS2.sh
+2026-10-25 00:31:17 prod EZT4 fit 41873508 -> cont EZT4FR 41873509 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZT4.sh
+2026-10-25 00:31:17 prod EXS4 fit 41873510 -> cont EXS4FR 41873511 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS4.sh
+2026-10-25 00:31:17 prod EZS1 fit 41873512 -> cont EZS1FR 41873513 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZS1.sh
+2026-10-25 00:31:17 prod EZS4 fit 41873514 -> cont EZS4FR 41873515 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZS4.sh
+2026-10-25 00:31:17 prod EZS2 fit 41873517 -> cont EZS2FR 41873518 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZS2.sh
+2026-10-25 10:44:22 long EZS1L 41912038 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZS1L.sh
+2026-10-25 10:44:22 long EZS2L 41912039 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZS2L.sh
+2026-10-25 10:44:22 long EZS4L 41912040 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZS4L.sh
+2026-10-25 10:44:22 long KN10N1L 41912041 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N1L.sh
+2026-10-25 10:44:22 long KN10N2L 41912042 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N2L.sh
+2026-10-25 10:44:22 long KN10N4L 41912043 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N4L.sh
+2026-10-25 15:36:57 long-ctrl EXS1L 41932229 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS1L.sh
+2026-10-25 15:36:57 long-ctrl EXS2L 41932230 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS2L.sh
+2026-10-25 15:36:57 long-ctrl EXS4L 41932231 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS4L.sh
+2026-10-25 15:36:57 long-ctrl EZT1L 41932232 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZT1L.sh
+2026-10-25 15:36:57 long-ctrl EZT2L 41932233 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZT2L.sh
+2026-10-25 15:36:57 long-ctrl EZT4L 41932234 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZT4L.sh
+2026-10-26 03:18:31 fast EXS1H 41980603 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS1H.sh
+2026-10-26 03:18:31 fast EXS2H 41980604 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS2H.sh
+2026-10-26 03:18:31 fast EXS4H 41980605 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS4H.sh
+2026-10-26 03:18:31 fast KN10N1H 41980606 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N1H.sh
+2026-10-26 03:18:31 fast KN10N2H 41980607 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N2H.sh
+2026-10-26 03:18:31 fast KN10N4H 41980608 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N4H.sh
+2026-10-26 04:27:56 fast2 EXS1H2 41984914 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS1H2.sh
+2026-10-26 04:27:56 fast2 EXS2H2 41984915 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS2H2.sh
+2026-10-26 04:27:56 fast2 EXS4H2 41984916 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS4H2.sh
+2026-10-26 04:27:56 fast2 KN10N1H2 41984917 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N1H2.sh
+2026-10-26 04:27:56 fast2 KN10N2H2 41984918 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N2H2.sh
+2026-10-26 04:27:57 fast2 KN10N4H2 41984919 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N4H2.sh
+2026-10-26 05:29:26 prod EXP1 fit 41986747 -> cont EXP1FR 41986748 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP1.sh
+2026-10-26 05:29:26 g-long EXP1L 41986749 (after 41986748) :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP1L.sh
+2026-10-26 05:29:26 prod EXP2 fit 41986750 -> cont EXP2FR 41986751 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP2.sh
+2026-10-26 05:29:26 g-long EXP2L 41986752 (after 41986751) :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP2L.sh
+2026-10-26 05:29:26 prod EXP4 fit 41986753 -> cont EXP4FR 41986754 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP4.sh
+2026-10-26 05:29:26 g-long EXP4L 41986756 (after 41986754) :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP4L.sh
+2026-10-26 05:29:26 prod EZP1 fit 41986757 -> cont EZP1FR 41986758 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZP1.sh
+2026-10-26 05:29:26 g-long EZP1L 41986759 (after 41986758) :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZP1L.sh
+2026-10-26 05:29:26 prod EZP2 fit 41986760 -> cont EZP2FR 41986761 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZP2.sh
+2026-10-26 05:29:26 g-long EZP2L 41986762 (after 41986761) :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZP2L.sh
+2026-10-26 05:29:26 prod EZP4 fit 41986763 -> cont EZP4FR 41986764 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZP4.sh
+2026-10-26 05:29:26 g-long EZP4L 41986765 (after 41986764) :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EZP4L.sh
+2026-10-26 23:00:27 fast3 EXS1H3 42080288 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS1H3.sh
+2026-10-26 23:00:27 fast3 EXS2H3 42080289 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS2H3.sh
+2026-10-26 23:00:27 fast3 EXS4H3 42080290 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXS4H3.sh
+2026-10-26 23:00:27 fast3 KN10N1H3 42080291 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N1H3.sh
+2026-10-26 23:00:27 fast3 KN10N2H3 42080292 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N2H3.sh
+2026-10-26 23:00:28 fast3 KN10N4H3 42080293 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N4H3.sh
+2026-10-28 00:00:39 j EXP1H 42188884 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP1H.sh
+2026-10-28 00:00:39 j EXP1HH 42188885 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP1HH.sh
+2026-10-28 00:00:39 j EXP2H 42188886 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP2H.sh
+2026-10-28 00:00:39 j EXP2HH 42188887 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP2HH.sh
+2026-10-28 00:00:39 j EXP4H 42188888 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP4H.sh
+2026-10-28 00:00:39 j EXP4HH 42188889 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP4HH.sh
+2026-10-28 00:10:56 bs BS400 42189607 (after 42188884) :: KNOT/inner_sci_full_BS400.sh
+2026-10-28 00:10:56 bs BS800 42189609 (after 42188886) :: KNOT/inner_sci_full_BS800.sh
+2026-10-28 00:10:56 bs BS1200 42189610 (after 42188888) :: KNOT/inner_sci_full_BS1200.sh
+2026-10-28 00:10:56 bs BS1600 42189611 (after 42188885) :: KNOT/inner_sci_full_BS1600.sh
+2026-10-28 00:27:25 ksmoke SMEA 42190570 (after 42188887) :: KNOT/inner_sci_full_SMEA.sh
+2026-10-28 00:27:25 ksmoke SMJN 42190571 (after 42188889) :: KNOT/inner_sci_full_SMJN.sh
+2026-10-28 08:43:22 prodfast KN10N3H 42247045
+2026-10-28 08:43:22 prodfast KN10N9H 42247046 (afterany:42247045)
+2026-10-28 08:43:22 prodfast KN10N15H 42247047 (afterany:42247046)
+2026-10-28 08:43:22 prodfast KN10N5H 42247048
+2026-10-28 08:43:22 prodfast KN10N10H 42247049 (afterany:42247048)
+2026-10-28 08:43:22 prodfast KN10N16H 42247050 (afterany:42247049)
+2026-10-28 08:43:22 prodfast KN10N6H 42247051
+2026-10-28 08:43:22 prodfast KN10N11H 42247053 (afterany:42247051)
+2026-10-28 08:43:23 prodfast KN10N7H 42247054
+2026-10-28 08:43:23 prodfast KN10N12H 42247055 (afterany:42247054)
+2026-10-28 08:43:23 prodfast KN10N8H 42247056
+2026-10-28 08:43:23 prodfast KN10N13H 42247057 (afterany:42247056)
+2026-10-28 08:43:23 prodfast KN10N14H 42247058
+2026-10-28 09:08:56 endfit-m KN10N2FL 42248450 (afterany:42247047) -> KN10N2FLH 42248451
+2026-10-28 09:08:56 endfit-m KN10N2SK 42248452 (afterany:42248451?afternotok:42248450)
+2026-10-28 09:08:56 endfit-m EXP1LM 42248453 (afterany:42248452)
+2026-10-28 09:08:56 endfit-m KN10N4FL 42248454 (afterany:42247050) -> KN10N4FLH 42248455
+2026-10-28 09:08:56 endfit-m EXP2LM 42248456 (afterany:42248455?afternotok:42248454)
+2026-10-28 09:08:56 endfit-m EXP4LM 42248457 (afterany:42248456)
+2026-10-28 09:08:56 endfit-m EXP2FL 42248458 (afterany:42247053) -> EXP2FLH 42248459
+2026-10-28 09:08:57 endfit-m EXP2SK 42248460 (afterany:42248459?afternotok:42248458)
+2026-10-28 09:08:57 endfit-m EXS1LM 42248461 (afterany:42248460)
+2026-10-28 09:08:57 endfit-m KN10N2LM 42248462 (afterany:42248461)
+2026-10-28 09:08:57 endfit-m EXP4FL 42248463 (afterany:42247055) -> EXP4FLH 42248464
+2026-10-28 09:08:57 endfit-m EXP4SK 42248465 (afterany:42248464?afternotok:42248463)
+2026-10-28 09:08:57 endfit-m EXS2LM 42248466 (afterany:42248465)
+2026-10-28 09:08:57 endfit-m KN10N4LM 42248467 (afterany:42248466)
+2026-10-28 09:08:57 endfit-m KN10N1FL 42248468 (afterany:42247057) -> KN10N1FLH 42248469
+2026-10-28 09:08:58 endfit-m KN10N1SK 42248470 (afterany:42248469?afternotok:42248468)
+2026-10-28 09:08:58 endfit-m EXS4LM 42248471 (afterany:42248470)
+2026-10-28 09:08:58 endfit-m EXP1FL 42248472 (afterany:42247058) -> EXP1FLH 42248474
+2026-10-28 09:08:58 endfit-m EXP1SK 42248475 (afterany:42248474?afternotok:42248472)
+2026-10-28 09:08:58 endfit-m KN10N4SK 42248476 (afterany:42248475)
+2026-10-28 09:08:58 endfit-m KN10N1LM 42248477 (afterany:42248476)
+2026-10-28 21:14:52 prod EXP1B2 fit 42324744 -> cont EXP1B2FR 42324745 -> fast EXP1B2H 42324746 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP1B2.sh
+2026-10-28 21:14:52 prod KN10N1CF fit 42324747 -> cont KN10N1CFFR 42324748 -> fast KN10N1CFH 42324749 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N1CF.sh
+2026-10-28 21:14:53 prod EXP2B2 fit 42324750 -> cont EXP2B2FR 42324751 -> fast EXP2B2H 42324752 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP2B2.sh
+2026-10-28 21:14:53 prod KN10N2CF fit 42324753 -> cont KN10N2CFFR 42324754 -> fast KN10N2CFH 42324755 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N2CF.sh
+2026-10-28 21:14:53 prod EXP4B2 fit 42324756 -> cont EXP4B2FR 42324757 -> fast EXP4B2H 42324758 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP4B2.sh
+2026-10-28 21:14:53 prod KN10N4CF fit 42324759 -> cont KN10N4CFFR 42324760 -> fast KN10N4CFH 42324761 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N4CF.sh
+2026-10-28 21:14:53 prod KN10N1B2 fit 42324763 -> cont KN10N1B2FR 42324764 -> fast KN10N1B2H 42324765 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N1B2.sh
+2026-10-28 21:14:53 prod EXP1CF fit 42324766 -> cont EXP1CFFR 42324767 -> fast EXP1CFH 42324768 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP1CF.sh
+2026-10-28 21:14:53 prod KN10N2B2 fit 42324769 -> cont KN10N2B2FR 42324770 -> fast KN10N2B2H 42324771 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N2B2.sh
+2026-10-28 21:14:54 prod EXP2CF fit 42324772 -> cont EXP2CFFR 42324773 -> fast EXP2CFH 42324774 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP2CF.sh
+2026-10-28 21:14:54 prod KN10N4B2 fit 42324775 -> cont KN10N4B2FR 42324776 -> fast KN10N4B2H 42324777 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N4B2.sh
+2026-10-28 21:14:54 prod EXP4CF fit 42324778 -> cont EXP4CFFR 42324779 -> fast EXP4CFH 42324780 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP4CF.sh
+2026-10-29 05:43:22 prod KN10N3P fit 42371063 -> cont KN10N3PFR 42371064 -> fast KN10N3PH 42371065 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N3P.sh
+2026-10-29 05:43:22 prod KN10N3CF fit 42371067 -> cont KN10N3CFFR 42371068 -> fast KN10N3CFH 42371069 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N3CF.sh
+2026-10-29 05:43:23 prod KN10N3SD fit 42371070 -> cont KN10N3SDFR 42371071 -> fast KN10N3SDH 42371072 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N3SD.sh
+2026-10-29 05:43:23 prod KN10N5CF fit 42371073 -> cont KN10N5CFFR 42371074 -> fast KN10N5CFH 42371075 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N5CF.sh
+2026-10-29 05:43:23 prod KN10N5SD fit 42371076 -> cont KN10N5SDFR 42371077 -> fast KN10N5SDH 42371078 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N5SD.sh
+2026-10-29 05:43:23 prod KN10N5P fit 42371079 -> cont KN10N5PFR 42371080 -> fast KN10N5PH 42371081 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N5P.sh
+2026-10-29 05:43:23 prod KN10N6SD fit 42371082 -> cont KN10N6SDFR 42371083 -> fast KN10N6SDH 42371084 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N6SD.sh
+2026-10-29 05:43:23 prod KN10N6P fit 42371085 -> cont KN10N6PFR 42371086 -> fast KN10N6PH 42371087 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N6P.sh
+2026-10-29 05:43:23 prod KN10N6CF fit 42371088 -> cont KN10N6CFFR 42371089 -> fast KN10N6CFH 42371090 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N6CF.sh
+2026-10-29 05:43:24 prod KN10N7P fit 42371091 -> cont KN10N7PFR 42371092 -> fast KN10N7PH 42371093 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N7P.sh
+2026-10-29 05:43:24 prod KN10N7CF fit 42371094 -> cont KN10N7CFFR 42371095 -> fast KN10N7CFH 42371096 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N7CF.sh
+2026-10-29 05:43:24 prod KN10N7SD fit 42371097 -> cont KN10N7SDFR 42371098 -> fast KN10N7SDH 42371099 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N7SD.sh
+2026-10-29 05:43:24 prod KN10N8CF fit 42371100 -> cont KN10N8CFFR 42371101 -> fast KN10N8CFH 42371102 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N8CF.sh
+2026-10-29 05:43:24 prod KN10N8SD fit 42371103 -> cont KN10N8SDFR 42371104 -> fast KN10N8SDH 42371105 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N8SD.sh
+2026-10-29 05:43:24 prod KN10N8P fit 42371106 -> cont KN10N8PFR 42371107 -> fast KN10N8PH 42371108 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N8P.sh
+2026-10-29 05:43:24 prod KN10N9SD fit 42371109 -> cont KN10N9SDFR 42371110 -> fast KN10N9SDH 42371111 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N9SD.sh
+2026-10-29 05:43:25 prod KN10N9P fit 42371112 -> cont KN10N9PFR 42371115 -> fast KN10N9PH 42371117 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N9P.sh
+2026-10-29 05:43:25 prod KN10N9CF fit 42371118 -> cont KN10N9CFFR 42371119 -> fast KN10N9CFH 42371120 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N9CF.sh
+2026-10-29 11:06:51 prod KN10N3PC fit 42401876 -> cont KN10N3PCFR 42401877 -> fast KN10N3PCH 42401878 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N3PC.sh
+2026-10-29 15:17:00 prod EXP3P fit 42422675 -> cont EXP3PFR 42422676 -> fast EXP3PH 42422677 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP3P.sh
+2026-10-29 15:17:00 prod EXP3CF fit 42422679 -> cont EXP3CFFR 42422680 -> fast EXP3CFH 42422681 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP3CF.sh
+2026-10-29 15:17:00 prod EXP5P fit 42422682 -> cont EXP5PFR 42422683 -> fast EXP5PH 42422684 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP5P.sh
+2026-10-29 15:17:00 prod EXP5CF fit 42422685 -> cont EXP5CFFR 42422686 -> fast EXP5CFH 42422687 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP5CF.sh
+2026-10-29 15:17:01 prod EXP6CF fit 42422688 -> cont EXP6CFFR 42422689 -> fast EXP6CFH 42422690 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP6CF.sh
+2026-10-29 15:17:01 prod EXP6P fit 42422691 -> cont EXP6PFR 42422692 -> fast EXP6PH 42422693 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP6P.sh
+2026-10-29 17:34:17 cache test 2 KN10N5PE 42437667 (stage 1 only, cancelled after epoch 1) :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N5PE.sh
+2026-10-29 21:42:51 prod EXP1C25 fit 42463569 -> cont EXP1C25FR 42463570 -> fast EXP1C25H 42463571 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP1C25.sh
+2026-10-29 21:42:51 prod EXP2C25 fit 42463572 -> cont EXP2C25FR 42463573 -> fast EXP2C25H 42463574 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP2C25.sh
+2026-10-29 21:42:51 prod EXP3C25 fit 42463575 -> cont EXP3C25FR 42463576 -> fast EXP3C25H 42463577 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP3C25.sh
+2026-10-29 21:42:52 prod EXP4C25 fit 42463578 -> cont EXP4C25FR 42463579 -> fast EXP4C25H 42463581 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP4C25.sh
+2026-10-29 21:42:53 prod EXP5C25 fit 42463582 -> cont EXP5C25FR 42463583 -> fast EXP5C25H 42463584 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP5C25.sh
+2026-10-29 21:42:53 prod EXP6C25 fit 42463586 -> cont EXP6C25FR 42463587 -> fast EXP6C25H 42463588 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP6C25.sh
+2026-10-30 01:16:04 prod EXP1C75 fit 42483326 -> cont EXP1C75FR 42483327 -> fast EXP1C75H 42483328 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP1C75.sh
+2026-10-30 01:16:04 prod EXP2C75 fit 42483329 -> cont EXP2C75FR 42483330 -> fast EXP2C75H 42483331 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP2C75.sh
+2026-10-30 01:16:04 prod EXP3C75 fit 42483332 -> cont EXP3C75FR 42483333 -> fast EXP3C75H 42483334 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP3C75.sh
+2026-10-30 01:16:05 prod EXP4C75 fit 42483335 -> cont EXP4C75FR 42483336 -> fast EXP4C75H 42483337 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP4C75.sh
+2026-10-30 01:16:05 prod EXP5C75 fit 42483338 -> cont EXP5C75FR 42483339 -> fast EXP5C75H 42483340 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP5C75.sh
+2026-10-30 01:16:05 prod EXP6C75 fit 42483341 -> cont EXP6C75FR 42483342 -> fast EXP6C75H 42483343 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP6C75.sh
+2026-10-30 04:56:44 prod KN10N3C75 fit 42493192 -> cont KN10N3C75FR 42493193 -> fast KN10N3C75H 42493194 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N3C75.sh
+2026-10-30 04:56:45 prod KN10N5C75 fit 42493195 -> cont KN10N5C75FR 42493196 -> fast KN10N5C75H 42493197 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N5C75.sh
+2026-10-30 04:56:45 prod KN10N6C75 fit 42493198 -> cont KN10N6C75FR 42493199 -> fast KN10N6C75H 42493200 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N6C75.sh
+2026-10-30 04:56:45 prod KN10N7C75 fit 42493201 -> cont KN10N7C75FR 42493202 -> fast KN10N7C75H 42493203 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N7C75.sh
+2026-10-30 04:56:45 prod KN10N8C75 fit 42493204 -> cont KN10N8C75FR 42493205 -> fast KN10N8C75H 42493206 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N8C75.sh
+2026-10-30 04:56:45 prod KN10N9C75 fit 42493208 -> cont KN10N9C75FR 42493209 -> fast KN10N9C75H 42493210 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N9C75.sh
+2026-10-30 21:50:58 prod KN10N1C75 fit 42557843 -> cont KN10N1C75FR 42557844 -> fast KN10N1C75H 42557845 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N1C75.sh
+2026-10-30 21:50:58 prod KN10N2C75 fit 42557846 -> cont KN10N2C75FR 42557847 -> fast KN10N2C75H 42557848 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N2C75.sh
+2026-10-30 21:50:59 prod KN10N4C75 fit 42557849 -> cont KN10N4C75FR 42557850 -> fast KN10N4C75H 42557851 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N4C75.sh
+2026-10-30 21:50:59 prod KN10N10C75 fit 42557852 -> cont KN10N10C75FR 42557853 -> fast KN10N10C75H 42557854 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N10C75.sh
+2026-10-30 21:50:59 prod KN10N11C75 fit 42557855 -> cont KN10N11C75FR 42557856 -> fast KN10N11C75H 42557857 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N11C75.sh
+2026-10-30 21:50:59 prod KN10N12C75 fit 42557858 -> cont KN10N12C75FR 42557859 -> fast KN10N12C75H 42557860 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_KN10N12C75.sh
+2026-10-31 05:05:39 prod EXP7 fit 42582044 -> cont EXP7FR 42582045 -> fast EXP7H 42582046 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP7.sh
+2026-10-31 05:05:39 prod EXP7C75 fit 42582047 -> cont EXP7C75FR 42582048 -> fast EXP7C75H 42582049 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP7C75.sh
+2026-10-31 05:05:39 prod EXP8 fit 42582050 -> cont EXP8FR 42582052 -> fast EXP8H 42582053 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP8.sh
+2026-10-31 05:05:39 prod EXP8C75 fit 42582054 -> cont EXP8C75FR 42582055 -> fast EXP8C75H 42582056 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP8C75.sh
+2026-10-31 05:05:39 prod EXP9 fit 42582057 -> cont EXP9FR 42582058 -> fast EXP9H 42582059 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP9.sh
+2026-10-31 05:05:39 prod EXP9C75 fit 42582060 -> cont EXP9C75FR 42582061 -> fast EXP9C75H 42582062 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP9C75.sh
+2026-10-31 05:05:40 prod EXP10 fit 42582063 -> cont EXP10FR 42582064 -> fast EXP10H 42582065 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP10.sh
+2026-10-31 05:05:40 prod EXP10C75 fit 42582066 -> cont EXP10C75FR 42582067 -> fast EXP10C75H 42582068 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP10C75.sh
+2026-10-31 05:05:40 prod EXP11 fit 42582069 -> cont EXP11FR 42582070 -> fast EXP11H 42582071 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP11.sh
+2026-10-31 05:05:40 prod EXP11C75 fit 42582072 -> cont EXP11C75FR 42582073 -> fast EXP11C75H 42582074 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP11C75.sh
+2026-10-31 05:05:40 prod EXP12 fit 42582075 -> cont EXP12FR 42582076 -> fast EXP12H 42582077 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP12.sh
+2026-10-31 05:05:40 prod EXP12C75 fit 42582078 -> cont EXP12C75FR 42582079 -> fast EXP12C75H 42582080 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP12C75.sh
+2026-11-03 06:59:41 prod EXP17C75 [coarse 7500] fit 42929602 -> cont EXP17C75FR 42929603 -> fast EXP17C75H 42929604 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP17C75.sh
+2026-11-03 06:59:41 prod EXP23C75 [coarse 7500] fit 42929606 -> cont EXP23C75FR 42929607 -> fast EXP23C75H 42929608 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP23C75.sh
+2026-11-03 06:59:41 prod EXP17C75R [coarse 7500] fit 42929609 -> cont EXP17C75RFR 42929610 -> fast EXP17C75RH 42929611 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP17C75R.sh
+2026-11-03 06:59:43 prod EXP18C75 [coarse 7500] fit 42929616 -> cont EXP18C75FR 42929617 -> fast EXP18C75H 42929618 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP18C75.sh
+2026-11-03 06:59:43 prod EXP24C75 [coarse 7500] fit 42929619 -> cont EXP24C75FR 42929620 -> fast EXP24C75H 42929621 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP24C75.sh
+2026-11-03 06:59:43 prod EXP18C75R [coarse 7500] fit 42929622 -> cont EXP18C75RFR 42929623 -> fast EXP18C75RH 42929624 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP18C75R.sh
+2026-11-03 06:59:44 prod EXP19C75 [coarse 7500] fit 42929630 -> cont EXP19C75FR 42929631 -> fast EXP19C75H 42929632 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP19C75.sh
+2026-11-03 06:59:44 prod EXP25C75 [coarse 7500] fit 42929633 -> cont EXP25C75FR 42929634 -> fast EXP25C75H 42929635 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP25C75.sh
+2026-11-03 06:59:44 prod EXP19C75R [coarse 7500] fit 42929636 -> cont EXP19C75RFR 42929637 -> fast EXP19C75RH 42929638 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP19C75R.sh
+2026-11-03 06:59:44 prod EXP20C75 [coarse 7500] fit 42929642 -> cont EXP20C75FR 42929643 -> fast EXP20C75H 42929644 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP20C75.sh
+2026-11-03 06:59:44 prod EXP26C75 [coarse 7500] fit 42929645 -> cont EXP26C75FR 42929646 -> fast EXP26C75H 42929647 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP26C75.sh
+2026-11-03 06:59:45 prod EXP20C75R [coarse 7500] fit 42929648 -> cont EXP20C75RFR 42929649 -> fast EXP20C75RH 42929650 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP20C75R.sh
+2026-11-03 06:59:45 prod EXP21C75 [coarse 7500] fit 42929654 -> cont EXP21C75FR 42929655 -> fast EXP21C75H 42929656 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP21C75.sh
+2026-11-03 06:59:45 prod EXP27C75 [coarse 7500] fit 42929657 -> cont EXP27C75FR 42929658 -> fast EXP27C75H 42929659 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP27C75.sh
+2026-11-03 06:59:45 prod EXP21C75R [coarse 7500] fit 42929660 -> cont EXP21C75RFR 42929661 -> fast EXP21C75RH 42929662 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP21C75R.sh
+2026-11-03 06:59:45 prod EXP22C75 [coarse 7500] fit 42929666 -> cont EXP22C75FR 42929667 -> fast EXP22C75H 42929668 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP22C75.sh
+2026-11-03 06:59:45 prod EXP28C75 [coarse 7500] fit 42929669 -> cont EXP28C75FR 42929670 -> fast EXP28C75H 42929671 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP28C75.sh
+2026-11-03 06:59:46 prod EXP22C75R [coarse 7500] fit 42929672 -> cont EXP22C75RFR 42929673 -> fast EXP22C75RH 42929674 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP22C75R.sh
+2026-11-03 06:59:46 prod EXP23C75R [coarse 7500] fit 42929675 -> cont EXP23C75RFR 42929676 -> fast EXP23C75RH 42929677 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP23C75R.sh
+2026-11-03 06:59:46 prod EXP24C75R [coarse 7500] fit 42929680 -> cont EXP24C75RFR 42929681 -> fast EXP24C75RH 42929682 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP24C75R.sh
+2026-11-04 03:04:54 prod EXP29C75 [coarse 7500] fit 43082347 -> cont EXP29C75FR 43082348 -> fast EXP29C75H 43082349 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP29C75.sh
+2026-11-04 03:04:54 prod EXP35C75 [coarse 7500] fit 43082350 -> cont EXP35C75FR 43082352 -> fast EXP35C75H 43082353 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP35C75.sh
+2026-11-04 03:04:54 prod EXP30C75 [coarse 7500] fit 43082360 -> cont EXP30C75FR 43082361 -> fast EXP30C75H 43082362 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP30C75.sh
+2026-11-04 03:04:55 prod EXP36C75 [coarse 7500] fit 43082363 -> cont EXP36C75FR 43082364 -> fast EXP36C75H 43082365 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP36C75.sh
+2026-11-04 03:04:55 prod EXP31C75 [coarse 7500] fit 43082372 -> cont EXP31C75FR 43082373 -> fast EXP31C75H 43082374 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP31C75.sh
+2026-11-04 03:04:55 prod EXP37C75 [coarse 7500] fit 43082375 -> cont EXP37C75FR 43082376 -> fast EXP37C75H 43082377 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP37C75.sh
+2026-11-04 03:04:55 prod EXP32C75 [coarse 7500] fit 43082384 -> cont EXP32C75FR 43082385 -> fast EXP32C75H 43082386 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP32C75.sh
+2026-11-04 03:04:56 prod EXP38C75 [coarse 7500] fit 43082387 -> cont EXP38C75FR 43082388 -> fast EXP38C75H 43082389 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP38C75.sh
+2026-11-04 03:04:56 prod EXP33C75 [coarse 7500] fit 43082396 -> cont EXP33C75FR 43082398 -> fast EXP33C75H 43082399 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP33C75.sh
+2026-11-04 03:04:56 prod EXP39C75 [coarse 7500] fit 43082400 -> cont EXP39C75FR 43082401 -> fast EXP39C75H 43082402 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP39C75.sh
+2026-11-04 03:04:56 prod EXP34C75 [coarse 7500] fit 43082409 -> cont EXP34C75FR 43082410 -> fast EXP34C75H 43082411 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP34C75.sh
+2026-11-04 03:04:56 prod EXP40C75 [coarse 7500] fit 43082412 -> cont EXP40C75FR 43082413 -> fast EXP40C75H 43082414 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP40C75.sh
+2026-11-06 02:38:55 prod EXP41C75 [coarse 7500; cache shared; targets /sdf/data/neutrino/pgranger/larnd-sim-jax] fit 43486417 -> cont EXP41C75FR 43486418 -> fast EXP41C75H 43486419 -> polish EXP41C75P 43486421 :: /sdf/scratch/neutrino/pgranger/review_2026_09/KNOT/inner_sci_full_EXP41C75.sh

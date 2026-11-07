@@ -1,0 +1,13 @@
+NOCLIP: 12 pairs; config check OK (seed, coarse, smear / entry; HNC = A through 14000; no NaN; clip 1e12 and Adam reset in every log)
+                        d_A           d_NC  Dd = d_NC - d_A gap closed  class
+  Ab          +0.050+-0.010  +0.047+-0.002   -0.004+- 0.010       0.07  (descriptive)
+  eField      -0.000+-0.000  -0.001+-0.000   -0.000+- 0.000      -0.23  (descriptive)
+  tran_diff   -0.063+-0.084  -0.184+-0.076   -0.121+- 0.091      -1.92  (descriptive)
+  long_diff   -1.319+-0.303  -2.213+-0.199   -0.894+- 0.411      -0.68  PARTIAL
+  lifetime    -1.414+-0.247  -1.997+-0.132   -0.583+- 0.303      -0.41  LAG
+  descriptive, end-point shift e(HNC) - e(A), mean +- SE: Ab +0.028+-0.029 eField +0.010+-0.002 tran_diff +0.134+-0.127 long_diff +2.164+-0.936 lifetime +0.637+-0.755
+  descriptive, e(HNC) - mean(A, H2), s = 17-24: Ab +0.051+-0.034 eField +0.010+-0.002 tran_diff +0.266+-0.208 long_diff +2.032+-1.224 lifetime +0.799+-0.835
+  descriptive, mean error A / HNC: Ab -0.09 / -0.07 eField +0.13 / +0.14 tran_diff +0.63 / +0.77 long_diff +4.61 / +6.78 lifetime +2.84 / +3.48
+  descriptive, RMS error A / HNC:  Ab 0.22 / 0.14 eField 0.14 / 0.15 tran_diff 1.43 / 1.42 long_diff 8.06 / 7.89 lifetime 5.67 / 4.99
+  descriptive, position (um) A 864.1, HNC 865.7, paired +1.6+-0.4
+NOCLIP VERDICT: long_diff PARTIAL, lifetime LAG

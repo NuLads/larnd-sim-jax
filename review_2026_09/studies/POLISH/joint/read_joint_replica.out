@@ -1,0 +1,36 @@
+KN10V1    100/100  valid True  best kappa 0.1  dJ -267.72 (model -301.23; d fixed -6.75)  neg-curvature batches 32  joint step % Ab +0.026 eField +0.002 tran_diff -0.730 long_diff +0.239 lifetime -1.856 | asym 8.9e-01 sym 4.6e-01
+           ladder dJ: 0.0:+872.3  0.03:-193.9  0.1:-267.7  0.3:-265.2  1.0:-206.4  3.0:-123.1  10.0:-53.7  inf:-6.7
+KN10V1b   100/100  valid True  best kappa 0.1  dJ -323.98 (model -350.66; d fixed -31.22)  neg-curvature batches 23  joint step % Ab +0.225 eField +0.002 tran_diff -0.241 long_diff -4.182 lifetime -8.241 | asym 5.5e-01 sym 1.3e+00
+           ladder dJ: 0.0:-105.4  0.03:-282.6  0.1:-324.0  0.3:-312.8  1.0:-244.2  3.0:-152.8  10.0:-79.6  inf:-31.2
+KN10V1c   100/100  valid True  best kappa 0.1  dJ -370.04 (model -388.01; d fixed -34.67)  neg-curvature batches 24  joint step % Ab +0.232 eField +0.003 tran_diff +0.513 long_diff -3.444 lifetime -6.623 | asym 5.6e-01 sym 1.8e+00
+           ladder dJ: 0.0:-123.2  0.03:-335.2  0.1:-370.0  0.3:-345.8  1.0:-261.1  3.0:-161.7  10.0:-85.0  inf:-34.7
+KN10S1    100/100  valid True  best kappa 0.1  dJ -284.01 (model -295.45; d fixed -18.20)  neg-curvature batches 26  joint step % Ab +0.209 eField +0.002 tran_diff +0.158 long_diff -3.136 lifetime -6.296 | asym 7.2e-01 sym 6.6e-01
+           ladder dJ: 0.0:-105.1  0.03:-252.0  0.1:-284.0  0.3:-271.6  1.0:-209.7  3.0:-127.7  10.0:-62.3  inf:-18.2
+KN10V2    92/100  valid True  best kappa 0.1  dJ -243.27 (model -280.91; d fixed -11.69)  neg-curvature batches 26  joint step % Ab +0.240 eField -0.001 tran_diff +0.425 long_diff -3.577 lifetime -7.254 | asym 6.5e-01 sym 2.4e+00
+           ladder dJ: 0.0:-6.7  0.03:-159.3  0.1:-243.3  0.3:-235.8  1.0:-177.1  3.0:-104.0  10.0:-48.0  inf:-11.7
+KN10V2b   90/100  valid True  best kappa 0.3  dJ -351.15 (model -372.68; d fixed -11.54)  neg-curvature batches 18  joint step % Ab +0.139 eField +0.001 tran_diff +0.411 long_diff -3.261 lifetime -3.376 | asym 8.2e-01 sym 2.2e+00
+           ladder dJ: 0.0:+496.4  0.03:-200.1  0.1:-332.1  0.3:-351.1  1.0:-257.1  3.0:-145.3  10.0:-63.4  inf:-11.5
+KN10V2c   90/100  valid True  best kappa 0.3  dJ -251.62 (model -265.62; d fixed -5.08)  neg-curvature batches 15  joint step % Ab +0.142 eField +0.001 tran_diff -0.271 long_diff -0.404 lifetime -4.611 | asym 3.8e-01 sym 2.0e+00
+           ladder dJ: 0.0:+127.1  0.03:-130.5  0.1:-226.0  0.3:-251.6  1.0:-193.7  3.0:-111.2  10.0:-47.1  inf:-5.1
+KN10S2    90/100  valid True  best kappa 0.3  dJ -216.23 (model -220.34; d fixed -3.58)  neg-curvature batches 21  joint step % Ab +0.074 eField -0.000 tran_diff +0.542 long_diff -2.589 lifetime -1.522 | asym 8.0e-01 sym 6.8e-01
+           ladder dJ: 0.0:+141.0  0.03:-140.1  0.1:-215.9  0.3:-216.2  1.0:-160.2  3.0:-92.6  10.0:-39.0  inf:-3.6
+KN10V3    91/100  valid True  best kappa 0.1  dJ -243.62 (model -274.67; d fixed -12.05)  neg-curvature batches 21  joint step % Ab +0.126 eField +0.001 tran_diff -0.717 long_diff -2.640 lifetime -3.883 | asym 8.7e-01 sym 6.3e-01
+           ladder dJ: 0.0:-3.4  0.03:-188.0  0.1:-243.6  0.3:-241.9  1.0:-183.3  3.0:-109.7  10.0:-51.1  inf:-12.0
+KN10V3b   91/100  valid True  best kappa 0.3  dJ -288.98 (model -313.66; d fixed -32.22)  neg-curvature batches 24  joint step % Ab +0.343 eField +0.001 tran_diff -0.250 long_diff -5.647 lifetime -9.419 | asym 8.9e-01 sym 1.1e+00
+           ladder dJ: 0.0:-96.6  0.03:-240.2  0.1:-282.7  0.3:-289.0  1.0:-228.9  3.0:-142.5  10.0:-75.7  inf:-32.2
+KN10V3c   90/100  valid True  best kappa 0.3  dJ -227.11 (model -241.53; d fixed -34.13)  neg-curvature batches 24  joint step % Ab +0.275 eField +0.000 tran_diff -0.659 long_diff -5.448 lifetime -10.521 | asym 7.3e-01 sym 3.4e-01
+           ladder dJ: 0.0:-7.2  0.03:-184.5  0.1:-226.4  0.3:-227.1  1.0:-182.3  3.0:-119.0  10.0:-68.1  inf:-34.1
+KN10S3    91/100  valid True  best kappa 0.3  dJ -247.63 (model -256.18; d fixed -16.09)  neg-curvature batches 21  joint step % Ab +0.194 eField +0.000 tran_diff -0.910 long_diff -3.497 lifetime -6.251 | asym 9.8e-01 sym 1.9e+00
+           ladder dJ: 0.0:+228.7  0.03:-135.0  0.1:-238.2  0.3:-247.6  1.0:-191.6  3.0:-114.8  10.0:-54.5  inf:-16.1
+step VALID 12/12
+  Ab        same-data SD before 0.120  joint 0.035 (r 0.29)  5-param 0.083 (r 0.70)  | mean step joint +0.185  5-param +0.062  | mean error before +0.16  joint +0.34  5-param +0.22  | joint SD / 16-sample SD 0.26
+  eField    same-data SD before 0.008  joint 0.008 (r 0.96)  5-param 0.008 (r 0.95)  | mean step joint +0.001  5-param +0.001  | mean error before +0.03  joint +0.03  5-param +0.03  | joint SD / 16-sample SD 0.79
+  tran_diff same-data SD before 0.771  joint 0.448 (r 0.58)  5-param 0.493 (r 0.64)  | mean step joint -0.144  5-param -0.132  | mean error before +0.99  joint +0.84  5-param +0.85  | joint SD / 16-sample SD 0.43
+  long_diff same-data SD before 4.670  joint 2.979 (r 0.64)  5-param 3.043 (r 0.65)  | mean step joint -3.132  5-param -2.463  | mean error before +4.30  joint +1.04  5-param +1.72  | joint SD / 16-sample SD 0.58
+  lifetime  same-data SD before 3.536  joint 0.905 (r 0.26)  5-param 2.063 (r 0.58)  | mean step joint -5.821  5-param -2.653  | mean error before -0.30  joint -5.99  5-param -2.95  | joint SD / 16-sample SD 0.23
+verdict (scatter): HELPS | BETTER than the 5-parameter polish
+mean lifetime shift 5.82% -> NOT attributed
+marginal / conditional sigma % (median over 12): Ab 0.055/0.031  eField 0.001/0.000  tran_diff 0.453/0.389  long_diff 0.912/0.834  lifetime 1.314/0.789
+s1 lifetime before > joint (5-param): -6.31 > -8.03 (-6.96)  +1.93 > -6.13 (-2.16)  +0.63 > -5.82 (-2.33)  -0.41 > -6.49 (-3.12)
+s2 lifetime before > joint (5-param): +2.10 > -5.05 (-1.60)  -2.58 > -5.82 (-4.22)  -2.05 > -6.47 (-4.02)  -5.02 > -6.46 (-5.53)
+s3 lifetime before > joint (5-param): -2.83 > -6.53 (-4.06)  +5.42 > -4.06 (+0.78)  +5.05 > -5.44 (+0.15)  +0.49 > -5.59 (-2.27)

@@ -1,0 +1,9 @@
+SCHED3 (sample 3) -> job 40219932 after 40213550
+SCHED7 (sample 7) -> job 40219933 after 40213535
+SCHED8 (sample 8) -> job 40219934 after 40213557
+Submitted batch job 40426803
+Submitted batch job 40426804
+Submitted batch job 40426805
+Submitted batch job 40426906
+Submitted batch job 40426907
+Submitted batch job 40426908

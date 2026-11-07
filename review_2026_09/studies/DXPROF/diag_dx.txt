@@ -1,0 +1,12 @@
+step 0.003 ridge 0     | prof Hess   0.051   0.001   0.392   0.891   1.257 | prof sandw   0.240   0.005   1.018   2.209   5.286 | SD m_prof   0.743   0.020   1.438   6.822  14.251 | median max|D^-1 g_d| 0.214
+step 0.003 ridge 0.001 | prof Hess   0.050   0.001   0.401   0.858   1.209 | prof sandw   0.240   0.005   1.237   2.143   5.824 | SD m_prof   1.160   0.129   6.560  55.946  18.103 | median max|D^-1 g_d| 0.216
+step 0.003 ridge 0.01  | prof Hess   0.052   0.001   0.399   0.895   1.256 | prof sandw   0.398   0.010   0.945   3.409   8.601 | SD m_prof   0.480   0.030   1.801  15.305  10.781 | median max|D^-1 g_d| 0.214
+step 0.01  ridge 0     | prof Hess   0.051   0.001   0.313   0.828   1.259 | prof sandw   0.471   0.018   1.989   5.609   6.936 | SD m_prof  13.510   0.252  14.975  62.642 275.843 | median max|D^-1 g_d| 0.216
+step 0.01  ridge 0.001 | prof Hess   0.052   0.001   0.348   0.794   1.242 | prof sandw   0.441   0.016   1.209   5.576   6.493 | SD m_prof   1.103   0.033   4.529   8.130  23.250 | median max|D^-1 g_d| 0.214
+step 0.01  ridge 0.01  | prof Hess   0.052   0.001   0.344   0.813   1.255 | prof sandw   0.256   0.021   1.689   6.811   6.877 | SD m_prof   3.018   0.095  32.838  29.707  48.929 | median max|D^-1 g_d| 0.2
+sample 1, per batch: correction c = g_c - r_prof = H_cd D^-1 g_d
+  SD over batches of g_c               44.5   2.69e+03       15.5        6.4       23.7
+  SD over batches of c (3e-3)          30.8   1.01e+04       14.8       10.7       11.6
+  SD over batches of c (1e-2)          27.4   8.25e+03       13.6       8.05       9.85
+  corr(c 3e-3, c 1e-2) per param      0.284      0.416      0.700      0.214      0.694
+  median |c3 - c1| / SD(c3)           0.047      0.054      0.017      0.023      0.015

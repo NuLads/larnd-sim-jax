@@ -1,0 +1,29 @@
+415 single-track tracks (830 endpoints) from KN10N1, KN10N2, KN10N3, KN10N4; track length median 41.3 cm
+  along-track offset (outward > 0): mean -1.39 mm, median -1.56, SD 1.11, p90 |.| 2.65
+  transverse distance: median 0.76 mm, RMS 1.29, p90 1.90
+  per coordinate RMS (x, y, z): 1.45 1.17 1.16 mm  (production smear: 1.00 per coordinate)
+  along-track spread after removing its mean offset: SD 1.11 mm; transverse RMS unchanged
+  per coordinate robust SD (1.4826 MAD): 1.50 0.89 1.10 mm
+  tracks 0-30 cm (n = 260): along mean -1.27 SD 1.21 mm; transverse RMS 0.72 mm
+  tracks 30-60 cm (n = 348): along mean -1.40 SD 1.05 mm; transverse RMS 0.95 mm
+  tracks 60-200 cm (n = 222): along mean -1.50 SD 1.04 mm; transverse RMS 2.05 mm
+[estimator: local line fit to the last 10 cm at each end]
+415 single-track tracks (830 endpoints) from KN10N1, KN10N2, KN10N3, KN10N4; track length median 41.3 cm
+  along-track offset (outward > 0): mean -1.38 mm, median -1.54, SD 1.11, p90 |.| 2.64
+  transverse distance: median 0.52 mm, RMS 0.77, p90 1.21
+  per coordinate RMS (x, y, z): 1.31 1.00 1.02 mm  (production smear: 1.00 per coordinate)
+  along-track spread after removing its mean offset: SD 1.11 mm; transverse RMS unchanged
+  per coordinate robust SD (1.4826 MAD): 1.39 0.91 1.02 mm
+  tracks 0-30 cm (n = 260): along mean -1.27 SD 1.22 mm; transverse RMS 0.80 mm
+  tracks 30-60 cm (n = 348): along mean -1.40 SD 1.06 mm; transverse RMS 0.73 mm
+  tracks 60-200 cm (n = 222): along mean -1.50 SD 1.04 mm; transverse RMS 0.81 mm
+[estimator: local line fit to the last 5 cm at each end]
+415 single-track tracks (830 endpoints) from KN10N1, KN10N2, KN10N3, KN10N4; track length median 41.3 cm
+  along-track offset (outward > 0): mean -1.38 mm, median -1.55, SD 1.12, p90 |.| 2.66
+  transverse distance: median 0.62 mm, RMS 0.93, p90 1.49
+  per coordinate RMS (x, y, z): 1.30 1.06 1.09 mm  (production smear: 1.00 per coordinate)
+  along-track spread after removing its mean offset: SD 1.12 mm; transverse RMS unchanged
+  per coordinate robust SD (1.4826 MAD): 1.42 1.04 1.07 mm
+  tracks 0-30 cm (n = 260): along mean -1.26 SD 1.22 mm; transverse RMS 0.99 mm
+  tracks 30-60 cm (n = 348): along mean -1.39 SD 1.06 mm; transverse RMS 0.90 mm
+  tracks 60-200 cm (n = 222): along mean -1.49 SD 1.05 mm; transverse RMS 0.89 mm

@@ -1,0 +1,14 @@
+s1: outliers 106 ->  73 (> 500 um 48 -> 23); weighted mean |r|  132.3 ->  107.8 (median 62 -> 63, p99 1362 -> 719); pos_residual 9-10k 131.5 -> 106.0; loss 9-10k 8288.8 -> 8215.0 | shift Ab +0.05 eField +0.01 tran_diff +0.10 long_diff +2.60 lifetime -1.13
+s2: outliers 109 ->  82 (> 500 um 47 -> 29); weighted mean |r|  143.2 ->  146.6 (median 64 -> 66, p99 1249 -> 958); pos_residual 9-10k 150.7 -> 163.4; loss 9-10k 8303.7 -> 8329.5 | shift Ab -0.15 eField +0.00 tran_diff +0.88 long_diff +1.44 lifetime +5.41
+s3: outliers 101 ->  68 (> 500 um 33 -> 18); weighted mean |r|  149.7 ->  136.6 (median 63 -> 60, p99 1399 -> 793); pos_residual 9-10k 139.8 -> 129.5; loss 9-10k 8307.3 -> 8315.7 | shift Ab +0.12 eField -0.01 tran_diff -1.28 long_diff +2.24 lifetime -2.19
+s4: outliers 110 ->  78 (> 500 um 45 -> 19); weighted mean |r|  138.0 ->  119.0 (median 66 -> 62, p99 1287 -> 826); pos_residual 9-10k 136.0 -> 118.5; loss 9-10k 8308.6 -> 8269.1 | shift Ab +0.17 eField -0.01 tran_diff +0.47 long_diff -0.32 lifetime -2.12
+s5: outliers  92 ->  76 (> 500 um 39 -> 15); weighted mean |r|  144.6 ->  136.6 (median 65 -> 68, p99 1575 -> 989); pos_residual 9-10k 151.8 -> 145.1; loss 9-10k 8364.8 -> 8328.1 | shift Ab +0.01 eField +0.01 tran_diff -0.41 long_diff +6.69 lifetime +2.39
+s6: outliers 102 ->  81 (> 500 um 49 -> 24); weighted mean |r|  131.4 ->  140.6 (median 63 -> 74, p99 1356 -> 925); pos_residual 9-10k 132.4 -> 143.7; loss 9-10k 8256.4 -> 8274.0 | shift Ab +0.12 eField +0.02 tran_diff +1.27 long_diff -10.84 lifetime -4.16
+
+POSITIONS (s2-6): outliers lower in 5/5; paired mean change of weighted mean |r| -5.5 +- 5.2 um (-1.1 SE)
+  -> unresolved
+CALIBRATION lifetime : paired shift -0.13 +- 1.75 (values +5.41 -2.19 -2.12 +2.39 -4.16) -> no gross change
+CALIBRATION long_diff: paired shift -0.16 +- 2.91 (values +1.44 +2.24 -0.32 +6.69 -10.84) -> no gross change
+CALIBRATION Ab       : paired shift +0.06 +- 0.06 (values -0.15 +0.12 +0.17 +0.01 +0.12)
+CALIBRATION tran_diff: paired shift +0.19 +- 0.46 (values +0.88 -1.28 +0.47 -0.41 +1.27)
+CALIBRATION eField   : paired shift +0.00 +- 0.01 (values +0.00 -0.01 -0.01 +0.01 +0.02)

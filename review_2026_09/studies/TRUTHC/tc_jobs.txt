@@ -1,0 +1,17 @@
+2026-11-04 13:16:03 TCGPU 43160543 :: after 42985700 (B200s17H); B200s23 42985701 moved behind 43160543
+# submitted 2026-11-04 14:23:50
+chain 0 tc TC_KN10N1 43168910 :: after 43138624
+chain 0 tc TC_KN10N7 43168911 :: after 43168910
+chain 0 FRESH head 43082347 moved behind 43168911
+chain 1 tc TC_KN10N2 43168912 :: after 43138629
+chain 1 tc TC_KN10N8 43168913 :: after 43168912
+chain 1 FRESH head 43082360 moved behind 43168913
+chain 2 tc TC_KN10N3 43168914 :: after 43138634
+chain 2 tc TC_EXP17 43168915 :: after 43168914
+chain 2 FRESH head 43082372 moved behind 43168915
+chain 3 tc TC_KN10N4 43168918 :: after 43138639
+chain 3 FRESH head 43082384 moved behind 43168918
+chain 4 tc TC_KN10N5 43168920 :: after 43138643
+chain 4 FRESH head 43082396 moved behind 43168920
+chain 5 tc TC_KN10N6 43168921 :: after 43138647
+chain 5 FRESH head 43082409 moved behind 43168921

@@ -1,0 +1,15 @@
+V3 banded solves at ridge 0 on >= 95 % of batches: PASS (fails per sample: [0, 0, 0, 0, 1, 0, 0, 0])
+V2 reproduction of TRUTHC P4 (conditional m within 0.05 sigma on all 5, >= 7/8): 7/8 -> PASS
+V1 dE/dx step stability (3e-3 vs 1e-2): 0/8 -> FAIL
+ridge 0, dE/dx step 0.003; widths = median over the 8 samples (%); band [0.49, 1.51]
+  conditional Hessian            0.0304    0.0005    0.3657    0.8122    0.7806
+  conditional sandwich           0.0402    0.0009    0.4998    0.7442    1.0332
+  profiled Hessian               0.0510    0.0006    0.3917    0.8907    1.2570
+  profiled sandwich              0.2402    0.0053    1.0183    2.2087    5.2861
+  SD of m_prof (one-step)        0.7430    0.0205    1.4378    6.8224   14.2505
+  SD of m_cond (TRUTHC P4)       0.0917    0.0009    1.2199    1.8003    2.7125
+  SD(m_prof) / prof. sandwich      3.09      3.86      1.41      3.09      2.70
+  SD(m_cond) / prof. sandwich      0.38      0.18      1.20      0.82      0.51
+  inflation prof/cond sandw.       5.97      6.18      2.04      2.97      5.12
+  mean m_prof                    +0.015    +0.003    -0.106    +4.291    +4.621   | mean m_cond   +0.257   +0.001   -0.004   +3.107   -0.472
+DXPROF VERDICT (SD of m_prof within the band of the profiled sandwich on 1/4 of Ab, tran_diff, long_diff, lifetime): NO VERDICT (V1 or V2 failed)

@@ -1,0 +1,27 @@
+T3: config check OK on 12 fresh end points (seed, coarse 7500, smear 1.0 / entry)
+  s          Ab     eField  tran_diff  long_diff   lifetime
+ 17      +0.296     +0.266     +0.997     +1.330     -6.905
+ 18      +0.094     +0.151     +3.338     -5.208     -3.610
+ 19      -0.345     +0.107     +2.147     +6.536     +9.811
+ 20      -0.140     +0.024     -0.322    +11.716     +2.947
+ 21      -0.196     +0.148     +1.573     -5.129     +0.536
+ 22      -0.183     +0.083     +0.281     +0.305     +3.184
+ 23      +0.016     +0.104     +1.287     -4.500     +0.394
+ 24      +0.131     +0.139     +0.882    +12.480     +2.851
+ 25      -0.261     +0.155     -0.966    +11.002    +11.305
+ 26      -0.322     +0.072     -1.224     +9.321     +5.497
+ 27      -0.240     +0.174     -0.365     +6.916     +6.333
+ 28      +0.029     +0.106     -0.030    +10.610     +1.756
+
+             bias_train  mean_test transfers | SD_train  SD_test  ratio calibrated | cover |q|<1 |q|<2
+  Ab             +0.013     -0.094      True |    0.152    0.202   1.33       True |       0.42  0.83
+  eField         +0.131     +0.127      True |    0.035    0.061   1.73       True |       0.58  0.83
+  tran_diff      +1.599     +0.633      True |    1.285    1.335   1.04       True |       0.50  0.92
+  long_diff      +2.827     +4.615      True |    4.064    6.902   1.70       True |       0.33  0.83
+  lifetime       +0.847     +2.841      True |    3.866    5.123   1.33       True |       0.50  0.83
+  pooled over 60 pulls: |q| < 1 0.47 (expected 0.66, pass 0.50-0.82), |q| < 2 0.85 (expected 0.93, pass >= 0.83) -> FAIL
+  descriptive, sigma_E1 alone, no bias (current metric): pull SD per parameter 6.5 136.3 3.3 8.3 6.5 | pooled |q| < 1 0.15, < 2 0.17
+  descriptive, sigma_E1 alone, bias-corrected: pull SD per parameter 6.5 136.3 3.3 8.3 6.5 | pooled |q| < 1 0.10, < 2 0.18
+  descriptive, E1 (+) pre-C75 sigma_opt, bias-corrected: pull SD per parameter 2.6 8.6 2.9 3.3 3.5 | pooled |q| < 1 0.13, < 2 0.35
+  (sigma_E1 used: median of 6 T1 20000 dumps: 0.031 0.000444 0.404 0.831 0.784)
+T3 VERDICT: R3 NOT CONFIRMED (calibrated: Ab, eField, tran_diff, long_diff, lifetime; NOT calibrated: none; biases transfer: Ab, eField, tran_diff, long_diff, lifetime; do not: none)

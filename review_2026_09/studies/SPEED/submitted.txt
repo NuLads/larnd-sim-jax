@@ -1,0 +1,13 @@
+BENCHE2 41413159 | BENCHE8 41413160 (8 CPUs, 8g/cpu) | BENCHJ2 41413161 (LARND_JIT_LOSS=1)
+round 2 (100 batches, 300 it, cache log): BENCHL32K 41417695 (LRU 32768) | BENCHL2K 41417696 (LRU 2048 = default, after polish_1) ; BENCHJ2 41413161 died OUT_OF_MEMORY (host) after 15 compiles of ~170 s, ROI-dependent recompiles
+round 3 (100 batches, 600 it, cachepatch3): BENCHR3A 41429512 (LRU 32768, after polish_6) | BENCHR3B 41429513 (LRU 8192, after K10HIT6); polish throttle 4
+round 4 (staged code SPEED/stage, LARND_UNIQUE_BUCKET=1 LARND_POSRES_VEC=1, 100 batches, 600 it, cachepatch3): BENCHR4A 41439809 (LRU 2048) | BENCHR4B 41439810 (LRU 8192)
+round 5 profile (R4A config, 300 it, py-spy 120 s at +2000 s -> prof_R5P_steady.txt): BENCHR5P 41449503
+MBJIT jit-ceiling micro-bench: 41449681
+round 5 (staged code, both fixes, LRU 32768, cachepatch3): BENCHR5A 41450838 (600 it) | BENCHR5B 41450839 (1500 it)
+deterministic full-fit equivalence: DETa 41457389 (DET0a then DET1a) | DETb 41457390 (DET1b then DET0b)
+deterministic rerun with XLA_FLAGS in env: DETXa 41457872 | DETXb 41457873
+validation of adoption bundle (1e4 it, KN10S1-3 config): KN10V1 41458066 KN10V2 41458067 KN10V3 41458068
+replica test (patched, 1e4 it, rule REVIEW.md 21 Oct): KN10V1b 41484832 KN10V1c 41484833 KN10V2b 41484834 KN10V2c 41484835 KN10V3b 41484836 KN10V3c 41484837
+pkg validation (live tree, adopted opt package, 1e4 it): KN10P1 41664712
+pkg validation rerun (no stage overlay): KN10P2 41694060

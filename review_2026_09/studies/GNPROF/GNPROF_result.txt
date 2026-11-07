@@ -1,0 +1,27 @@
+Traceback (most recent call last):
+    plugin_module.initialize()
+batches with a GN block per sample: [100, 100, 100, 100, 100, 100, 100, 100]; GN wall per batch median 89 s
+V-b A: median gram/vjp 2.3e-06, asym_gg 1.9e-04, asym_cg 6.5e-05 -> PASS
+V-b C: median gram/vjp 5.8e-06, asym_gg 3.0e-04, asym_cg 1.7e-04 -> PASS
+V-a A: F_cc(P0) / FD H_cc(P0) diag   1.635   2.607   1.855   2.631   1.593  (max |ln| on Ab, tran, long, lifetime 0.967)
+      descriptive: F_cc(P1) / FD H_cc(P1)   1.726   5.296   1.115   2.510   1.612; GN / observed dE/dx-only fraction Delta_d/F   1.108   0.338   0.875   0.796   1.107
+V-a C: F_cc(P0) / FD H_cc(P0) diag   1.000   1.039   1.079   1.060   1.000  (max |ln| on Ab, tran, long, lifetime 0.076)
+      descriptive: F_cc(P1) / FD H_cc(P1)   0.996   1.064   0.535   0.887   0.980; GN / observed dE/dx-only fraction Delta_d/F   1.002   0.621   0.863   0.967   1.000
+primary curvature model: C (V-a PASS)
+V-c ridge: solves at ridge 0 ok on >= 95 % of batches: True -> primary ridge 0; ridge 0 vs 1e-3 widths within 10 %: 4/8 -> FAIL
+
+estimator m = conditional minimum at P0 (POLISH form); SD over the 8 samples (%):    0.1045    0.0059    1.1067    1.7745    3.0959
+mean m (%):    +0.284    +0.007    +0.435    +2.197    -1.402;  band for SD/width [0.49, 1.51]
+                                           Ab    eField tran_diff long_diff  lifetime   | SD(m) / width
+  cond (H)                             0.0356    0.0003    0.3743    0.6643    0.9351   |   2.94  19.69   2.96   2.67   3.31
+  obs dE/dx (H - Dobs)                 0.0992    0.0004    0.5197    0.7734    2.3832   |   1.05  16.80   2.13   2.29   1.30
+  GN-C full (F - D)                    0.1029    0.0042    0.6385    1.4929    2.5880   |   1.02   1.42   1.73   1.19   1.20
+  hybrid-C (H - D)                     0.1224    0.0059    0.8443    2.4452    2.9605   |   0.85   1.00   1.31   0.73   1.05
+  GN-C dE/dx only                      0.0968    0.0003    0.4418    0.6472    2.3602   |   1.08  17.27   2.50   2.74   1.31
+  GN-C geometry only                   0.0380    0.0032    0.4436    1.0144    0.9512   |   2.75   1.87   2.49   1.75   3.25
+  GN-C unprofiled (F)                  0.0344    0.0003    0.3327    0.5702    0.8852   |   3.04  21.70   3.33   3.11   3.50
+  GN-A full (F - D)                    0.0768    0.0011    0.3331    0.5133    1.8871   |   1.36   5.20   3.32   3.46   1.64
+  hybrid-A (H - D)                     0.1995    0.0010    2.9891    8.4729    9.3931   |   0.52   5.96   0.37   0.21   0.33
+
+GNPROF VERDICT (primary bread GN-C full, ridge 0: SD(m) / width  1.02  1.42  1.73  1.19  1.20 -> 4/5 in the band): NO VERDICT (V-b or V-c failed)
+A_nn non-positive eigenvalues (median per batch): A 0, C 2

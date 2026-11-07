@@ -1,0 +1,14 @@
+V2 instrument check (TC_EXP17 P0 vs D_EXP17): Hessian diag ratio 1.000 1.000 1.000 1.000 1.000 | (d_TC - d_E1) / sigma_E1 +0.00 +0.01 +0.00 +0.00 -0.00 -> PASS
+V1 step stability (Richardson |m(1e-3) - m(3e-3)| / 8 < 0.1 sigma on >= 7/8, P0 and P1): PASS
+V3 quadratic consistency (|m(P0) - m(P2)| < 2 sigma on >= 7/8): PASS
+  conditional minimum m = e + d (mean +- SEM over 8 samples, %, step 1e-3):
+                             Ab          eField       tran_diff       long_diff        lifetime
+  P0_fit          +0.284+-0.037   +0.007+-0.002   +0.434+-0.391   +2.198+-0.627   -1.403+-1.095
+  P1_truth        +0.129+-0.008   +0.000+-0.001   +0.225+-0.146   -1.333+-0.353   -1.406+-0.234
+  P2_calib_true   +0.277+-0.031   +0.008+-0.002   +0.229+-0.409   +2.487+-0.701   -1.317+-0.928
+  P3_dedx_true    +0.147+-0.013   +0.006+-0.002   -0.192+-0.281   -1.081+-0.678   -2.799+-0.316
+  P4_geom_true    +0.257+-0.032   +0.001+-0.000   -0.007+-0.433   +3.096+-0.631   -0.484+-0.956
+  paired m(P0) - m(P1): Ab +0.155+-0.035 eField +0.007+-0.002 tran_diff +0.209+-0.274 long_diff +3.531+-0.595 lifetime +0.004+-1.063
+  descriptive, share of m(P0) - m(P1) removed by geometry at truth alone: Ab 0.17 eField 0.93 tran_diff 2.11 long_diff -0.25 lifetime -259.96
+  descriptive, share of m(P0) - m(P1) removed by dE/dx at truth alone: Ab 0.88 eField 0.07 tran_diff 2.99 long_diff 0.93 lifetime 395.34
+TRUTHC VERDICT: long_diff MIXED, tran_diff MIXED

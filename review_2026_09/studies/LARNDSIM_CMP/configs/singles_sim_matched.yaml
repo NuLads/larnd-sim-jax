@@ -1,0 +1,14 @@
+# Reference simulation_properties, matched to our input files' field names.
+# Default event_separator in this reference checkout IS already 'event_id'
+# (see larndsim/consts/sim.py), so this file is mostly a pinned, explicit
+# copy of larndsim/simulation_properties/singles_sim.yaml -- written out
+# here so the comparison runs don't depend on whichever defaults happen to
+# be hardcoded in consts/sim.py, and so it's easy to see/change in one place.
+batch_size: 10000             # track segments
+event_batch_size: 2           # tpcs (module0 has 2 TPCs; matches the uncommitted
+                               # ~/reference edit, harmless either way for module0)
+write_batch_size: 1            # batches
+is_spill_sim: 0                 # boolean
+event_separator: 'event_id'     # matches our input h5 field name (NOT 'eventID')
+tracks_dset_name: 'segments'
+max_events_per_file: 1000

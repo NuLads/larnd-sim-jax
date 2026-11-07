@@ -1,0 +1,43 @@
+chain 0: STRFRZ50T3200D1 (sample 1, CL 0.50) -> job 40167559 after 40145686
+chain 1: STRFRZ50T3200D3 (sample 3, CL 0.50) -> job 40167560 after 40145687
+chain 2: STRFRZ50T3200D7 (sample 7, CL 0.50) -> job 40167561 after 40145688
+chain 3: STRFRZ50T4400D1 (sample 1, CL 0.50) -> job 40167562 after 40145689
+chain 4: STRFRZ50T4400D3 (sample 3, CL 0.50) -> job 40167563 after 40145690
+chain 5: STRFRZ50T4400D7 (sample 7, CL 0.50) -> job 40167564 after 40145691
+chain 0: STRFRZ5010 (sample 10, CL 0.50) -> job 40167565 after 40167559
+chain 1: STRFRZ5011 (sample 11, CL 0.50) -> job 40167566 after 40167560
+chain 2: STRFRZ5012 (sample 12, CL 0.50) -> job 40167567 after 40167561
+chain 3: STRFRZ5013 (sample 13, CL 0.50) -> job 40167568 after 40167562
+chain 4: STRFRZ5014 (sample 14, CL 0.50) -> job 40167569 after 40167563
+chain 5: STRFRZ5015 (sample 15, CL 0.50) -> job 40167570 after 40167564
+chain 0: STRFRZ5016 (sample 16, CL 0.50) -> job 40167571 after 40167565
+chain 1: STRFRZ301 (sample 1, CL 0.30) -> job 40167572 after 40167566
+chain 2: STRFRZ302 (sample 2, CL 0.30) -> job 40167573 after 40167567
+chain 3: STRFRZ304 (sample 4, CL 0.30) -> job 40167574 after 40167568
+chain 4: STRFRZ701 (sample 1, CL 0.70) -> job 40167575 after 40167569
+chain 5: STRFRZ702 (sample 2, CL 0.70) -> job 40167576 after 40167570
+chain 0: STRFRZ704 (sample 4, CL 0.70) -> job 40167577 after 40167571
+STOCHCAL1 40213535 40167567
+STOCHCAL2 40213536 40167569
+STOCHCAL4 40213537 40167571
+PROBCAL1 40213550 40167566
+PROBCAL2 40213557 40167568
+PROBCAL4 40213558 40167570
+SCHED3/7/8 -> 40219932/40219933/40219934 after PROBCAL1 40213550 / STOCHCAL1 40213535 / PROBCAL2 40213557
+# 8 Oct ~04:30 REORDER (scontrol): short PROB/STOCH ceiling fits moved ahead of the 14 h ensemble fits.
+chain 0: 40167559 (T3200D1) -> STOCHCAL4 40213537 -> s10 40167565 -> s16 40167571
+chain 1: 40167560 (T3200D3) -> PROBCAL1 40213550 -> s11 40167566 -> SCHED3 40219932
+chain 2: 40167561 (T3200D7) -> STOCHCAL1 40213535 -> s12 40167567 -> SCHED7 40219933
+chain 3: 40167562 (T4400D1) -> PROBCAL2 40213557 -> s13 40167568 -> SCHED8 40219934
+chain 4: 40167563 (T4400D3) -> STOCHCAL2 40213536 -> s14 40167569
+chain 5: 40167564 (T4400D7) -> PROBCAL4 40213558 -> s15 40167570
+paper slot: gradK+hessian 40215173 -> deficit 40216462
+NAIVEC1 40225828 after 40223731 (paper slot)
+NAIVEC2 40225829 after 40225828 (paper slot)
+NAIVEC4 40225830 after 40225829 (paper slot)
+# 8 Oct evening: START-AT-TRUTH test at tau=4400 (round 2 failed its rule: R2 lifetime -8.06 +- 1.84, all fits start at 2200 us).
+# Same config as STRFRZ50T4400D + SCIINIT=lifetime:4400. Rule (stated before results): path dependence if (init4400 - init2200) > +4 points
+# on 3/3 samples AND |mean lifetime| <= 3%; genuine long-tau bias if mean lifetime <= -6%; otherwise inconclusive.
+STRFRZ50T4400I1 (sample 1, init lifetime 4400) -> job 40283659 after 40213536; 40167569 now after 40283659
+STRFRZ50T4400I3 (sample 3, init lifetime 4400) -> job 40283660 after 40213558; 40167570 now after 40283660
+STRFRZ50T4400I7 (sample 7, init lifetime 4400) -> job 40283661 after 40225830

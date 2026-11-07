@@ -1,0 +1,2 @@
+larnd-sim-jax/fit_result/STALE_unannealed_sci_full_noise_s4_10k	/sdf/group/neutrino/pgranger/larnd-sim-jax/fit_result/STALE_unannealed_sci_full_noise_s4_10k	/sdf/data/neutrino/pgranger/larnd-sim-jax/fit_result/STALE_unannealed_sci_full_noise_s4_10k
+larnd-sim-jax/fit_result/_dedx_truth_ckpt	/sdf/group/neutrino/pgranger/larnd-sim-jax/fit_result/_dedx_truth_ckpt	/sdf/data/neutrino/pgranger/larnd-sim-jax/fit_result/_dedx_truth_ckpt

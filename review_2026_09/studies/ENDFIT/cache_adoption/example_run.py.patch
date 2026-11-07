@@ -1,0 +1,34 @@
+--- example_run.py.orig	2026-10-29 17:38:05.227568533 -0700
++++ example_run.py.new	2026-10-29 17:38:23.652131720 -0700
+@@ -29,13 +29,18 @@
+ # data sample; a shared cache grew to 2.0 TB and filled /sdf/group (2026-09-25).
+ # => default: a PER-JOB cache on /sdf/scratch, deleted when the job exits (stale ones from killed
+ #    jobs are swept after 2 days). LARND_JAX_PERSISTENT_CACHE=0 disables it; =shared uses
+-#    JAX_COMPILATION_CACHE_DIR as given (refused under /sdf/group).
++#    JAX_COMPILATION_CACHE_DIR as given (refused under /sdf/group). Since data-as-args the entries are
++#    small (a whole 3-stage pipeline: 45 MB, 2026-10-29), so one shared dir per pipeline is safe.
++# =shared without a usable dir falls back to the per-job cache (2026-10-29): the mode is a LARND_* variable,
++#    so continuations inherit it from the checkpoint even when nobody sets the dir for them.
+ _JAX_CACHE_MODE = os.environ.get('LARND_JAX_PERSISTENT_CACHE', 'job')
+ _JAX_CACHE_DIR_REQUESTED = os.environ.get('JAX_COMPILATION_CACHE_DIR', '')
+ _JAX_CACHE_DIR = ''
+-if _JAX_CACHE_MODE == 'shared' and _JAX_CACHE_DIR_REQUESTED and not _JAX_CACHE_DIR_REQUESTED.startswith('/sdf/group'):
++_JAX_CACHE_SHARED_OK = bool(_JAX_CACHE_DIR_REQUESTED) and not _JAX_CACHE_DIR_REQUESTED.startswith('/sdf/group')
++_JAX_CACHE_FALLBACK = _JAX_CACHE_MODE == 'shared' and not _JAX_CACHE_SHARED_OK
++if _JAX_CACHE_MODE == 'shared' and _JAX_CACHE_SHARED_OK:
+     _JAX_CACHE_DIR = _JAX_CACHE_DIR_REQUESTED
+-elif _JAX_CACHE_MODE not in ('0', 'off', 'shared'):
++elif _JAX_CACHE_MODE not in ('0', 'off'):
+     import shutil, time, atexit, signal
+     _root = os.path.join('/sdf/scratch/neutrino', os.environ.get('USER', 'unknown'), 'jax_job_cache')
+     _tag = '_'.join(x for x in (os.environ.get('SLURM_JOB_ID'), os.environ.get('SLURM_ARRAY_TASK_ID')) if x)
+@@ -172,6 +177,9 @@
+         jax.config.update('jax_persistent_cache_min_compile_time_secs', 0.0)
+         logger.info(f"Persistent JAX compilation cache ON at {_JAX_CACHE_DIR} "
+                     f"(mode={_JAX_CACHE_MODE}; requested dir '{_JAX_CACHE_DIR_REQUESTED}' not used unless mode=shared)")
++        if _JAX_CACHE_FALLBACK:
++            logger.warning(f"LARND_JAX_PERSISTENT_CACHE=shared but JAX_COMPILATION_CACHE_DIR "
++                           f"'{_JAX_CACHE_DIR_REQUESTED}' is unset or under /sdf/group: per-job cache used instead")
+     else:
+         logger.info("Persistent JAX compilation cache DISABLED (LARND_JAX_PERSISTENT_CACHE="
+                     f"{_JAX_CACHE_MODE}); expect ~3x slower production fits")

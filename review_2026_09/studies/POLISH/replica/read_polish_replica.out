@@ -1,0 +1,30 @@
+KN10V1    100/100 batches  valid True  dL -6.75 (pred -7.07)  step % Ab -0.004 eField +0.001 tran_diff -0.607 long_diff +0.006 lifetime -0.699
+KN10V1b   100/100 batches  valid True  dL -31.23 (pred -31.78)  step % Ab +0.078 eField +0.001 tran_diff -0.102 long_diff -3.909 lifetime -4.098
+KN10V1c   100/100 batches  valid True  dL -34.67 (pred -34.64)  step % Ab +0.079 eField +0.002 tran_diff +0.368 long_diff -3.273 lifetime -2.985
+KN10S1    100/100 batches  valid True  dL -18.20 (pred -18.53)  step % Ab +0.049 eField +0.001 tran_diff +0.100 long_diff -2.970 lifetime -2.762
+KN10V2    100/100 batches  valid True  dL -14.86 (pred -15.18)  step % Ab +0.090 eField -0.000 tran_diff +0.168 long_diff -3.427 lifetime -3.687
+KN10V2b   100/100 batches  valid True  dL -8.32 (pred -8.29)  step % Ab +0.061 eField +0.001 tran_diff +0.135 long_diff -1.823 lifetime -1.695
+KN10V2c   100/100 batches  valid True  dL -5.53 (pred -5.44)  step % Ab +0.061 eField +0.000 tran_diff -0.427 long_diff +0.488 lifetime -2.034
+KN10S2    100/100 batches  valid True  dL -1.54 (pred -1.55)  step % Ab +0.026 eField -0.000 tran_diff +0.168 long_diff -1.111 lifetime -0.536
+KN10V3    100/100 batches  valid True  dL -10.50 (pred -10.17)  step % Ab +0.021 eField +0.001 tran_diff -0.393 long_diff -2.083 lifetime -1.283
+KN10V3b   100/100 batches  valid True  dL -34.44 (pred -37.21)  step % Ab +0.128 eField +0.001 tran_diff -0.035 long_diff -4.794 lifetime -4.496
+KN10V3c   100/100 batches  valid True  dL -27.15 (pred -27.23)  step % Ab +0.095 eField +0.000 tran_diff -0.346 long_diff -4.011 lifetime -4.776
+KN10S3    100/100 batches  valid True  dL -12.91 (pred -13.16)  step % Ab +0.063 eField +0.000 tran_diff -0.611 long_diff -2.651 lifetime -2.788
+step VALID 12/12
+mean step %: Ab +0.062  eField +0.001  tran_diff -0.132  long_diff -2.463  lifetime -2.653   (KN10C polish: lifetime -1.70, long_diff -1.52)
+  Ab        same-data SD before 0.120  after 0.083  r = 0.70   (after / 16-sample SD 0.63)
+  eField    same-data SD before 0.008  after 0.008  r = 0.95   (after / 16-sample SD 0.79)
+  tran_diff same-data SD before 0.771  after 0.493  r = 0.64   (after / 16-sample SD 0.47)
+  long_diff same-data SD before 4.670  after 3.043  r = 0.65   (after / 16-sample SD 0.59)
+  lifetime  same-data SD before 3.536  after 2.063  r = 0.58   (after / 16-sample SD 0.52)
+verdict: HELPS
+s1 errors before -> after: lifetime [-6.31>-6.96 +1.93>-2.16 +0.63>-2.33 -0.41>-3.12]  long_diff [-1.88>-1.88 +9.68>+5.48 +7.01>+3.57 +6.96>+3.83]
+s2 errors before -> after: lifetime [+2.10>-1.60 -2.58>-4.22 -2.05>-4.02 -5.02>-5.53]  long_diff [+8.28>+4.63 +5.01>+3.11 -3.72>-3.24 +2.25>+1.12]
+s3 errors before -> after: lifetime [-2.83>-4.06 +5.42>+0.78 +5.05>+0.15 +0.49>-2.27]  long_diff [-0.16>-2.22 +8.40>+3.33 +6.48>+2.30 +3.31>+0.61]
+
+[descriptive, not in the rule]
+  Ab        mean of 12 before +0.16 after +0.22 | 3 sample means before +0.27 +0.16 +0.04 (SD 0.11) after +0.32 +0.22 +0.12 (SD 0.10, SE of mean 0.06) | steps negative 1/12
+  eField    mean of 12 before +0.03 after +0.03 | 3 sample means before +0.03 +0.02 +0.03 (SD 0.01) after +0.03 +0.02 +0.03 (SD 0.01, SE of mean 0.00) | steps negative 2/12
+  tran_diff mean of 12 before +0.99 after +0.85 | 3 sample means before +0.30 +0.12 +2.55 (SD 1.36) after +0.23 +0.13 +2.20 (SD 1.16, SE of mean 0.67) | steps negative 7/12
+  long_diff mean of 12 before +4.30 after +1.72 | 3 sample means before +5.44 +2.96 +4.51 (SD 1.26) after +2.75 +1.41 +1.00 (SD 0.91, SE of mean 0.53) | steps negative 10/12
+  lifetime  mean of 12 before -0.30 after -2.95 | 3 sample means before -1.04 -1.89 +2.03 (SD 2.06) after -3.64 -3.84 -1.35 (SD 1.39, SE of mean 0.80) | steps negative 12/12

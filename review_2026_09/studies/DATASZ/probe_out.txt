@@ -1,0 +1,10 @@
+0:100000:400:3: batches 24928, tracks used 216091 (8.7/batch, min 1 max 18), length used 9971587 cm | selected: 93533 events, 216091 trajectories, 9971588 cm, longest 145.6 cm, > len 0
+600:100:400:3: batches 100, tracks used 889 (8.9/batch, min 4 max 15), length used 39914 cm | selected: 600 events, 1364 trajectories, 62007 cm, longest 138.1 cm, > len 0
+600:25:400:3: batches 25, tracks used 214 (8.6/batch, min 4 max 12), length used 9962 cm | selected: 600 events, 1364 trajectories, 62007 cm, longest 138.1 cm, > len 0
+600:50:400:3: batches 50, tracks used 425 (8.5/batch, min 4 max 12), length used 19974 cm | selected: 600 events, 1364 trajectories, 62007 cm, longest 138.1 cm, > len 0
+600:200:200:3: batches 200, tracks used 924 (4.6/batch, min 1 max 10), length used 41464 cm | selected: 600 events, 1364 trajectories, 62007 cm, longest 138.1 cm, > len 0
+600:50:800:3: batches 50, tracks used 889 (17.8/batch, min 11 max 27), length used 39914 cm | selected: 600 events, 1364 trajectories, 62007 cm, longest 138.1 cm, > len 0
+600:34:1200:3: batches 34, tracks used 907 (26.7/batch, min 19 max 34), length used 40697 cm | selected: 600 events, 1364 trajectories, 62007 cm, longest 138.1 cm, > len 0
+1200:200:400:3: batches 200, tracks used 1768 (8.8/batch, min 2 max 14), length used 79914 cm | selected: 1200 events, 2799 trajectories, 127947 cm, longest 135.6 cm, > len 0
+2400:400:400:3: batches 400, tracks used 3446 (8.6/batch, min 2 max 15), length used 159979 cm | selected: 2400 events, 5451 trajectories, 252815 cm, longest 140.0 cm, > len 0
+600:100:400:17: batches 100, tracks used 872 (8.7/batch, min 3 max 15), length used 39820 cm | selected: 600 events, 1414 trajectories, 65310 cm, longest 136.1 cm, > len 0

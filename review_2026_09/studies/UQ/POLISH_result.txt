@@ -1,0 +1,7 @@
+POLISH: n = 12; config checks OK (seed, coarse 7500, smear 1.0 / entry; calibration-only dumps at the end-point iterate)
+  Ab         e mean  -0.01 SD  0.15 RMS  0.15 | m mean  +0.04 SD  0.14 RMS  0.14 | |m| < |e| on 6/12; Wilcoxon p(better) 0.339, p(worse) 0.689
+  eField     e mean  +0.14 SD  0.02 RMS  0.14 | m mean  +0.14 SD  0.02 RMS  0.14 | |m| < |e| on 10/12; Wilcoxon p(better) 0.010, p(worse) 0.992
+  tran_diff  e mean  +0.55 SD  1.27 RMS  1.33 | m mean  +0.34 SD  1.18 RMS  1.17 | |m| < |e| on 6/12; Wilcoxon p(better) 0.339, p(worse) 0.689
+  long_diff  e mean  +5.53 SD  6.03 RMS  7.99 | m mean  +4.02 SD  5.33 RMS  6.49 | |m| < |e| on 11/12; Wilcoxon p(better) 0.002, p(worse) 0.998  PRIMARY: IMPROVES
+  lifetime   e mean  +2.51 SD  3.31 RMS  4.04 | m mean  +0.82 SD  3.16 RMS  3.13 | |m| < |e| on 9/12; Wilcoxon p(better) 0.032, p(worse) 0.974
+POLISH VERDICT: CONFIRMED; SAFE; secondary: tran_diff no detected change, lifetime IMPROVES

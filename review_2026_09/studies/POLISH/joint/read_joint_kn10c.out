@@ -1,0 +1,12 @@
+step VALID 16/16 (rule >= 14); best kappa per sample: 0.1 0.1 0.1 0.3 0.3 0.3 0.3 0.1 0.3 0.1 0.3 0.3 0.3 0.1 0.3 0.1; samples with negative-curvature batches: 16
+  Ab        mean, SD before +0.185, 0.122 -> joint +0.294, 0.109 (SD x0.90; |mean| +3.60 SE)  | 5-param +0.225, 0.114 (x0.93)  | mean joint step +0.109%
+  eField    mean, SD before +0.032, 0.009 -> joint +0.033, 0.009 (SD x1.01; |mean| +0.44 SE)  | 5-param +0.032, 0.009 (x1.00)  | mean joint step +0.001%
+  tran_diff mean, SD before +0.608, 1.067 -> joint +0.709, 0.796 (SD x0.75; |mean| +0.38 SE)  | 5-param +0.625, 0.911 (x0.85)  | mean joint step +0.102%
+  long_diff mean, SD before +1.180, 4.447 -> joint -0.462, 4.306 (SD x0.97; |mean| -0.65 SE)  | 5-param -0.362, 3.971 (x0.89)  | mean joint step -1.633%
+  lifetime  mean, SD before +0.139, 3.158 -> joint -3.158, 2.977 (SD x0.94; |mean| +3.82 SE)  | 5-param -1.555, 2.865 (x0.91)  | mean joint step -3.345%
+verdict: WORSENS
+  pull Ab        RMS (theta_0 - truth)/sigma_marg 3.94 (NOT calibrated); with sigma_cond 7.13; median sigma marg/cond 0.054/0.030% vs observed SD 0.122%
+  pull eField    RMS (theta_0 - truth)/sigma_marg 58.03 (NOT calibrated); with sigma_cond 76.95; median sigma marg/cond 0.001/0.000% vs observed SD 0.009%
+  pull tran_diff RMS (theta_0 - truth)/sigma_marg 2.66 (NOT calibrated); with sigma_cond 3.18; median sigma marg/cond 0.464/0.391% vs observed SD 1.067%
+  pull long_diff RMS (theta_0 - truth)/sigma_marg 4.53 (NOT calibrated); with sigma_cond 5.21; median sigma marg/cond 0.945/0.857% vs observed SD 4.447%
+  pull lifetime  RMS (theta_0 - truth)/sigma_marg 2.31 (NOT calibrated); with sigma_cond 3.79; median sigma marg/cond 1.306/0.790% vs observed SD 3.158%

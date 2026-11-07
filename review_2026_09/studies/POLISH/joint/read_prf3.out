@@ -1,0 +1,2 @@
+PRA3: pos_residual 13-14k 126.7 um | loss 13-14k 8251.3 | end error % Ab +0.19 eField +0.03 tran_diff +2.49 long_diff +1.35 lifetime -1.37
+PRF3: pos_residual 13-14k 118.9 um | loss 13-14k 8168.3 | end error % Ab +0.18 eField +0.02 tran_diff +2.40 long_diff +1.47 lifetime -0.65

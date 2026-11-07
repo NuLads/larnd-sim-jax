@@ -1,0 +1,34 @@
+# JAX-side (larnd-sim-jax) detector_properties, TRUTH-valued, for the
+# reference-vs-JAX comparison. Copy of
+# /sdf/group/neutrino/pgranger/larnd-sim-jax/src/larndsim/detector_properties/module0.yaml
+# with eField/lifetime/long_diff/tran_diff/Ab set to the fit TRUTH values
+# (see paper_common.py TRUTH dict). kb, DISCRIMINATION_THRESHOLD, V_CM, V_REF
+# left unchanged (not in the TRUTH param list).
+#
+# For stage 1 (diffusion off, noise off) use module0_stage1_jax.yaml instead
+# (diffusion forced to ~0, lifetime forced to ~inf) for that stage.
+tpc_centers: # cm
+  - [0, 0, 0]
+  - [0, 0, 0]
+
+time_interval: [0, 200.] # us
+
+drift_length: 30.27225 # cm
+
+eField: 0.521519 # kV/cm -- TRUTH eField
+
+lifetime: 2406.44659703 # us -- TRUTH lifetime
+
+vdrift: 0.1587 # cm / us
+
+MeVToElectrons: 4.237e+04
+
+Ab: 0.834881 # TRUTH Ab
+kb: 0.0486
+
+long_diff: 5.81418e-6  # cm * cm / us -- TRUTH long_diff
+tran_diff: 1.00276e-5  # cm * cm / us -- TRUTH tran_diff
+
+DISCRIMINATION_THRESHOLD: 5000
+V_CM: 284.27734375
+V_REF: 1282.71484375

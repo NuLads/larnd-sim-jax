@@ -1,0 +1,5 @@
+KN10C1: pos_residual 9-10k 131.5 um, 10-11k 129.3, 13-14k 125.3 | loss 10-11k 8283.5, 13-14k 8253.8 | end error % Ab +0.35 eField +0.03 tran_diff -0.16 long_diff +5.27 lifetime -2.36
+PRC1: pos_residual 9-10k 131.5 um, 10-11k 129.4, 13-14k 125.7 | loss 10-11k 8284.7, 13-14k 8254.1 | end error % Ab +0.28 eField +0.03 tran_diff -0.33 long_diff +5.50 lifetime -2.12
+PRA1: pos_residual 9-10k 131.5 um, 10-11k 129.9, 13-14k 119.6 | loss 10-11k 8305.1, 13-14k 8217.5 | end error % Ab +0.29 eField +0.03 tran_diff -0.13 long_diff +5.54 lifetime -2.10
+  tree check PRC1 / KN10C1 = 1.003 -> PASS
+  positions PRA1 / PRC1 = 0.952 -> re-heat NEUTRAL

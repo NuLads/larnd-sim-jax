@@ -1,0 +1,14 @@
+DRY RUN on GNSMOKE: 2 batch record(s) with a GN block; GN wall per batch [106.22000000000001, 99.80000000000001] s
+  A: (gram/vjp, asym_gg, asym_cg) per batch [(7.327535237887974e-07, 1.1344957534836015e-05, 3.6887275952075872e-06), (1.9898907862655466e-06, 0.00015607829820932066, 5.512404371697514e-06)]; A_nn non-positive eigenvalues [0, 0]
+     sum F_cc diag       2353  2.499e+07      225.4      181.8        670 | sum H_cc diag       1410  1.155e+07      134.1      68.12      395.9
+     ridge 0: ok 2  Delta/F_cc diag   0.719   0.920   0.442   0.680   0.714  (dE/dx   0.699   0.086   0.337   0.283   0.690, geometry   0.140   0.915   0.217   0.575   0.150)
+     ridge 0.001: ok 2  Delta/F_cc diag   0.719   0.920   0.442   0.680   0.713  (dE/dx   0.699   0.086   0.337   0.283   0.689, geometry   0.140   0.915   0.217   0.575   0.150)
+     ridge 0.01: ok 2  Delta/F_cc diag   0.714   0.920   0.440   0.679   0.708  (dE/dx   0.693   0.085   0.334   0.280   0.683, geometry   0.140   0.915   0.217   0.574   0.150)
+     P1: sum F_cc / sum FD H_cc diag   1.700   4.670   0.276   2.090   1.608
+  C: (gram/vjp, asym_gg, asym_cg) per batch [(1.525651057285718e-06, 3.265646551434894e-05, 7.016097822203236e-06), (4.092774415129514e-06, 0.00023382837710736934, 1.0948775133559068e-05)]; A_nn non-positive eigenvalues [0, 3]
+     sum F_cc diag       1424  1.196e+07      124.9      68.64      410.7 | sum H_cc diag       1410  1.155e+07      134.1      68.12      395.9
+     ridge 0: ok 2  Delta/F_cc diag   0.636   0.935   0.420   0.650   0.628  (dE/dx   0.622   0.168   0.287   0.283   0.612, geometry   0.092   0.922   0.208   0.479   0.076)
+     ridge 0.001: ok 2  Delta/F_cc diag   0.635   0.935   0.420   0.650   0.627  (dE/dx   0.622   0.168   0.287   0.282   0.611, geometry   0.092   0.922   0.208   0.479   0.076)
+     ridge 0.01: ok 2  Delta/F_cc diag   0.631   0.935   0.416   0.647   0.623  (dE/dx   0.617   0.166   0.284   0.280   0.607, geometry   0.092   0.922   0.208   0.479   0.076)
+     P1: sum F_cc / sum FD H_cc diag   0.997  -0.199  -4.748  -0.962   0.957
+  observed dE/dx Delta/H_cc diag (DXPROF construction)   0.629   0.169   0.400   0.283   0.634

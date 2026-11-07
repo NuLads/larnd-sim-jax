@@ -1,0 +1,13 @@
+V0 reproducibility (TC2 P0, P3 vs TRUTHC within 0.05 sigma on all 5, >= 7/8 samples): 7/8 -> PASS
+  dE/dx split (mean over samples): segments covered 1.000; per-track level error (log) mean -0.0018, SD 0.0109; shape dispersion fit / truth 0.787
+  m (mean +- SEM, %):                Ab          eField       tran_diff       long_diff        lifetime
+  P0_fit                 +0.28+- 0.04   +0.01+- 0.00   +0.40+- 0.37   +2.21+- 0.62   -1.43+- 1.11
+  P3_dedx_true           +0.15+- 0.01   +0.01+- 0.00   -0.19+- 0.28   -1.08+- 0.68   -2.80+- 0.32
+  P5_dedx_level_true     +0.10+- 0.03   +0.01+- 0.00   +0.45+- 0.40   +2.91+- 0.63   -1.32+- 0.67
+  P6_dedx_shape_true     +0.31+- 0.02   +0.01+- 0.00   -0.20+- 0.27   -1.72+- 0.62   -2.32+- 0.49
+  Delta3 = m0 - m3 (all dE/dx)     +0.14+- 0.04   +0.00+- 0.00   +0.59+- 0.21   +3.29+- 0.31   +1.37+- 1.29
+  Delta5 = m0 - m5 (level)         +0.19+- 0.02   -0.00+- 0.00   -0.04+- 0.09   -0.70+- 0.10   -0.12+- 0.48
+  Delta6 = m0 - m6 (shape)         -0.03+- 0.03   +0.00+- 0.00   +0.60+- 0.21   +3.93+- 0.29   +0.88+- 0.68
+  interaction D3 - D5 - D6         -0.02+- 0.01   -0.00+- 0.00   +0.04+- 0.05   +0.06+- 0.17   +0.60+- 0.18
+  shares of Delta3: level Ab 1.36 eField -0.30 tran_diff -0.07 long_diff -0.21 lifetime -0.09 | shape Ab -0.21 eField 1.42 tran_diff 1.01 long_diff 1.19 lifetime 0.65
+TRUTHC2 VERDICT (long_diff): BOTH

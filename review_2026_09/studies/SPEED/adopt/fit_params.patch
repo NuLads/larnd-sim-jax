@@ -1,0 +1,46 @@
+--- a/optimize/fit_params.py
++++ b/optimize/fit_params.py
+@@ -597,6 +597,19 @@
+ #                      passes. Numerically identical to the unwrapped call.
+ _GN_PROFILE = os.environ.get('LARND_GN_PROFILE', '0') == '1'
+ _GN_REMAT = os.environ.get('LARND_GN_REMAT', '0') == '1'
++# LARND_POSRES_VEC=1 (speed, 20 Oct; default OFF): the truth position residual (_compute_pos_residual_batch, a diagnostic
++# computed every visit) as one numpy expression per track instead of a Python loop over its points (~21% of a 10 cm fit's
++# host time). The first 3 calls also run the loop and log the largest difference.
++_POSRES_VEC = os.environ.get('LARND_POSRES_VEC', '0') == '1'
++_posres_vec_checks = [0]
++
++
++def _pos_residual_dists_vec(pos_nodes, alpha_mid, true_pts, nc):
++    a = np.asarray(alpha_mid) * nc
++    k = np.clip(np.floor(a).astype(np.int64), 0, nc - 1)
++    frac = (a - k.astype(a.dtype)).astype(np.float64)          # as float(alpha * nc - k) with k a Python int
++    fitted = pos_nodes[k] + frac[:, None] * (pos_nodes[k + 1] - pos_nodes[k])
++    return np.linalg.norm(fitted - np.asarray(true_pts)[:len(k)], axis=1).tolist()
+ 
+ 
+ def _gn_mem_peak():
+@@ -4468,12 +4481,23 @@
+                 pos_nodes, _ = _absolute_chain_forward(
+                     jnp.array(ctx.x0_fixed), thetas, phis, ctx.step_len)
+                 pos_nodes = np.asarray(pos_nodes)
++            if _POSRES_VEC and _posres_vec_checks[0] >= 3:
++                dists.extend(_pos_residual_dists_vec(pos_nodes, ctx.alpha_mid, true_pts, nc))
++                continue
++            n0 = len(dists)
+             for j, alpha in enumerate(ctx.alpha_mid):
+                 k = int(np.clip(int(np.floor(alpha * nc)), 0, nc - 1))
+                 frac = float(alpha * nc - k)
+                 fitted = pos_nodes[k] + frac * (pos_nodes[k + 1] - pos_nodes[k])
+                 true   = true_pts[j]  # pre-interpolated at alpha_mid[j]
+                 dists.append(float(np.linalg.norm(fitted - true)))
++            if _POSRES_VEC:
++                _dv = np.array(_pos_residual_dists_vec(pos_nodes, ctx.alpha_mid, true_pts, nc)); _dl = np.array(dists[n0:])
++                if _dv.shape != _dl.shape or np.max(np.abs(_dv - _dl), initial=0.) > 1e-9 * max(1., np.max(np.abs(_dl), initial=0.)):
++                    raise RuntimeError(f'LARND_POSRES_VEC: vectorised residual disagrees on batch {batch_idx}')
++        if _POSRES_VEC and _posres_vec_checks[0] < 3:
++            _posres_vec_checks[0] += 1
++            logger.info(f'[POSRES-VEC] batch {batch_idx}: vectorised = loop on all {len(dists)} points (check {_posres_vec_checks[0]}/3)')
+         return float(np.mean(dists)) if dists else None
+ 
+     def validate_static_unique(self, dataloader_sim, batch_idx=0, unique_size=768):

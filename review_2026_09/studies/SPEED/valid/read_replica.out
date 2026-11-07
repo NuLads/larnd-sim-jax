@@ -1,0 +1,36 @@
+s1 n_iter [10000, 10000, 10000, 10000]
+   Ab            V1    +0.467     V1b    +0.201     V1c    +0.177      S1    +0.221
+   eField        V1    +0.038     V1b    +0.029     V1c    +0.017      S1    +0.028
+   tran_diff     V1    +1.537     V1b    +0.048     V1c    -0.372      S1    -0.028
+   long_diff     V1    -1.885     V1b    +9.682     V1c    +7.013      S1    +6.957
+   lifetime      V1    -6.311     V1b    +1.933     V1c    +0.628      S1    -0.411
+   pos           V1  +102.842     V1b   +98.248     V1c   +99.729      S1  +102.417
+   loss          V1 +8297.006     V1b +8293.878     V1c +8304.192      S1 +8288.845
+s2 n_iter [10000, 10000, 10000, 10000]
+   Ab            V2    +0.063     V2b    +0.158     V2c    +0.181      S2    +0.239
+   eField        V2    +0.020     V2b    +0.009     V2c    +0.017      S2    +0.028
+   tran_diff     V2    -0.695     V2b    +0.215     V2c    +1.425      S2    -0.469
+   long_diff     V2    +8.280     V2b    +5.009     V2c    -3.716      S2    +2.252
+   lifetime      V2    +2.098     V2b    -2.584     V2c    -2.052      S2    -5.024
+   pos           V2  +107.821     V2b  +107.715     V2c  +106.070      S2  +113.988
+   loss          V2 +8319.694     V2b +8358.012     V2c +8343.213      S2 +8303.748
+s3 n_iter [10000, 10000, 10000, 10000]
+   Ab            V3    +0.192     V3b    -0.133     V3c    +0.004      S3    +0.104
+   eField        V3    +0.030     V3b    +0.024     V3c    +0.043      S3    +0.036
+   tran_diff     V3    +2.840     V3b    +2.097     V3c    +2.339      S3    +2.928
+   long_diff     V3    -0.164     V3b    +8.401     V3c    +6.484      S3    +3.314
+   lifetime      V3    -2.826     V3b    +5.417     V3c    +5.048      S3    +0.495
+   pos           V3   +95.483     V3b   +91.410     V3c   +93.745      S3   +91.982
+   loss          V3 +8315.646     V3b +8322.132     V3c +8291.735      S3 +8307.260
+R_q: Ab 0.73  eField 0.85  tran_diff 0.75  long_diff 0.61  lifetime 0.75  pos 1.68
+T = 0.895; null 64 relabelings: median 1.001, max 1.743; p = 0.750 -> NEUTRAL
+same-data run-to-run SD (pooled within-sample, 3 patched runs, 6 dof) vs KN10S 16-sample SD:
+   Ab           0.137 vs    0.133  ratio 1.03
+   eField       0.009 vs    0.010  ratio 0.86
+   tran_diff    0.872 vs    1.051  ratio 0.83
+   long_diff    5.637 vs    5.171  ratio 1.09
+   lifetime     3.995 vs    3.999  ratio 1.00
+   pos          1.883 vs    8.236  ratio 0.23
+s1 lowest last-1e3 loss: KN10S1  8297.01 8293.88 8304.19 8288.85
+s2 lowest last-1e3 loss: KN10S2  8319.69 8358.01 8343.21 8303.75
+s3 lowest last-1e3 loss: KN10V3c  8315.65 8322.13 8291.73 8307.26

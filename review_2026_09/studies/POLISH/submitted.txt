@@ -1,0 +1,3 @@
+polish_smoke 41413375 (KN10C8, 3 batches)
+polish_smoke2 41413784 (finite-difference Hessian; first smoke 41413375 OOM with HVP at 400 cm)
+polish array 41414310 (KN10C 1-16 @14000, throttle %1 while benches run; raise to %3 after)

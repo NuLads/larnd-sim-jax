@@ -1,0 +1,82 @@
+--- a/optimize/fit_params.py
++++ b/optimize/fit_params.py
+@@ -3934,6 +3934,23 @@
+         self._tp_loaded = (geom, dedx, calib, truth)
+         return self._tp_loaded
+ 
++    def _tp_dlnphys_dnorm(self):
++        """TRUTHC (4 Nov, review copy only): d ln(phys) / d(norm) per calibration parameter at the current
++        norm_params -- the same expression as the 'jac' of _jn_dump."""
++        scheme = getattr(self, 'normalization_scheme', None)
++        out = {}
++        for k in self.relevant_params_list:
++            x = float(getattr(self.norm_params, k))
++            if scheme == 'sigmoid':
++                s_ = float(self.normalization_scale_sigmoid); lo, hi = float(ranges[k]['min']), float(ranges[k]['max'])
++                sg = 1.0 / (1.0 + np.exp(-s_ * x)); p_ = lo + (hi - lo) * sg
++                out[k] = float((hi - lo) * s_ * sg * (1.0 - sg) / p_)
++            elif scheme == 'exp_log':
++                out[k] = float(self.normalization_scale_exp_log)
++            else:
++                out[k] = float('nan')
++        return out
++
+     def _set_calib_physical(self, phys):
+         """Write PHYSICAL calibration values into norm_params, the exact inverse of
+         update_params(). The joint branch of compute_loss reads norm_params, not
+@@ -4018,6 +4035,30 @@
+                   ('P3_dedx_true',  calib_fit,   d_truth_j, g_fit),
+                   ('P4_geom_true',  calib_fit,   d_fit_j,   g_truth)]
+ 
++        # TRUTHC2 (5 Nov, review copy only; LARND_TP_DEDX_SPLIT=1): split log dEdx truth - fit into a per-track LEVEL (mean
++        # log dEdx over the track's segments) and the SHAPE along the track. P5 = fit shape at the true level, P6 = true shape
++        # at the fit level (P5 and P6 partition the difference exactly). Segments outside every chain context stay at the fit.
++        _split = None
++        if os.environ.get('LARND_TP_DEDX_SPLIT', '0') == '1' and d_truth is not None and parent_ids is not None:
++            _pid = np.asarray(parent_ids); _lf = np.asarray(d_fit, np.float64); _lt = np.asarray(d_truth, np.float64)
++            _lev, _shp = _lf.copy(), _lf.copy(); _le, _df, _dt, _cov = [], [], [], 0
++            for _c in ctxs:
++                _k = np.unique(_pid[np.asarray(_c.idxs)]); _k = _k[(_k >= 0) & (_k < len(_lf))]
++                if _k.size == 0:
++                    continue
++                _mf, _mt = _lf[_k].mean(), _lt[_k].mean()
++                _lev[_k] = _lf[_k] - _mf + _mt
++                _shp[_k] = _lt[_k] - _mt + _mf
++                _le.append(_mf - _mt); _df.extend(_lf[_k] - _mf); _dt.extend(_lt[_k] - _mt); _cov += _k.size
++            POINTS += [('P5_dedx_level_true', calib_fit, jnp.asarray(_lev.astype(np.float32)), g_fit),
++                       ('P6_dedx_shape_true', calib_fit, jnp.asarray(_shp.astype(np.float32)), g_fit)]
++            _split = {'n_seg': int(len(_lf)), 'n_seg_covered': int(_cov), 'n_tracks': len(_le),
++                      'level_err_mean': float(np.mean(_le)) if _le else None, 'level_err_sd': float(np.std(_le)) if _le else None,
++                      'disp_ratio': float(np.std(_df) / np.std(_dt)) if _dt and np.std(_dt) > 0 else None}
++            logger.info(f"[TRUTHPOINT] batch {i}: dEdx split: {_cov}/{len(_lf)} segments in {len(_le)} tracks; per-track level "
++                        f"error (log) mean {_split['level_err_mean']:+.4f} SD {_split['level_err_sd']:.4f}; shape dispersion "
++                        f"fit / truth {_split['disp_ratio']:.3f}")
++
+         # ── dEdx dispersion scan (LARND_TP_DEDX_ALPHA="0:0.25:0.5:...") ──────────────────────
+         # Walk the straight line from the fitted dEdx field to the true one, in LOG space (the
+         # coordinate the block is actually fitted in), holding calibration and geometry at the fit:
+@@ -4159,6 +4200,8 @@
+                                jnp.asarray((_lf + _a * (_lt - _lf)).astype(np.float32)), g_fit))
+         rec = {'batch': int(i), 'repr_floor_um': floor_um,
+                'n_tracks': len(ctxs), 'points': {}}
++        if _split is not None:
++            rec['dedx_split'] = _split
+         _norm_saved, _cur_saved = self.norm_params, self.current_params
+         try:
+             for name, cal, ld, gg in POINTS:
+@@ -4194,6 +4237,15 @@
+                     'aux': {k: serialize_value(v) for k, v in (aux or {}).items()},
+                     'calib': dict(cal)}
+                 if _want_h:
++                    # TRUTHC (4 Nov, review copy only): also store the calibration GRADIENT at the point, in the
++                    # norm variables of the Hessian columns, and d ln(phys) / d(norm) (the _jn_dump 'jac'), so the
++                    # conditional Newton step -H^-1 g can be formed offline in % of each parameter.
++                    _, _g0, _, _, _, _, _ = self.compute_loss(
++                        tracks, i, *ref, epoch=epoch, with_loss=False, with_grad=True,
++                        use_physical_params=False, log_dedx=ld,
++                        parent_ids=parent_ids, chain_angles_per_track=gg)
++                    rec['points'][name]['grad'] = {_ka: float(getattr(_g0, _ka)) for _ka in self.relevant_params_list}
++                    rec['points'][name]['jac'] = self._tp_dlnphys_dnorm()
+                     # FINITE DIFFERENCE OF THE GRADIENT, not forward-over-reverse.
+                     # _hess_by_hvp is the natural choice and it OOMs here: the forward-over-reverse
+                     # tape asked for 8.3 GB per allocation at 400 cm batches (jacfwd(jacrev) is far

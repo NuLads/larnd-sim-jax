@@ -1,0 +1,15 @@
+--- submit_prod.sh.orig	2026-10-29 17:38:05.234568602 -0700
++++ submit_prod.sh.new	2026-10-29 17:38:30.165554618 -0700
+@@ -24,6 +24,12 @@
+ done
+ A="--account=neutrino:dune-ml --exclude=sdfampere038,sdfampere003"
+ DA=${DEP:+--dependency=$DEP}; [ "$DEP" = none ] && DA=
++# 29 Oct: one persistent JAX compilation cache per PIPELINE, so FR and H reuse what the fit compiled (REVIEW.md
++# "Per-pipeline cache RESULT": -18 min per pipeline, 45 MB). The three jobs get both variables from this env (sbatch
++# --export=ALL); the dir is under the per-job sweeper's root, so it is removed after 2 idle days. Set either one before
++# calling this script to override (LARND_JAX_PERSISTENT_CACHE=job: the old per-job cache).
++export LARND_JAX_PERSISTENT_CACHE=${LARND_JAX_PERSISTENT_CACHE-shared}
++export JAX_COMPILATION_CACHE_DIR=${JAX_COMPILATION_CACHE_DIR-/sdf/scratch/neutrino/$USER/jax_job_cache/pipe_$NAME}
+ J1=$(sbatch --parsable $A --job-name=$NAME $DA $K/run_knot.sbatch fit "$INNER") || exit 1
+ J2=$(sbatch --parsable $A --job-name=${NAME}FR --dependency=afterok:$J1 $K/run_knot.sbatch prodcont sci_full_$NAME sci_full_${NAME}FR) || exit 1
+ J3=$(sbatch --parsable $A --job-name=${NAME}H --dependency=afterok:$J2 $K/run_knot.sbatch prodfast sci_full_${NAME}FR sci_full_${NAME}H) || exit 1

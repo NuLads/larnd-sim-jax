@@ -1,0 +1,33 @@
+cd /sdf/group/neutrino/pgranger/larnd-sim-jax
+export PYTHONPATH=$PWD/src:$PWD
+export LARND_CALIB_PIN=''
+export LARND_CALIB_START_ITER=0
+export LARND_CHAIN_DRIFT_W=0
+export LARND_CHAIN_FRAME=drift
+export LARND_CHAIN_FREEZE_DRIFT=1
+export LARND_CHAIN_FREEZE_ITER=0
+export LARND_CHAIN_INIT_FROM=''
+export LARND_DEDX_INIT_FROM=''
+export LARND_DEDX_LR_FINAL_FRAC=''
+export LARND_DEDX_MIN_DX=0.0
+export LARND_DEDX_PARAM=perseg
+export LARND_DRIFT_FROM_HITS=1
+export LARND_FREEZE_STRAIGHT_CL=0.50
+export LARND_HITS_SEED_E1=1
+export LARND_INIT_FROM_TRUTH=''
+export LARND_KEEP_TARGETS=1
+export LARND_SPLINE_KMIN=3
+export LARND_TP_CALIB_SCAN=''
+export LARND_TP_DEDX_ALPHA=''
+export LARND_TP_FULL_ALPHA=''
+export LARND_TP_GEOM_ALPHA=''
+export LARND_TP_HESS=''
+export LARND_TP_HESS_STEPS=1e-3:3e-3
+export LARND_TP_JOINT_ALPHA=''
+export LARND_TP_SCHUR=0
+export LARND_TP_SCHUR_CGIT=30
+export LARND_TP_SCHUR_NB=20
+export LARND_TRUTHPOINT=''
+nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits -lms 500 > /sdf/scratch/neutrino/pgranger/review_2026_09/SPEED/det/gpu_DET0a.txt & NVPID=$!
+python3 -m optimize.example_run --params optimize/scripts/param_list_nd_noshift.yaml --input_file_sim /sdf/group/neutrino/pgranger/lads-data/linear_guess_segments.h5 --input_file_tgt /sdf/data/neutrino/cyifan/diffsim_input/true_through_muon_edep_10cm_vol1cm.h5 --fit_type chain --iterations 10 --max_nbatch 100 --max_batch_len 400 --data_seed 1 --data_sz 600 --random_nevents --seed 0 --lr 1e-1 --optimizer_fn Adam --lr_scheduler warmup_exponential_decay_schedule --lr_kw '{"decay_rate" : 0.91, "init_value" : 0, "warmup_steps": 500}' --max_clip_norm_val 100 --electron_sampling_resolution 0.01 --number_pix_neighbors 4 --signal_length 150 --mode lut --lut_file src/larndsim/detector_properties/response_44.npy --loss_fn llhd --probabilistic_sim --sim_seed_strategy different --fit_dedx --dedx_lr 1e-2 --dedx_start_iter 0 --dedx_freeze_iter 10200 --dedx_prior_weight 1.0088 --dedx_use_split_t True --dedx_student_nu_l 21.760 --dedx_student_nu_r 4.720 --dedx_student_scale_l 0.0782 --dedx_student_scale_r 0.0801 --dedx_student_loc 1.8786 --dedx_soft_barrier_threshold 8.5 --dedx_soft_barrier_weight 1.0 --dedx_mean_constraint_weight 2500.0 --dedx_mean_constraint_target 1.887 --dedx_drift_profile_weight 0.0 --fit_chain_positions --chain_basis spline --chain_spline_knot_cm 10 --chain_lr 1e-2 --chain_start_iter 0 --chain_update_freq 1 --chain_decay_rate 0.9997 --mcs_prior_weight 0.5 --chain_step_len 2.0 --chain_momentum_GeV 3.0 --out_label sci_full_b100_len400_mw2500.0_refit_seed0 --test_name sci_full_DET0a --save_freq 10
+rc=$?; kill $NVPID; exit $rc
