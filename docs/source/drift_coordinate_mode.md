@@ -68,9 +68,15 @@ charge-weighted first-hit tick.
 | 2nd-order Taylor error at ±10 % eField (% of nominal) | up to 1955 | ≤ 0.35 |
 | eField-only propagation, band / own forward MC, charges (σ_E = 1–3 %) | 0.8–155 | 0.97–1.04 |
 
-The 0.54 is N1 of one event, a response of ~1e-3 of nominal; the two cases with the larger wiggle have a period of
-0.67 / 1.0 % of eField, one u-tick of a 150 / 100 u-tick FEE window, which tilts the local derivative. Timing is 1.00
+The 0.54 is N1 of one event, a response of ~1e-3 of nominal. The two cases with the larger wiggle (events 18 and 23) were
+first attributed here to a FEE window edge. That was wrong: they come from the hard edge of the FEE hit probability. The
+smeared edge removes them, taking the eField Jacobian / slope on those cells from 0.545–1.033 to 0.995–1.001. Timing is 1.00
 everywhere.
+
+The table is for the FEE at 421fa59. Since 3ccfd99 the FEE default is the corrected noise cut (`LARND_FEE_SMEARED_EDGE`,
+`LARND_FEE_CONDITIONAL_ADC`), the hybrid beam (`LARND_FEE_BEAM_MERGE`, `LARND_FEE_BEAM_SINGLE=0.5`) and the stochastic stop
+(`LARND_FEE_STOCH_STOP`), each restored with `=0`. It changes nominal values, and it is faster: warm Hessian 0.73–0.80 of the
+old time on this mode, with peak memory at or below the old one.
 
 Against an independent **physical t-grid reference** (`enable_physical_time_grid`, `run_efield_propagation.py --truth tP`, single
 clock phase): band / MC at σ_E = 1–3 % is 0.97–1.01 (first-hit total charge), 0.98–1.02 (all-hit charge), 0.98–1.02 (mean
