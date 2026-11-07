@@ -1677,6 +1677,11 @@ class ParamFitter:
             self.target_dir = f"target_{self.test_name}_{hash_str}"
         else:
             self.target_dir = target_dir_name
+        # LARND_TARGET_ROOT=<dir> (6 Nov, Pierre: "write targets directly to data"): create the target dir under <dir>
+        # instead of the working directory (the repo root on /sdf/group). Unset or empty: unchanged. A LARND_* variable,
+        # so it is stored in the checkpoint and the continuations inherit it.
+        if os.environ.get('LARND_TARGET_ROOT', ''):
+            self.target_dir = os.path.join(os.environ['LARND_TARGET_ROOT'], self.target_dir)
         self.target_val_dict = None
         if len(set_target_vals) > 0:
             if len(set_target_vals) % 2 != 0:
